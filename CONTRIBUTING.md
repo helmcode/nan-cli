@@ -10,13 +10,25 @@ Thanks for your interest in contributing. This document covers how to get the pr
 ## Getting started
 
 ```bash
-git clone https://github.com/nxssie/nan-cli
+git clone https://github.com/helmcode/nan-cli
 cd nan-cli
 go build -o nan .
 ./nan
 ```
 
 The binary opens the Bubbletea TUI directly. Use the **Setup** tab to configure your API key and test tool auto-configuration.
+
+To install a released binary instead of building from source:
+
+```bash
+curl -fsSL https://nan.builders/install | bash
+```
+
+By default it installs to `/usr/local/bin`. Override with `INSTALL_DIR`:
+
+```bash
+INSTALL_DIR=~/.local/bin curl -fsSL https://nan.builders/install | bash
+```
 
 ## Project structure
 
