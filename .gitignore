@@ -1,0 +1,47 @@
+# Binaries
+nan
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Build artifacts
+*_test
+dist/
+
+# Test / coverage
+*.out
+coverage.*
+*.cov
+
+# Profiling
+profile
+*.prof
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Dependency directories
+vendor/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Temporary files
+tmp/
+temp/
+*.log
