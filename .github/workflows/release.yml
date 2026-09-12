@@ -1,0 +1,96 @@
+name: release
+
+# Publishes the binaries that scripts/install.sh downloads.
+#
+# Until this existed, `curl -fsSL https://nan.builders/install | bash` could
+# never work: the script asks the GitHub API for the latest release, and the
+# repo had none, so it had nothing to fetch. Anyone who wanted the CLI had to
+# clone the repo and build it with Go.
+#
+# The artifact names here are a contract with scripts/install.sh, which builds
+# the download URL as:
+#
+#   nan-cli_${version}_${os}_${arch}.tar.gz
+#
+# where ${version} is the tag verbatim, `v` included, because the script reads
+# it from the release's `tag_name`. Renaming these breaks the installer
+# silently: the release looks fine on GitHub and the one-liner 404s.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build and publish (e.g. v0.1.1)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Resolve the tag
+        id: tag
+        run: echo "value=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      # The version shown by `nan --version` is a constant in the source
+      # (internal/tui.Version). A tag that disagrees with it ships a binary
+      # that lies about which build it is, and the first person to report a
+      # bug reports the wrong version.
+      - name: Check the tag matches internal/tui.Version
+        run: |
+          declared="$(grep -oP 'const Version = "\K[^"]+' internal/tui/tui.go)"
+          tag="${{ steps.tag.outputs.value }}"
+          if [ "v$declared" != "$tag" ]; then
+            echo "tag $tag does not match internal/tui.Version ($declared)" >&2
+            echo "bump the constant or retag" >&2
+            exit 1
+          fi
+
+      - name: Build
+        env:
+          VERSION: ${{ steps.tag.outputs.value }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            # -trimpath keeps build paths out of the binary; -s -w drops the
+            # symbol and DWARF tables, which is most of the size.
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
+              go build -trimpath -ldflags "-s -w" -o dist/nan .
+            tar -czf "dist/nan-cli_${VERSION}_${os}_${arch}.tar.gz" -C dist nan
+            rm dist/nan
+          done
+          cd dist && sha256sum *.tar.gz > checksums.txt
+          cat checksums.txt
+
+      # Installing what we are about to publish, the same way a member would,
+      # so a broken artifact fails here instead of on their machine.
+      - name: Smoke test the linux/amd64 archive
+        run: |
+          set -euo pipefail
+          tar -xzf "dist/nan-cli_${{ steps.tag.outputs.value }}_linux_amd64.tar.gz" -C /tmp
+          /tmp/nan --version
+          /tmp/nan --help > /dev/null
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.tag.outputs.value }}" \
+            --title "${{ steps.tag.outputs.value }}" \
+            --generate-notes \
+            dist/*.tar.gz dist/checksums.txt
