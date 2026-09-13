@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	catalog "github.com/nxssie/nan-cli/internal/models"
+	"github.com/nxssie/nan-cli/internal/session"
 )
 
 // What this CLI actually does for a member is write four config files, and
@@ -532,5 +533,32 @@ func TestAboutFallsBackToOneLineWhenNarrow(t *testing.T) {
 	}
 	if !strings.Contains(renderAbout(newLayout(80, 24)), "█") {
 		t.Error("the banner is missing at a width that fits it")
+	}
+}
+
+func TestHomeIsTheFirstTabAndNeedsNoNetwork(t *testing.T) {
+	// The panel used to open on Profile, which is a table of account fields
+	// fetched over the network: a spinner, and no sign of what you were
+	// running. Home is drawn from nothing, so it is there before any request.
+	if tabDefs[0].id != tabHome {
+		t.Fatalf("the first tab is %v, want Home", tabDefs[0].name)
+	}
+	m := newModel(nil, &session.Session{})
+	if cmd := m.maybeLoad(); cmd != nil {
+		t.Error("Home asks the API for something, so it cannot be the landing tab")
+	}
+}
+
+func TestHomeSaysHowToMoveAround(t *testing.T) {
+	out := renderHome(newLayout(80, 24))
+	for _, want := range []string{"█", "welcome to", "←/→", "↑/↓", "refresh", "quit", "Setup"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the Home tab does not mention %q", want)
+		}
+	}
+	// A landing screen that needs scrolling on a standard terminal has already
+	// failed at the one thing it does.
+	if rows := len(strings.Split(strings.TrimRight(out, "\n"), "\n")); rows > 24-4 {
+		t.Errorf("Home is %d rows, the viewport of a 24-row terminal is %d", rows, 24-4)
 	}
 }

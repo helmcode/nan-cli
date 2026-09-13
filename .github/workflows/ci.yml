@@ -1,0 +1,62 @@
+name: CI
+
+# Nothing ran the tests until this existed, which for most of this repo's life
+# was no loss because there were none. There are now, and what they guard is
+# the thing that broke quietly for months: the configs this CLI writes into a
+# member's opencode, Pi, Codex and Factory. A wrong window there is silent -
+# the tool starts, answers, and only behaves oddly deep into a session - so the
+# only place it gets caught is here.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: Vet & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # `gofmt -l` prints the files it would change and exits 0 either way, so
+      # the check has to look at the output rather than the status.
+      - name: Formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt'd:" >&2
+            echo "$unformatted" >&2
+            echo >&2
+            gofmt -d $unformatted >&2
+            exit 1
+          fi
+
+      # It caught a real one: `fmt.Sprintf("$%,.2f", v)`, a verb Go does not
+      # have, which printed $%!,(float64=1234.5).2f on the Costs tab for every
+      # figure over a thousand.
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      # The release builds four targets from this same source. A build that
+      # only works on the runner's own platform is worth knowing about before
+      # the tag, not after.
+      - name: Cross-compile the release targets
+        run: |
+          set -euo pipefail
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            echo "building $os/$arch"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -o /dev/null .
+          done

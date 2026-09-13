@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/spf13/cobra"
 	"github.com/nxssie/nan-cli/internal/api"
 	"github.com/nxssie/nan-cli/internal/session"
+	"github.com/spf13/cobra"
 )
 
 var meCmd = &cobra.Command{

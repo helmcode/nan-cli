@@ -10,8 +10,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/nxssie/nan-cli/internal/session"
+	"github.com/spf13/cobra"
 )
 
 const (

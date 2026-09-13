@@ -81,7 +81,8 @@ func clamp(v, min, max int) int {
 type tabID int
 
 const (
-	tabProfile tabID = iota
+	tabHome tabID = iota
+	tabProfile
 	tabUsage
 	tabModels
 	tabCosts
@@ -93,6 +94,7 @@ var tabDefs = []struct {
 	id   tabID
 	name string
 }{
+	{tabHome, "Home"},
 	{tabProfile, "Profile"},
 	{tabUsage, "Usage"},
 	{tabModels, "Models"},
@@ -112,16 +114,16 @@ type fetchErrMsg struct{ err error }
 // ── model ─────────────────────────────────────────────────────────────────────
 
 type model struct {
-	client     *api.Client
-	sess       *session.Session
-	active     int
-	loading    bool
-	err        error
-	spin       spinner.Model
-	cache      map[tabID]any
-	lay        layout
-	scrollY    int
-	showHelp   bool
+	client      *api.Client
+	sess        *session.Session
+	active      int
+	loading     bool
+	err         error
+	spin        spinner.Model
+	cache       map[tabID]any
+	lay         layout
+	scrollY     int
+	showHelp    bool
 	keyInput    textinput.Model
 	editingKey  bool
 	setupMsg    string
@@ -295,7 +297,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *model) maybeLoad() tea.Cmd {
 	id := m.activeID()
-	if id == tabAbout || id == tabSetup {
+	if id == tabHome || id == tabAbout || id == tabSetup {
 		return nil
 	}
 	// Costs tab derives from usage data — load that if needed
@@ -391,6 +393,8 @@ func (m model) View() string {
 			if usageData, ok := m.cache[tabUsage]; ok {
 				content = renderCosts(usageData.(map[string]any), l)
 			}
+		case tabHome:
+			content = renderHome(l)
 		case tabAbout:
 			content = renderAbout(l)
 		case tabSetup:
@@ -437,7 +441,7 @@ func (m model) View() string {
 	} else if l.w < 72 {
 		hint = "←/→ tabs  ↑/↓ scroll  r  ? help  q"
 	}
-	b.WriteString(lipgloss.NewStyle().Foreground(cGray).Render(l.indent+hint))
+	b.WriteString(lipgloss.NewStyle().Foreground(cGray).Render(l.indent + hint))
 	return b.String()
 }
 
@@ -580,10 +584,10 @@ func renderBar(pct float64, width int, color lipgloss.Color) string {
 // ── models renderer ───────────────────────────────────────────────────────────
 
 type modelInfo struct {
-	name       string
-	mode       string
-	tokens30d  float64
-	tokens24h  float64
+	name      string
+	mode      string
+	tokens30d float64
+	tokens24h float64
 }
 
 var modeLabel = map[string]string{
@@ -600,11 +604,11 @@ var modeColor = map[string]lipgloss.TerminalColor{
 	"embedding":           lipgloss.Color("#10B981"),
 	// The kinds the catalogue uses, for the ids that come from /v1/models.
 	"chat":           lipgloss.Color("#3B82F6"),
-	"chat · premium":  lipgloss.Color("#A78BFA"),
-	"rerank":          lipgloss.Color("#10B981"),
-	"text to speech":  lipgloss.Color("#8B5CF6"),
-	"speech to text":  lipgloss.Color("#F59E0B"),
-	"image":           lipgloss.Color("#EC4899"),
+	"chat · premium": lipgloss.Color("#A78BFA"),
+	"rerank":         lipgloss.Color("#10B981"),
+	"text to speech": lipgloss.Color("#8B5CF6"),
+	"speech to text": lipgloss.Color("#F59E0B"),
+	"image":          lipgloss.Color("#EC4899"),
 	// An id the cluster serves and this catalogue has never heard of. Worth
 	// showing rather than hiding: that is how a model nobody documented gets
 	// noticed.
@@ -753,10 +757,10 @@ func extractTokensByModel(usage map[string]any) map[string]map[string]float64 {
 // ── cost comparison renderer ──────────────────────────────────────────────────
 
 type providerPricing struct {
-	model       string
-	provider    string
-	inPer1M     float64 // $ per 1M input tokens
-	outPer1M    float64 // $ per 1M output tokens
+	model    string
+	provider string
+	inPer1M  float64 // $ per 1M input tokens
+	outPer1M float64 // $ per 1M output tokens
 }
 
 // Prices as of mid-2026 (per 1M tokens).
@@ -1773,7 +1777,7 @@ func (m model) renderSetup(l layout) string {
 
 // ── about renderer ───────────────────────────────────────────────────────────
 
-const Version = "0.1.1"
+const Version = "0.1.2"
 
 func renderAbout(l layout) string {
 	var b strings.Builder
@@ -1871,7 +1875,9 @@ func Run() error {
 	}
 	client := api.New(sess.Token)
 	m := newModel(client, sess)
-	m.loading = true
+	// Home asks the API for nothing, so there is nothing to wait for: starting
+	// on `loading` would spin forever over a tab that is already drawn. The
+	// data tabs set it themselves in maybeLoad when you walk into them.
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
 }
@@ -1888,4 +1894,3 @@ func indentBlock(block, indent string) string {
 	}
 	return strings.Join(lines, "\n")
 }
-
