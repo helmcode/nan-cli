@@ -23,6 +23,7 @@ const (
 var (
 	tokenFlag string
 	emailFlag string
+	linkFlag  string
 )
 
 var authCmd = &cobra.Command{
@@ -47,6 +48,7 @@ func init() {
 	authCmd.AddCommand(loginCmd)
 	authCmd.AddCommand(logoutCmd)
 	loginCmd.Flags().StringVar(&emailFlag, "email", "", "Email to send the sign-in link to")
+	loginCmd.Flags().StringVar(&linkFlag, "link", "", "Finish the login with the link from the email")
 	loginCmd.Flags().StringVar(&tokenFlag, "token", "", "Save a nan_session token directly, skipping the email")
 }
 
@@ -57,6 +59,21 @@ func init() {
 func runLogin(cmd *cobra.Command, args []string) error {
 	if tokenFlag != "" {
 		return saveToken(tokenFlag)
+	}
+
+	// `--link` picks the flow up at its second half, for a shell that cannot
+	// answer a prompt: a script, a CI step, or a terminal that runs one command
+	// at a time.
+	if linkFlag != "" {
+		token, err := tokenFromLink(strings.TrimSpace(linkFlag))
+		if err != nil {
+			return err
+		}
+		sessionToken, err := exchangeToken(token)
+		if err != nil {
+			return err
+		}
+		return saveToken(sessionToken)
 	}
 
 	in := bufio.NewScanner(os.Stdin)
@@ -80,12 +97,22 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 	fmt.Printf("A sign-in link is on its way to %s.\n", email)
 	fmt.Println()
-	fmt.Println("Copy the link out of the email and paste it below. Don't open it in")
-	fmt.Println("your browser first: the link works once, and the browser would spend it.")
+	fmt.Println("Copy the link out of the email. Don't open it in your browser first:")
+	fmt.Println("the link works once, and the browser would spend it.")
 	fmt.Println()
+
 	fmt.Print("Paste the link: ")
 	if !in.Scan() {
-		return fmt.Errorf("no link provided")
+		// Nobody at the keyboard: a pipe, a CI step, a shell that runs one
+		// command at a time. The email has already gone out, so this is not a
+		// failure to report - it is the second half of the flow, as a command.
+		// (Asking the OS whether stdin is a terminal does not settle it on
+		// Windows, where NUL is a character device too.)
+		fmt.Println()
+		fmt.Println("Nothing to read from here. Finish the login with:")
+		fmt.Println()
+		fmt.Println("  nan auth login --link \"<the link>\"")
+		return nil
 	}
 
 	token, err := tokenFromLink(strings.TrimSpace(in.Text()))
