@@ -356,3 +356,81 @@ func TestEveryModelIsWrittenTheSameEverywhere(t *testing.T) {
 		}
 	}
 }
+
+func TestHumanKeyKeepsAcronymsWhole(t *testing.T) {
+	// The Profile tab renders whatever keys /auth/me returns, and `userUUID`
+	// came out as "User U U I D" on its first line.
+	for _, c := range []struct{ in, want string }{
+		{"userUUID", "User UUID"},
+		{"inferenceProfile", "Inference Profile"},
+		{"isAdmin", "Is Admin"},
+		{"handle", "Handle"},
+		{"expiresAt", "Expires At"},
+		{"APIKey", "API Key"},
+		{"image_gen", "Image gen"},
+		{"", ""},
+	} {
+		if got := humanKey(c.in); got != c.want {
+			t.Errorf("humanKey(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// The Setup tab's `c` key runs configureTools, which finds the tools on the
+// machine and writes into their real config paths. Nothing covered it, so the
+// only way to try it was to press the key and look at your own home directory.
+// Here HOME points somewhere disposable.
+func TestConfigureToolsWritesEveryEnabledTool(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir reads this one on Windows
+
+	// A tool counts as installed if its binary is on PATH *or* its config path
+	// exists, so an empty file each is enough to make all four visible.
+	paths := map[string]string{
+		"Factory AI": filepath.Join(home, ".factory", "settings.json"),
+		"OpenCode":   filepath.Join(home, ".config", "opencode", "opencode.json"),
+		"Pi":         filepath.Join(home, ".pi", "agent", "models.json"),
+		"Codex":      filepath.Join(home, ".codex", "config.toml"),
+	}
+	for _, p := range paths {
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if msg := configureTools(testKey, nil); !strings.Contains(msg, "4 added") {
+		t.Fatalf("configureTools said %q, want the four tools written", msg)
+	}
+
+	for name, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if !strings.Contains(string(data), "api.nan.builders") {
+			t.Errorf("%s: written without the NaN base URL", name)
+		}
+		if !strings.Contains(string(data), testKey) {
+			t.Errorf("%s: written without the API key", name)
+		}
+		if !isNaNConfigured(name, p) {
+			t.Errorf("%s: the Setup tab will not show it as configured", name)
+		}
+	}
+
+	// And unticking a tool takes only that one out.
+	if msg := configureTools(testKey, map[string]bool{"Pi": false}); !strings.Contains(msg, "1 removed") {
+		t.Errorf("configureTools said %q, want Pi removed", msg)
+	}
+	if isNaNConfigured("Pi", paths["Pi"]) {
+		t.Error("Pi is still configured after being unticked")
+	}
+	if !isNaNConfigured("OpenCode", paths["OpenCode"]) {
+		t.Error("unticking Pi took OpenCode with it")
+	}
+}

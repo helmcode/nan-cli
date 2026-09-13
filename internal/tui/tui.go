@@ -987,10 +987,18 @@ func sortedKeys(m map[string]any) []string {
 }
 
 func humanKey(s string) string {
+	runes := []rune(s)
 	var out []rune
-	for i, r := range s {
-		if i > 0 && r >= 'A' && r <= 'Z' {
-			out = append(out, ' ')
+	for i, r := range runes {
+		// A space before every capital turns userUUID into "User U U I D",
+		// which is the first line of the first tab. A run of capitals is one
+		// word, and it ends where a lowercase letter starts it a new one.
+		if i > 0 && isUpper(r) {
+			startsWord := !isUpper(runes[i-1])
+			endsRun := i+1 < len(runes) && !isUpper(runes[i+1])
+			if startsWord || endsRun {
+				out = append(out, ' ')
+			}
 		}
 		out = append(out, r)
 	}
@@ -1805,3 +1813,5 @@ func Run() error {
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
 }
+
+func isUpper(r rune) bool { return r >= 'A' && r <= 'Z' }
