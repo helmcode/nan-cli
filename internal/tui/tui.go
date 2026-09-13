@@ -751,8 +751,10 @@ func calcCost(pt periodTokens, p providerPricing) float64 {
 }
 
 func fmtCost(v float64) string {
+	// Go has no `%,` verb: that format printed `$%!,(float64=1234.5).2f` on
+	// every figure over a thousand, which on the Costs tab is most of them.
 	if v >= 1000 {
-		return fmt.Sprintf("$%,.2f", v)
+		return fmtCostAligned(v)
 	}
 	return fmt.Sprintf("$%.2f", v)
 }
