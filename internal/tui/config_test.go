@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+
 	catalog "github.com/nxssie/nan-cli/internal/models"
 )
 
@@ -465,5 +467,37 @@ func TestModelsTabStillReadsThePlatformShape(t *testing.T) {
 	}}
 	if out := renderModels(data, nil, newLayout(80, 24)); !strings.Contains(out, "deepseek-v4-flash") {
 		t.Error("the fallback list renders nothing")
+	}
+}
+
+func TestCostsFooterBoxIsSquare(t *testing.T) {
+	// `l.indent + Render(box)` indented the first line only, so the top edge sat
+	// two columns to the right of the sides. And the width was measured with
+	// len() on a string carrying an em dash: three bytes, one column.
+	usage := map[string]any{
+		"last24h": map[string]any{"byModel": []any{
+			map[string]any{"model": "gemma4", "inputTokens": 1000.0, "outputTokens": 500.0},
+		}},
+	}
+	var box []string
+	for _, line := range strings.Split(renderCosts(usage, newLayout(90, 30)), "\n") {
+		if strings.ContainsAny(line, "╭│╰") {
+			box = append(box, line)
+		}
+	}
+	// Three lines, or more when the note wraps at a narrow width.
+	if len(box) < 3 {
+		t.Fatalf("the footer box has %d lines, want at least 3", len(box))
+	}
+	for i, line := range box {
+		if !strings.HasPrefix(line, "  ") {
+			t.Errorf("box line %d does not carry the indent: %q", i, line)
+		}
+	}
+	for i, line := range box {
+		if lipgloss.Width(line) != lipgloss.Width(box[0]) {
+			t.Errorf("box line %d measures %d columns, the top edge measures %d",
+				i, lipgloss.Width(line), lipgloss.Width(box[0]))
+		}
 	}
 }

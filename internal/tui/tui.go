@@ -955,8 +955,10 @@ func renderCosts(usage map[string]any, l layout) string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(cBlueDim).
 		Padding(0, 1).
-		Width(len(notePlain))
-	b.WriteString(l.indent + noteStyle.Render(note) + "\n")
+		// Not len(): the em dash is one column and three bytes, so counting
+		// bytes drew the box two columns wider than its own text.
+		Width(lipgloss.Width(notePlain))
+	b.WriteString(indentBlock(noteStyle.Render(note), l.indent) + "\n")
 
 	return b.String()
 }
@@ -1864,3 +1866,14 @@ func Run() error {
 }
 
 func isUpper(r rune) bool { return r >= 'A' && r <= 'Z' }
+
+// indentBlock indents EVERY line. `indent + Render(...)` only moves the first
+// one, which on a bordered box leaves the top edge two columns right of the
+// sides.
+func indentBlock(block, indent string) string {
+	lines := strings.Split(block, "\n")
+	for i, line := range lines {
+		lines[i] = indent + line
+	}
+	return strings.Join(lines, "\n")
+}
