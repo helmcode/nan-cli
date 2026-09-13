@@ -52,11 +52,11 @@ func TestOpencodeConfigPublishesEveryModelWithItsWindow(t *testing.T) {
 	}
 
 	written := nan["models"].(map[string]any)
-	if len(written) != len(catalog.All) {
-		t.Errorf("wrote %d models, the cluster serves %d", len(written), len(catalog.All))
+	if len(written) != len(catalog.ChatModels()) {
+		t.Errorf("wrote %d models, the cluster serves %d", len(written), len(catalog.ChatModels()))
 	}
 
-	for _, m := range catalog.All {
+	for _, m := range catalog.ChatModels() {
 		entry, ok := written[m.ID].(map[string]any)
 		if !ok {
 			t.Errorf("%s: not written", m.ID)
@@ -159,7 +159,7 @@ func TestPiConfigIsAModelsJsonWithTheRealWindows(t *testing.T) {
 	}
 
 	written := piModels(t, path)
-	for _, m := range catalog.All {
+	for _, m := range catalog.ChatModels() {
 		entry, ok := written[m.ID]
 		if !ok {
 			t.Errorf("%s: missing from the Pi provider", m.ID)
@@ -284,8 +284,8 @@ func TestFactoryConfigMarksWhatCannotSeeImages(t *testing.T) {
 	}
 	cfg := readJSON(t, path)
 	custom := cfg["customModels"].([]any)
-	if len(custom) != len(catalog.All) {
-		t.Errorf("wrote %d models, the cluster serves %d", len(custom), len(catalog.All))
+	if len(custom) != len(catalog.ChatModels()) {
+		t.Errorf("wrote %d models, the cluster serves %d", len(custom), len(catalog.ChatModels()))
 	}
 	for _, raw := range custom {
 		entry := raw.(map[string]any)
@@ -344,7 +344,7 @@ func TestEveryModelIsWrittenTheSameEverywhere(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, m := range catalog.All {
+	for _, m := range catalog.ChatModels() {
 		if _, ok := opencode[m.ID]; !ok {
 			t.Errorf("%s: missing from opencode", m.ID)
 		}
@@ -432,5 +432,38 @@ func TestConfigureToolsWritesEveryEnabledTool(t *testing.T) {
 	}
 	if !isNaNConfigured("OpenCode", paths["OpenCode"]) {
 		t.Error("unticking Pi took OpenCode with it")
+	}
+}
+
+func TestModelsTabShowsCallableIds(t *testing.T) {
+	// GET /v1/models answers with the ids a request can name. The platform's
+	// /agents/models answers with deployment names instead - it carries
+	// `deepseek-v4-flash-fallback`, `glm5.3-fallback` and `glm5.2`, none of
+	// which a member can put in a `model` field - and that is what this tab
+	// used to list.
+	out := renderModels([]string{"deepseek-v4-flash", "kokoro", "glm5.3", "minimax-h3"}, nil, newLayout(80, 24))
+
+	for _, want := range []string{
+		"deepseek-v4-flash", "chat",
+		"kokoro", "text to speech",
+		"glm5.3", "premium",
+		// An id the cluster serves and this catalogue has never heard of has to
+		// show, not disappear: that is how an undocumented model gets noticed.
+		"minimax-h3", "unknown",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the Models tab does not mention %q", want)
+		}
+	}
+}
+
+func TestModelsTabStillReadsThePlatformShape(t *testing.T) {
+	// Without an API key there is no /v1/models to ask, and the tab falls back
+	// to what the platform returns.
+	data := map[string]any{"models": []any{
+		map[string]any{"name": "deepseek-v4-flash", "mode": "chat"},
+	}}
+	if out := renderModels(data, nil, newLayout(80, 24)); !strings.Contains(out, "deepseek-v4-flash") {
+		t.Error("the fallback list renders nothing")
 	}
 }

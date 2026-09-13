@@ -66,6 +66,53 @@ func (c *Client) GetMetricsUsage() (map[string]any, error) {
 	return result, json.Unmarshal(body, &result)
 }
 
+// InferenceBaseURL is the API a member points their tools at, and the only
+// place that knows which ids their key can actually name in a request.
+const InferenceBaseURL = "https://api.nan.builders/v1"
+
+// ListModels returns the ids from GET /v1/models, which is the list the docs
+// call definitive: `/agents/models` on the platform answers with deployment
+// names instead, so it carries routing aliases (`-fallback`) and models that
+// are on their way out.
+func ListModels(apiKey string) ([]string, error) {
+	req, err := http.NewRequest(http.MethodGet, InferenceBaseURL+"/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("the API key in Setup is not valid")
+	}
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	var parsed struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(parsed.Data))
+	for _, m := range parsed.Data {
+		ids = append(ids, m.ID)
+	}
+	return ids, nil
+}
+
 func (c *Client) GetAgentsModels() (any, error) {
 	body, err := c.get("/agents/models")
 	if err != nil {

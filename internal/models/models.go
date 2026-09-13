@@ -13,8 +13,23 @@
 // the platform moves one, this is the file to change.
 package models
 
+// What the model is for. Everything except Chat is here so the Models tab can
+// say what an id is; only Chat models go into the tool configs, because a
+// coding agent has nothing to do with a reranker.
+type Kind string
+
+const (
+	Chat      Kind = "chat"
+	Embedding Kind = "embedding"
+	Rerank    Kind = "rerank"
+	TTS       Kind = "text to speech"
+	STT       Kind = "speech to text"
+	Image     Kind = "image"
+)
+
 type Model struct {
-	ID string
+	ID   string
+	Kind Kind
 	// As the setup guides name it, so a picker in one tool reads like the
 	// picker in the next.
 	Name string
@@ -42,6 +57,7 @@ const (
 var All = []Model{
 	{
 		ID:        "deepseek-v4-flash",
+		Kind:      Chat,
 		Name:      "DeepSeek V4 Flash",
 		Context:   1_048_575,
 		Output:    32_768,
@@ -50,6 +66,7 @@ var All = []Model{
 	},
 	{
 		ID:        "glm5.3-flash",
+		Kind:      Chat,
 		Name:      "GLM 5.3 Flash",
 		Context:   1_048_576,
 		Output:    32_768,
@@ -58,6 +75,7 @@ var All = []Model{
 	},
 	{
 		ID:        "qwen3.8-flash",
+		Kind:      Chat,
 		Name:      "Qwen 3.8 Flash",
 		Context:   262_144,
 		Output:    32_768,
@@ -66,6 +84,7 @@ var All = []Model{
 	},
 	{
 		ID:        "mimo-v2.5",
+		Kind:      Chat,
 		Name:      "Xiaomi MiMo V2.5",
 		Context:   1_048_576,
 		Output:    32_768,
@@ -74,6 +93,7 @@ var All = []Model{
 	},
 	{
 		ID:        "gemma4",
+		Kind:      Chat,
 		Name:      "Gemma 4",
 		Context:   262_144,
 		Output:    65_536,
@@ -82,6 +102,7 @@ var All = []Model{
 	},
 	{
 		ID:        "qwen3.6",
+		Kind:      Chat,
 		Name:      "Qwen 3.6",
 		Context:   262_144,
 		Output:    65_536,
@@ -90,6 +111,7 @@ var All = []Model{
 	},
 	{
 		ID:        "glm5.3",
+		Kind:      Chat,
 		Name:      "GLM 5.3 (premium)",
 		Context:   1_048_576,
 		Output:    32_768,
@@ -97,6 +119,26 @@ var All = []Model{
 		Reasoning: true,
 		Premium:   true,
 	},
+
+	// Not chat, and not in any tool config: they are here so the Models tab can
+	// say what an id is for. A window is meaningless on most of them.
+	{ID: "qwen3-embedding", Kind: Embedding, Name: "Qwen 3 Embedding", Inputs: []string{InputText}},
+	{ID: "rerank", Kind: Rerank, Name: "Qwen 3 Reranker", Inputs: []string{InputText}},
+	{ID: "kokoro", Kind: TTS, Name: "Kokoro", Inputs: []string{InputText}},
+	{ID: "whisper", Kind: STT, Name: "Whisper large-v3", Inputs: []string{InputAudio}},
+	{ID: "flux-2-klein", Kind: Image, Name: "FLUX.2 Klein", Inputs: []string{InputText, InputImage}},
+}
+
+// ChatModels is what a coding tool gets configured with. The rest of the
+// catalogue has no business in an agent's model picker.
+func ChatModels() []Model {
+	out := make([]Model, 0, len(All))
+	for _, m := range All {
+		if m.Kind == Chat {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // Default is what a tool is left pointing at when it has no preference of its

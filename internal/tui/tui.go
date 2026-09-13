@@ -317,6 +317,7 @@ func (m *model) maybeLoad() tea.Cmd {
 
 func (m model) fetchTab(id tabID) tea.Cmd {
 	client := m.client
+	apiKey := m.sess.APIKey
 	return func() tea.Msg {
 		switch id {
 		case tabProfile:
@@ -332,6 +333,17 @@ func (m model) fetchTab(id tabID) tea.Cmd {
 			}
 			return fetchedMsg{tab: tabUsage, data: data}
 		case tabModels:
+			// The ids a member can put in a request come from the inference
+			// API, and it wants the API key rather than the session. Without
+			// one there is still the platform's list, which answers with
+			// deployment names: routing aliases and models on their way out.
+			if apiKey != "" {
+				ids, err := api.ListModels(apiKey)
+				if err != nil {
+					return fetchErrMsg{err}
+				}
+				return fetchedMsg{tab: tabModels, data: ids}
+			}
 			data, err := client.GetAgentsModels()
 			if err != nil {
 				return fetchErrMsg{err}
@@ -586,38 +598,75 @@ var modeColor = map[string]lipgloss.TerminalColor{
 	"audio_speech":        lipgloss.Color("#8B5CF6"),
 	"audio_transcription": lipgloss.Color("#F59E0B"),
 	"embedding":           lipgloss.Color("#10B981"),
+	// The kinds the catalogue uses, for the ids that come from /v1/models.
+	"chat":           lipgloss.Color("#3B82F6"),
+	"chat · premium":  lipgloss.Color("#A78BFA"),
+	"rerank":          lipgloss.Color("#10B981"),
+	"text to speech":  lipgloss.Color("#8B5CF6"),
+	"speech to text":  lipgloss.Color("#F59E0B"),
+	"image":           lipgloss.Color("#EC4899"),
+	// An id the cluster serves and this catalogue has never heard of. Worth
+	// showing rather than hiding: that is how a model nobody documented gets
+	// noticed.
+	"unknown": lipgloss.Color("#71717A"),
+}
+
+// A colour for a mode this build does not know, so an id it has never seen
+// still renders.
+func badgeColor(mode string) lipgloss.TerminalColor {
+	if c, ok := modeColor[mode]; ok {
+		return c
+	}
+	return cGray
 }
 
 func renderModels(data any, usageData any, l layout) string {
-	// Extract models list (unwrap {"models": [...]})
-	var raw []any
-	switch v := data.(type) {
-	case map[string]any:
-		if list, ok := v["models"].([]any); ok {
-			raw = list
-		}
-	case []any:
-		raw = v
-	}
-	if raw == nil {
-		return l.indent + lipgloss.NewStyle().Foreground(cGray).Render("No models found.") + "\n"
-	}
+	var models []modelInfo
 
-	// Build model list
-	models := make([]modelInfo, 0, len(raw))
-	for _, item := range raw {
-		obj, ok := item.(map[string]any)
-		if !ok {
-			continue
+	// []string is the id list from GET /v1/models: what goes in the `model`
+	// field of a request, which is what a member came to this tab to copy.
+	if ids, ok := data.([]string); ok {
+		for _, id := range ids {
+			mi := modelInfo{name: id, mode: "unknown"}
+			if m, found := catalog.Get(id); found {
+				mi.mode = string(m.Kind)
+				if m.Premium {
+					mi.mode += " · premium"
+				}
+			}
+			models = append(models, mi)
 		}
-		mi := modelInfo{
-			name: fmt.Sprintf("%v", obj["name"]),
-			mode: fmt.Sprintf("%v", obj["mode"]),
+	} else {
+		// The platform's list, when there is no API key to ask the other one.
+		var raw []any
+		switch v := data.(type) {
+		case map[string]any:
+			if list, ok := v["models"].([]any); ok {
+				raw = list
+			}
+		case []any:
+			raw = v
 		}
-		if mi.mode == "<nil>" {
-			mi.mode = ""
+		if raw == nil {
+			return l.indent + lipgloss.NewStyle().Foreground(cGray).Render("No models found.") + "\n"
 		}
-		models = append(models, mi)
+		for _, item := range raw {
+			obj, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			mi := modelInfo{
+				name: fmt.Sprintf("%v", obj["name"]),
+				mode: fmt.Sprintf("%v", obj["mode"]),
+			}
+			if mi.mode == "<nil>" {
+				mi.mode = ""
+			}
+			models = append(models, mi)
+		}
+	}
+	if len(models) == 0 {
+		return l.indent + lipgloss.NewStyle().Foreground(cGray).Render("No models found.") + "\n"
 	}
 
 	// Cross-reference with usage cache
@@ -647,7 +696,7 @@ func renderModels(data any, usageData any, l layout) string {
 			b.WriteString(divider + "\n")
 		}
 
-		color := modeColor[mi.mode]
+		color := badgeColor(mi.mode)
 		label, ok := modeLabel[mi.mode]
 		if !ok {
 			label = mi.mode
@@ -1221,7 +1270,7 @@ func writeFactoryConfig(cfgPath, apiKey string) error {
 
 	// Append only missing models
 	added := false
-	for _, nm := range catalog.All {
+	for _, nm := range catalog.ChatModels() {
 		if !existingIDs[nm.ID] {
 			idx := len(models)
 			display := nm.Name + " (NaN)"
@@ -1288,7 +1337,7 @@ func writeOpencodeConfig(cfgPath, apiKey string) error {
 	// raises nothing anyone sees, which is why nan.builders/docs/opencode
 	// spells the field out and why this writes it.
 	nanModels := map[string]any{}
-	for _, m := range catalog.All {
+	for _, m := range catalog.ChatModels() {
 		nanModels[m.ID] = map[string]any{
 			"name": m.Name,
 			"limit": map[string]any{
@@ -1391,8 +1440,8 @@ func writePiConfig(cfgPath, apiKey string) error {
 		providers = map[string]any{}
 	}
 
-	models := make([]map[string]any, 0, len(catalog.All))
-	for _, m := range catalog.All {
+	models := make([]map[string]any, 0, len(catalog.ChatModels()))
+	for _, m := range catalog.ChatModels() {
 		models = append(models, map[string]any{
 			"id":            m.ID,
 			"name":          m.Name,
