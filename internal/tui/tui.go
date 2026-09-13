@@ -1030,7 +1030,7 @@ func detectTools() []toolInfo {
 		{
 			name:        "Pi",
 			binary:      "pi",
-			configPath:  filepath.Join(home, ".pi", "agent", "extensions", "nan.ts"),
+			configPath:  filepath.Join(home, ".pi", "agent", "models.json"),
 			installPath: filepath.Join(home, ".pi"),
 		},
 		{
@@ -1084,7 +1084,14 @@ func isNaNConfigured(toolName, cfgPath string) bool {
 		base, _ := opts["baseURL"].(string)
 		return strings.Contains(base, "api.nan.builders")
 	case "Pi":
-		return strings.Contains(string(data), "api.nan.builders")
+		var cfg map[string]any
+		if json.Unmarshal(data, &cfg) != nil {
+			return false
+		}
+		providers, _ := cfg["providers"].(map[string]any)
+		nan, _ := providers["nan"].(map[string]any)
+		base, _ := nan["baseUrl"].(string)
+		return strings.Contains(base, "api.nan.builders")
 	case "Codex":
 		return strings.Contains(string(data), "api.nan.builders")
 	}
@@ -1353,64 +1360,104 @@ func writeOpencodeConfig(cfgPath, apiKey string) error {
 	return os.WriteFile(cfgPath, data, 0o600)
 }
 
+// Pi takes a provider two ways: a models.json, which is data, or an extension
+// that calls pi.registerProvider, which is code. Both are current in 0.85.1.
+// This used to write the extension - a TypeScript file Pi loads and runs - and
+// now writes the data, which is what nan.builders/docs/pi publishes: Pi
+// validates models.json against its own schema and names the field that is
+// wrong, nothing this CLI writes has to execute on a member's machine, and the
+// two ways of setting Pi up stop being two things to keep in step.
 func writePiConfig(cfgPath, apiKey string) error {
+	// Unlike the extension file, models.json is shared: other providers live in
+	// it and none of them are ours to touch.
+	var cfg map[string]any
 	if data, err := os.ReadFile(cfgPath); err == nil {
-		if strings.Contains(string(data), "api.nan.builders") {
-			return nil // already configured
-		}
+		_ = json.Unmarshal(data, &cfg)
 	}
-	var entries strings.Builder
-	for _, m := range catalog.All {
-		quoted := make([]string, 0, len(m.Inputs))
-		for _, in := range m.Inputs {
-			quoted = append(quoted, fmt.Sprintf("%q", in))
-		}
-		fmt.Fprintf(&entries, piModelTmpl, m.ID, m.Name, m.Reasoning,
-			strings.Join(quoted, ", "), m.Context, m.Output)
+	if cfg == nil {
+		cfg = map[string]any{}
 	}
 
-	content := fmt.Sprintf(piTmpl, apiKey, entries.String())
+	providers, _ := cfg["providers"].(map[string]any)
+	if providers == nil {
+		providers = map[string]any{}
+	}
+
+	models := make([]map[string]any, 0, len(catalog.All))
+	for _, m := range catalog.All {
+		models = append(models, map[string]any{
+			"id":            m.ID,
+			"name":          m.Name,
+			"input":         piInputs(m),
+			"reasoning":     m.Reasoning,
+			"contextWindow": m.Context,
+			"maxTokens":     m.Output,
+		})
+	}
+
+	providers["nan"] = map[string]any{
+		"name":    "NaN",
+		"baseUrl": "https://api.nan.builders/v1",
+		"apiKey":  apiKey,
+		"api":     "openai-completions",
+		"compat":  map[string]any{"supportsDeveloperRole": true},
+		"models":  models,
+	}
+	cfg["providers"] = providers
+
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(cfgPath, []byte(content), 0o600)
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(cfgPath, data, 0o600)
 }
 
-const piTmpl = `import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-
-export default function (pi: ExtensionAPI) {
-  pi.registerProvider("nan", {
-    name: "NaN",
-    baseUrl: "https://api.nan.builders/v1",
-    apiKey: %q,
-    api: "openai-completions",
-    compat: { supportsDeveloperRole: true },
-    models: [
-%s    ],
-  });
+// Pi's schema takes "text" and "image" and nothing else, so mimo-v2.5 goes in
+// without its audio: a third value fails validation, and Pi then refuses the
+// whole file with every other provider in it.
+func piInputs(m catalog.Model) []string {
+	out := make([]string, 0, len(m.Inputs))
+	for _, in := range m.Inputs {
+		if in == catalog.InputText || in == catalog.InputImage {
+			out = append(out, in)
+		}
+	}
+	return out
 }
-`
 
-// contextWindow is the window the proxy serves and maxTokens the ceiling for a
-// single answer. Both were the same two numbers for every model, 128000 and
-// 8192, which on the 1M-token models is an eighth of the room a session has.
-const piModelTmpl = `      {
-        id: %q,
-        name: %q,
-        reasoning: %t,
-        input: [%s],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: %d,
-        maxTokens: %d,
-      },
-`
-
+// Deleting the file is no longer an option: models.json is where every Pi
+// provider lives, and the extension it replaced was a file of ours alone.
 func removePiConfig(cfgPath string) error {
-	err := os.Remove(cfgPath)
+	data, err := os.ReadFile(cfgPath)
 	if os.IsNotExist(err) {
 		return nil
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	var cfg map[string]any
+	if json.Unmarshal(data, &cfg) != nil {
+		return nil
+	}
+	providers, _ := cfg["providers"].(map[string]any)
+	if _, ours := providers["nan"]; !ours {
+		return nil
+	}
+	delete(providers, "nan")
+
+	// A models.json with nothing left in it is not a config Pi needs to read.
+	if len(providers) == 0 && len(cfg) == 1 {
+		return os.Remove(cfgPath)
+	}
+	cfg["providers"] = providers
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(cfgPath, out, 0o600)
 }
 
 func writeCodexConfig(cfgPath, apiKey string) error {

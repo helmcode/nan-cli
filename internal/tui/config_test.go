@@ -133,34 +133,104 @@ func TestOpencodeConfigKeepsWhatItDoesNotOwn(t *testing.T) {
 	}
 }
 
-func TestPiConfigCarriesTheRealWindows(t *testing.T) {
-	path := tempConfig(t, "nan.ts")
+func piModels(t *testing.T, path string) map[string]map[string]any {
+	t.Helper()
+	cfg := readJSON(t, path)
+	providers, ok := cfg["providers"].(map[string]any)
+	if !ok {
+		t.Fatal("models.json has no providers object, which is the only thing Pi reads")
+	}
+	nan, ok := providers["nan"].(map[string]any)
+	if !ok {
+		t.Fatal("no nan provider")
+	}
+	out := map[string]map[string]any{}
+	for _, raw := range nan["models"].([]any) {
+		m := raw.(map[string]any)
+		out[m["id"].(string)] = m
+	}
+	return out
+}
+
+func TestPiConfigIsAModelsJsonWithTheRealWindows(t *testing.T) {
+	path := tempConfig(t, "models.json")
 	if err := writePiConfig(path, testKey); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	content := string(data)
 
+	written := piModels(t, path)
 	for _, m := range catalog.All {
-		if !strings.Contains(content, `id: "`+m.ID+`"`) {
+		entry, ok := written[m.ID]
+		if !ok {
 			t.Errorf("%s: missing from the Pi provider", m.ID)
+			continue
+		}
+		// The old template wrote 128000 and 8192 for every model, whatever it
+		// was: an eighth of the room on the 1M models.
+		if got := int(entry["contextWindow"].(float64)); got != m.Context {
+			t.Errorf("%s: contextWindow %d, served at %d", m.ID, got, m.Context)
+		}
+		if got := int(entry["maxTokens"].(float64)); got != m.Output {
+			t.Errorf("%s: maxTokens %d, want %d", m.ID, got, m.Output)
 		}
 	}
-	// The old template wrote these two for every model, whatever it was.
-	if strings.Contains(content, "contextWindow: 128000") {
-		t.Error("still writing the placeholder 128000-token window")
+}
+
+func TestPiConfigWritesOnlyTheModalitiesPiAccepts(t *testing.T) {
+	path := tempConfig(t, "models.json")
+	if err := writePiConfig(path, testKey); err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(content, "maxTokens: 8192") {
-		t.Error("still writing the placeholder 8192-token answer budget")
+	// Pi's schema is `("text" | "image")[]`. A third value fails validation and
+	// Pi then refuses the whole file, every other provider in it included, so
+	// mimo-v2.5 goes in without its audio.
+	for id, entry := range piModels(t, path) {
+		for _, raw := range entry["input"].([]any) {
+			if in := raw.(string); in != "text" && in != "image" {
+				t.Errorf("%s: input %q is not in Pi's schema", id, in)
+			}
+		}
 	}
-	if !strings.Contains(content, "contextWindow: 1048576") {
-		t.Error("no model carries the 1M window the cluster serves")
+}
+
+func TestPiConfigLeavesOtherProvidersAlone(t *testing.T) {
+	path := tempConfig(t, "models.json")
+	existing := `{"providers":{"openai":{"baseUrl":"https://api.openai.com/v1","models":[]}}}`
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(content, testKey) {
-		t.Error("the API key never made it into the file")
+	if err := writePiConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	providers := readJSON(t, path)["providers"].(map[string]any)
+	if _, ok := providers["openai"]; !ok {
+		t.Fatal("another provider was dropped from a shared file")
+	}
+
+	// And removing ours has to leave theirs standing, which deleting the file
+	// would not.
+	if err := removePiConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	providers = readJSON(t, path)["providers"].(map[string]any)
+	if _, ok := providers["openai"]; !ok {
+		t.Error("removing the NaN provider took another one with it")
+	}
+	if _, ok := providers["nan"]; ok {
+		t.Error("the NaN provider is still there after removing it")
+	}
+}
+
+func TestPiConfigIsRecognisedAsConfigured(t *testing.T) {
+	path := tempConfig(t, "models.json")
+	if isNaNConfigured("Pi", path) {
+		t.Error("an absent file reads as configured")
+	}
+	if err := writePiConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	if !isNaNConfigured("Pi", path) {
+		t.Error("the Setup tab will not see the config it just wrote")
 	}
 }
 
@@ -253,7 +323,7 @@ func TestEveryModelIsWrittenTheSameEverywhere(t *testing.T) {
 	dir := t.TempDir()
 	opencodePath := filepath.Join(dir, "opencode.json")
 	factoryPath := filepath.Join(dir, "settings.json")
-	piPath := filepath.Join(dir, "nan.ts")
+	piPath := filepath.Join(dir, "models.json")
 	for _, err := range []error{
 		writeOpencodeConfig(opencodePath, testKey),
 		writeFactoryConfig(factoryPath, testKey),
