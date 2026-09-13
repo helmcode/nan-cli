@@ -159,3 +159,66 @@ func WelcomeStacked(indent string) string {
 	b.WriteString("\n" + edge("└─", "─┘") + "\n")
 	return b.String()
 }
+
+// ── home ──────────────────────────────────────────────────────────────────────
+
+// renderHome is the first thing the panel shows: the wordmark, and how to move
+// around it.
+//
+// The banner used to live only in About, which is the last tab, so the program
+// opened on a table of account fields and you had to go looking for the name of
+// what you were running. The keys are along the bottom of every tab too, but a
+// one-line footer is where you look when you already know what you are doing,
+// not when you have just arrived.
+func renderHome(l layout) string {
+	var b strings.Builder
+
+	if l.w >= BannerWidth+4 {
+		b.WriteString(Banner(l.indent) + "\n")
+	} else {
+		name, dim, _ := styles()
+		b.WriteString(l.indent + name.Render("nan.builders") + "\n")
+		b.WriteString(l.indent + dim.Render("cloud CLI · v"+Version) + "\n\n")
+	}
+
+	section := lipgloss.NewStyle().Foreground(cGray).Bold(true)
+	key := lipgloss.NewStyle().Foreground(lipgloss.Color(brandVioletText)).Bold(true)
+	desc := lipgloss.NewStyle().Foreground(cGray)
+
+	b.WriteString(l.indent + section.Render("Getting around") + "\n\n")
+
+	keys := []struct{ k, d string }{
+		{"←/→", "move between tabs"},
+		{"↑/↓", "scroll the tab you are on"},
+		{"r", "refresh it"},
+		{"?", "every shortcut, including the ones for Setup"},
+		{"q", "quit"},
+	}
+	tabs := []struct{ k, d string }{
+		{"Usage", "what you have spent, over 24 hours, 30 days and all time"},
+		{"Models", "what your key can call, and what you have spent on each"},
+		{"Costs", "what that usage would have cost you elsewhere"},
+		{"Setup", "your API key, and the tools this configures for you"},
+	}
+
+	// One column for both lists, measured over both, so the descriptions line
+	// up under each other instead of starting wherever the key ends.
+	column := 0
+	for _, s := range append(append([]struct{ k, d string }{}, keys...), tabs...) {
+		if w := lipgloss.Width(s.k); w > column {
+			column = w
+		}
+	}
+	column += 3
+
+	for _, s := range keys {
+		b.WriteString(l.indent + key.Width(column).Render(s.k) + desc.Render(s.d) + "\n")
+	}
+
+	b.WriteString("\n" + l.indent + section.Render("The tabs") + "\n")
+	for _, t := range tabs {
+		b.WriteString(l.indent + key.Width(column).Render(t.k) + desc.Render(t.d) + "\n")
+	}
+
+	return b.String()
+}
