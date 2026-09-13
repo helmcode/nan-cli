@@ -2,19 +2,29 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
-	"os/exec"
-	"runtime"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/nxssie/nan-cli/internal/session"
 )
 
-const apiAuthURL = "https://cloud-api.nan.builders/api/auth/discord"
+const (
+	loginRequestURL = "https://cloud-api.nan.builders/api/auth/login/request"
+	loginVerifyURL  = "https://cloud-api.nan.builders/api/auth/login/verify"
+	sessionCookie   = "nan_session"
+)
 
-var tokenFlag string
+var (
+	tokenFlag string
+	emailFlag string
+	linkFlag  string
+)
 
 var authCmd = &cobra.Command{
 	Use:   "auth",
@@ -23,7 +33,7 @@ var authCmd = &cobra.Command{
 
 var loginCmd = &cobra.Command{
 	Use:   "login",
-	Short: "Log in with Discord (opens browser)",
+	Short: "Log in with a sign-in link sent to your email",
 	RunE:  runLogin,
 }
 
@@ -37,30 +47,161 @@ func init() {
 	rootCmd.AddCommand(authCmd)
 	authCmd.AddCommand(loginCmd)
 	authCmd.AddCommand(logoutCmd)
-	loginCmd.Flags().StringVar(&tokenFlag, "token", "", "Save a nan_session token directly")
+	loginCmd.Flags().StringVar(&emailFlag, "email", "", "Email to send the sign-in link to")
+	loginCmd.Flags().StringVar(&linkFlag, "link", "", "Finish the login with the link from the email")
+	loginCmd.Flags().StringVar(&tokenFlag, "token", "", "Save a nan_session token directly, skipping the email")
 }
 
+// The platform signs in by emailed link. It used to be Discord OAuth, and this
+// command opened https://cloud-api.nan.builders/api/auth/discord, which has
+// answered 404 since that flow was retired: the browser landed on an error page
+// and the command then asked for a cookie that no longer existed.
 func runLogin(cmd *cobra.Command, args []string) error {
 	if tokenFlag != "" {
 		return saveToken(tokenFlag)
 	}
 
-	fmt.Println("Opening browser to log in with Discord...")
-	openBrowser(apiAuthURL)
-	fmt.Println()
-	fmt.Println("After logging in:")
-	fmt.Println("  1. Open DevTools (F12) → Application → Cookies → cloud-api.nan.builders")
-	fmt.Println("  2. Copy the value of the 'nan_session' cookie")
-	fmt.Println()
-	fmt.Print("Paste nan_session: ")
-
-	scanner := bufio.NewScanner(os.Stdin)
-	scanner.Scan()
-	token := strings.TrimSpace(scanner.Text())
-	if token == "" {
-		return fmt.Errorf("no token provided")
+	// `--link` picks the flow up at its second half, for a shell that cannot
+	// answer a prompt: a script, a CI step, or a terminal that runs one command
+	// at a time.
+	if linkFlag != "" {
+		token, err := tokenFromLink(strings.TrimSpace(linkFlag))
+		if err != nil {
+			return err
+		}
+		sessionToken, err := exchangeToken(token)
+		if err != nil {
+			return err
+		}
+		return saveToken(sessionToken)
 	}
-	return saveToken(token)
+
+	in := bufio.NewScanner(os.Stdin)
+
+	email := strings.TrimSpace(emailFlag)
+	if email == "" {
+		fmt.Print("Email: ")
+		if !in.Scan() {
+			return fmt.Errorf("no email provided")
+		}
+		email = strings.TrimSpace(in.Text())
+	}
+	if !strings.Contains(email, "@") {
+		return fmt.Errorf("not an email address: %q", email)
+	}
+
+	if err := requestSignInLink(email); err != nil {
+		return err
+	}
+
+	fmt.Println()
+	fmt.Printf("A sign-in link is on its way to %s.\n", email)
+	fmt.Println()
+	fmt.Println("Copy the link out of the email. Don't open it in your browser first:")
+	fmt.Println("the link works once, and the browser would spend it.")
+	fmt.Println()
+
+	fmt.Print("Paste the link: ")
+	if !in.Scan() {
+		// Nobody at the keyboard: a pipe, a CI step, a shell that runs one
+		// command at a time. The email has already gone out, so this is not a
+		// failure to report - it is the second half of the flow, as a command.
+		// (Asking the OS whether stdin is a terminal does not settle it on
+		// Windows, where NUL is a character device too.)
+		fmt.Println()
+		fmt.Println("Nothing to read from here. Finish the login with:")
+		fmt.Println()
+		fmt.Println("  nan auth login --link \"<the link>\"")
+		return nil
+	}
+
+	token, err := tokenFromLink(strings.TrimSpace(in.Text()))
+	if err != nil {
+		return err
+	}
+
+	sessionToken, err := exchangeToken(token)
+	if err != nil {
+		return err
+	}
+	return saveToken(sessionToken)
+}
+
+func requestSignInLink(email string) error {
+	body, err := json.Marshal(map[string]string{"email": email})
+	if err != nil {
+		return err
+	}
+	resp, err := http.Post(loginRequestURL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("could not reach nan.builders: %w", err)
+	}
+	defer resp.Body.Close()
+
+	switch {
+	case resp.StatusCode == http.StatusTooManyRequests:
+		return fmt.Errorf("too many sign-in attempts, wait a few minutes")
+	case resp.StatusCode >= 400:
+		return fmt.Errorf("could not send the sign-in link (HTTP %d)", resp.StatusCode)
+	}
+	// 202 comes back whether or not the address belongs to a member, so a
+	// successful call here is not proof that an email is on the way.
+	return nil
+}
+
+// Accepts the whole link, or just the token if the mail client mangled it.
+func tokenFromLink(pasted string) (string, error) {
+	if pasted == "" {
+		return "", fmt.Errorf("nothing pasted")
+	}
+	if strings.Contains(pasted, "://") {
+		u, err := url.Parse(pasted)
+		if err != nil {
+			return "", fmt.Errorf("that does not parse as a link: %w", err)
+		}
+		token := u.Query().Get("token")
+		if token == "" {
+			return "", fmt.Errorf("that link carries no token: %s", pasted)
+		}
+		return token, nil
+	}
+	if strings.ContainsAny(pasted, " \t") {
+		return "", fmt.Errorf("that is neither a link nor a token")
+	}
+	return pasted, nil
+}
+
+// The browser flow ends on a page that POSTs the token and gets the session
+// cookie back. This does the same POST and keeps the cookie instead of
+// following the redirect, which is the whole reason the old flow had to send
+// people into DevTools.
+func exchangeToken(token string) (string, error) {
+	client := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	form := url.Values{"token": {token}}
+	resp, err := client.PostForm(loginVerifyURL, form)
+	if err != nil {
+		return "", fmt.Errorf("could not reach nan.builders: %w", err)
+	}
+	defer resp.Body.Close()
+
+	for _, c := range resp.Cookies() {
+		if c.Name == sessionCookie && c.Value != "" {
+			return c.Value, nil
+		}
+	}
+
+	// A spent or expired link redirects to the platform's access-denied page
+	// with the reason in the query, which is more useful than the status code.
+	if location, err := resp.Location(); err == nil {
+		if reason := location.Query().Get("reason"); reason != "" {
+			return "", fmt.Errorf("the link did not work: %s", strings.ReplaceAll(reason, "_", " "))
+		}
+	}
+	return "", fmt.Errorf("no session came back (HTTP %d)", resp.StatusCode)
 }
 
 func runLogout(cmd *cobra.Command, args []string) error {
@@ -72,24 +213,14 @@ func runLogout(cmd *cobra.Command, args []string) error {
 }
 
 func saveToken(token string) error {
-	if err := session.Save(&session.Session{Token: token}); err != nil {
+	current, err := session.Load()
+	if err != nil {
+		current = &session.Session{}
+	}
+	current.Token = token
+	if err := session.Save(current); err != nil {
 		return fmt.Errorf("could not save session: %w", err)
 	}
 	fmt.Println("Logged in successfully.")
 	return nil
-}
-
-func openBrowser(url string) {
-	var bin string
-	var binArgs []string
-	switch runtime.GOOS {
-	case "darwin":
-		bin = "open"
-	case "windows":
-		bin = "rundll32"
-		binArgs = []string{"url.dll,FileProtocolHandler"}
-	default:
-		bin = "xdg-open"
-	}
-	exec.Command(bin, append(binArgs, url)...).Start()
 }

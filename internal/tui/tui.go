@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/nxssie/nan-cli/internal/api"
+	catalog "github.com/nxssie/nan-cli/internal/models"
 	"github.com/nxssie/nan-cli/internal/session"
 )
 
@@ -315,6 +317,7 @@ func (m *model) maybeLoad() tea.Cmd {
 
 func (m model) fetchTab(id tabID) tea.Cmd {
 	client := m.client
+	apiKey := m.sess.APIKey
 	return func() tea.Msg {
 		switch id {
 		case tabProfile:
@@ -330,6 +333,17 @@ func (m model) fetchTab(id tabID) tea.Cmd {
 			}
 			return fetchedMsg{tab: tabUsage, data: data}
 		case tabModels:
+			// The ids a member can put in a request come from the inference
+			// API, and it wants the API key rather than the session. Without
+			// one there is still the platform's list, which answers with
+			// deployment names: routing aliases and models on their way out.
+			if apiKey != "" {
+				ids, err := api.ListModels(apiKey)
+				if err != nil {
+					return fetchErrMsg{err}
+				}
+				return fetchedMsg{tab: tabModels, data: ids}
+			}
 			data, err := client.GetAgentsModels()
 			if err != nil {
 				return fetchErrMsg{err}
@@ -584,38 +598,75 @@ var modeColor = map[string]lipgloss.TerminalColor{
 	"audio_speech":        lipgloss.Color("#8B5CF6"),
 	"audio_transcription": lipgloss.Color("#F59E0B"),
 	"embedding":           lipgloss.Color("#10B981"),
+	// The kinds the catalogue uses, for the ids that come from /v1/models.
+	"chat":           lipgloss.Color("#3B82F6"),
+	"chat · premium":  lipgloss.Color("#A78BFA"),
+	"rerank":          lipgloss.Color("#10B981"),
+	"text to speech":  lipgloss.Color("#8B5CF6"),
+	"speech to text":  lipgloss.Color("#F59E0B"),
+	"image":           lipgloss.Color("#EC4899"),
+	// An id the cluster serves and this catalogue has never heard of. Worth
+	// showing rather than hiding: that is how a model nobody documented gets
+	// noticed.
+	"unknown": lipgloss.Color("#71717A"),
+}
+
+// A colour for a mode this build does not know, so an id it has never seen
+// still renders.
+func badgeColor(mode string) lipgloss.TerminalColor {
+	if c, ok := modeColor[mode]; ok {
+		return c
+	}
+	return cGray
 }
 
 func renderModels(data any, usageData any, l layout) string {
-	// Extract models list (unwrap {"models": [...]})
-	var raw []any
-	switch v := data.(type) {
-	case map[string]any:
-		if list, ok := v["models"].([]any); ok {
-			raw = list
-		}
-	case []any:
-		raw = v
-	}
-	if raw == nil {
-		return l.indent + lipgloss.NewStyle().Foreground(cGray).Render("No models found.") + "\n"
-	}
+	var models []modelInfo
 
-	// Build model list
-	models := make([]modelInfo, 0, len(raw))
-	for _, item := range raw {
-		obj, ok := item.(map[string]any)
-		if !ok {
-			continue
+	// []string is the id list from GET /v1/models: what goes in the `model`
+	// field of a request, which is what a member came to this tab to copy.
+	if ids, ok := data.([]string); ok {
+		for _, id := range ids {
+			mi := modelInfo{name: id, mode: "unknown"}
+			if m, found := catalog.Get(id); found {
+				mi.mode = string(m.Kind)
+				if m.Premium {
+					mi.mode += " · premium"
+				}
+			}
+			models = append(models, mi)
 		}
-		mi := modelInfo{
-			name: fmt.Sprintf("%v", obj["name"]),
-			mode: fmt.Sprintf("%v", obj["mode"]),
+	} else {
+		// The platform's list, when there is no API key to ask the other one.
+		var raw []any
+		switch v := data.(type) {
+		case map[string]any:
+			if list, ok := v["models"].([]any); ok {
+				raw = list
+			}
+		case []any:
+			raw = v
 		}
-		if mi.mode == "<nil>" {
-			mi.mode = ""
+		if raw == nil {
+			return l.indent + lipgloss.NewStyle().Foreground(cGray).Render("No models found.") + "\n"
 		}
-		models = append(models, mi)
+		for _, item := range raw {
+			obj, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			mi := modelInfo{
+				name: fmt.Sprintf("%v", obj["name"]),
+				mode: fmt.Sprintf("%v", obj["mode"]),
+			}
+			if mi.mode == "<nil>" {
+				mi.mode = ""
+			}
+			models = append(models, mi)
+		}
+	}
+	if len(models) == 0 {
+		return l.indent + lipgloss.NewStyle().Foreground(cGray).Render("No models found.") + "\n"
 	}
 
 	// Cross-reference with usage cache
@@ -645,7 +696,7 @@ func renderModels(data any, usageData any, l layout) string {
 			b.WriteString(divider + "\n")
 		}
 
-		color := modeColor[mi.mode]
+		color := badgeColor(mi.mode)
 		label, ok := modeLabel[mi.mode]
 		if !ok {
 			label = mi.mode
@@ -750,8 +801,10 @@ func calcCost(pt periodTokens, p providerPricing) float64 {
 }
 
 func fmtCost(v float64) string {
+	// Go has no `%,` verb: that format printed `$%!,(float64=1234.5).2f` on
+	// every figure over a thousand, which on the Costs tab is most of them.
 	if v >= 1000 {
-		return fmt.Sprintf("$%,.2f", v)
+		return fmtCostAligned(v)
 	}
 	return fmt.Sprintf("$%.2f", v)
 }
@@ -902,8 +955,10 @@ func renderCosts(usage map[string]any, l layout) string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(cBlueDim).
 		Padding(0, 1).
-		Width(len(notePlain))
-	b.WriteString(l.indent + noteStyle.Render(note) + "\n")
+		// Not len(): the em dash is one column and three bytes, so counting
+		// bytes drew the box two columns wider than its own text.
+		Width(lipgloss.Width(notePlain))
+	b.WriteString(indentBlock(noteStyle.Render(note), l.indent) + "\n")
 
 	return b.String()
 }
@@ -983,10 +1038,18 @@ func sortedKeys(m map[string]any) []string {
 }
 
 func humanKey(s string) string {
+	runes := []rune(s)
 	var out []rune
-	for i, r := range s {
-		if i > 0 && r >= 'A' && r <= 'Z' {
-			out = append(out, ' ')
+	for i, r := range runes {
+		// A space before every capital turns userUUID into "User U U I D",
+		// which is the first line of the first tab. A run of capitals is one
+		// word, and it ends where a lowercase letter starts it a new one.
+		if i > 0 && isUpper(r) {
+			startsWord := !isUpper(runes[i-1])
+			endsRun := i+1 < len(runes) && !isUpper(runes[i+1])
+			if startsWord || endsRun {
+				out = append(out, ' ')
+			}
 		}
 		out = append(out, r)
 	}
@@ -1026,7 +1089,7 @@ func detectTools() []toolInfo {
 		{
 			name:        "Pi",
 			binary:      "pi",
-			configPath:  filepath.Join(home, ".pi", "agent", "extensions", "nan.ts"),
+			configPath:  filepath.Join(home, ".pi", "agent", "models.json"),
 			installPath: filepath.Join(home, ".pi"),
 		},
 		{
@@ -1080,7 +1143,14 @@ func isNaNConfigured(toolName, cfgPath string) bool {
 		base, _ := opts["baseURL"].(string)
 		return strings.Contains(base, "api.nan.builders")
 	case "Pi":
-		return strings.Contains(string(data), "api.nan.builders")
+		var cfg map[string]any
+		if json.Unmarshal(data, &cfg) != nil {
+			return false
+		}
+		providers, _ := cfg["providers"].(map[string]any)
+		nan, _ := providers["nan"].(map[string]any)
+		base, _ := nan["baseUrl"].(string)
+		return strings.Contains(base, "api.nan.builders")
 	case "Codex":
 		return strings.Contains(string(data), "api.nan.builders")
 	}
@@ -1201,23 +1271,19 @@ func writeFactoryConfig(cfgPath, apiKey string) error {
 	}
 
 	// Append only missing models
-	nanModels := []struct{ id, display string }{
-		{"qwen3.6", "Qwen 3.6 35B A3B (NaN)"},
-		{"gemma4", "Gemma 4 26B A4B (NaN)"},
-		{"deepseek-v4-flash", "DeepSeek V4 Flash 284B A13B (NaN)"},
-	}
 	added := false
-	for _, nm := range nanModels {
-		if !existingIDs[nm.id] {
+	for _, nm := range catalog.ChatModels() {
+		if !existingIDs[nm.ID] {
 			idx := len(models)
+			display := nm.Name + " (NaN)"
 			models = append(models, map[string]any{
-				"model":          nm.id,
-				"id":             factoryCustomID(nm.display, idx),
+				"model":          nm.ID,
+				"id":             factoryCustomID(display, idx),
 				"index":          idx,
 				"baseUrl":        "https://api.nan.builders/v1",
 				"apiKey":         apiKey,
-				"displayName":    nm.display,
-				"noImageSupport": false,
+				"displayName":    display,
+				"noImageSupport": !nm.Accepts(catalog.InputImage),
 				"provider":       "openai",
 			})
 			added = true
@@ -1228,10 +1294,11 @@ func writeFactoryConfig(cfgPath, apiKey string) error {
 	}
 	cfg["customModels"] = models
 
-	// Set qwen3.6 as default model if sessionDefaultSettings not present
+	// Leave it pointing at the model the quickstart starts everyone with. It
+	// used to be qwen3.6, which the docs now call the previous generation.
 	if _, ok := cfg["sessionDefaultSettings"]; !ok {
 		for _, m := range models {
-			if id, _ := m["model"].(string); id == "qwen3.6" {
+			if id, _ := m["model"].(string); id == catalog.Default {
 				cfg["sessionDefaultSettings"] = map[string]any{
 					"model":           m["id"],
 					"reasoningEffort": "none",
@@ -1266,10 +1333,24 @@ func writeOpencodeConfig(cfgPath, apiKey string) error {
 		providers = map[string]any{}
 	}
 
-	nanModels := map[string]any{
-		"qwen3.6":           map[string]any{"name": "Qwen 3.6 35B A3B"},
-		"gemma4":            map[string]any{"name": "Gemma 4 26B A4B"},
-		"deepseek-v4-flash": map[string]any{"name": "DeepSeek V4 Flash 284B A13B"},
+	// `limit` is not decoration: without it opencode falls back to its own
+	// guess at the window and compacts a 1M-token session as if it were a
+	// small one. An unknown key (this used to be written as `contextWindow`)
+	// raises nothing anyone sees, which is why nan.builders/docs/opencode
+	// spells the field out and why this writes it.
+	nanModels := map[string]any{}
+	for _, m := range catalog.ChatModels() {
+		nanModels[m.ID] = map[string]any{
+			"name": m.Name,
+			"limit": map[string]any{
+				"context": m.Context,
+				"output":  m.Output,
+			},
+			"modalities": map[string]any{
+				"input":  m.Inputs,
+				"output": []string{"text"},
+			},
+		}
 	}
 
 	if nan, ok := providers["nan"].(map[string]any); ok {
@@ -1282,9 +1363,21 @@ func writeOpencodeConfig(cfgPath, apiKey string) error {
 				}
 				changed := false
 				for id, m := range nanModels {
-					if _, found := existing[id]; !found {
+					found, ok := existing[id].(map[string]any)
+					if !ok {
 						existing[id] = m
 						changed = true
+						continue
+					}
+					// An entry written by an older version of this CLI has no
+					// `limit` at all. Filling it in is the only way those
+					// configs ever stop compacting early; anything the member
+					// set themselves is left exactly as it is.
+					for _, field := range []string{"limit", "modalities"} {
+						if _, present := found[field]; !present {
+							found[field] = m.(map[string]any)[field]
+							changed = true
+						}
 					}
 				}
 				if !changed {
@@ -1326,64 +1419,104 @@ func writeOpencodeConfig(cfgPath, apiKey string) error {
 	return os.WriteFile(cfgPath, data, 0o600)
 }
 
+// Pi takes a provider two ways: a models.json, which is data, or an extension
+// that calls pi.registerProvider, which is code. Both are current in 0.85.1.
+// This used to write the extension - a TypeScript file Pi loads and runs - and
+// now writes the data, which is what nan.builders/docs/pi publishes: Pi
+// validates models.json against its own schema and names the field that is
+// wrong, nothing this CLI writes has to execute on a member's machine, and the
+// two ways of setting Pi up stop being two things to keep in step.
 func writePiConfig(cfgPath, apiKey string) error {
+	// Unlike the extension file, models.json is shared: other providers live in
+	// it and none of them are ours to touch.
+	var cfg map[string]any
 	if data, err := os.ReadFile(cfgPath); err == nil {
-		if strings.Contains(string(data), "api.nan.builders") {
-			return nil // already configured
-		}
+		_ = json.Unmarshal(data, &cfg)
 	}
-	const tmpl = `import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
 
-export default function (pi: ExtensionAPI) {
-  pi.registerProvider("nan", {
-    name: "NaN",
-    baseUrl: "https://api.nan.builders/v1",
-    apiKey: %q,
-    api: "openai-completions",
-    models: [
-      {
-        id: "qwen3.6",
-        name: "Qwen 3.6 35B A3B",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128000,
-        maxTokens: 8192,
-      },
-      {
-        id: "gemma4",
-        name: "Gemma 4 26B A4B",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128000,
-        maxTokens: 8192,
-      },
-      {
-        id: "deepseek-v4-flash",
-        name: "DeepSeek V4 Flash 284B A13B",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128000,
-        maxTokens: 8192,
-      },
-    ],
-  });
-}
-`
+	providers, _ := cfg["providers"].(map[string]any)
+	if providers == nil {
+		providers = map[string]any{}
+	}
+
+	models := make([]map[string]any, 0, len(catalog.ChatModels()))
+	for _, m := range catalog.ChatModels() {
+		models = append(models, map[string]any{
+			"id":            m.ID,
+			"name":          m.Name,
+			"input":         piInputs(m),
+			"reasoning":     m.Reasoning,
+			"contextWindow": m.Context,
+			"maxTokens":     m.Output,
+		})
+	}
+
+	providers["nan"] = map[string]any{
+		"name":    "NaN",
+		"baseUrl": "https://api.nan.builders/v1",
+		"apiKey":  apiKey,
+		"api":     "openai-completions",
+		"compat":  map[string]any{"supportsDeveloperRole": true},
+		"models":  models,
+	}
+	cfg["providers"] = providers
+
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(cfgPath, []byte(fmt.Sprintf(tmpl, apiKey)), 0o600)
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(cfgPath, data, 0o600)
 }
 
+// Pi's schema takes "text" and "image" and nothing else, so mimo-v2.5 goes in
+// without its audio: a third value fails validation, and Pi then refuses the
+// whole file with every other provider in it.
+func piInputs(m catalog.Model) []string {
+	out := make([]string, 0, len(m.Inputs))
+	for _, in := range m.Inputs {
+		if in == catalog.InputText || in == catalog.InputImage {
+			out = append(out, in)
+		}
+	}
+	return out
+}
+
+// Deleting the file is no longer an option: models.json is where every Pi
+// provider lives, and the extension it replaced was a file of ours alone.
 func removePiConfig(cfgPath string) error {
-	err := os.Remove(cfgPath)
+	data, err := os.ReadFile(cfgPath)
 	if os.IsNotExist(err) {
 		return nil
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	var cfg map[string]any
+	if json.Unmarshal(data, &cfg) != nil {
+		return nil
+	}
+	providers, _ := cfg["providers"].(map[string]any)
+	if _, ours := providers["nan"]; !ours {
+		return nil
+	}
+	delete(providers, "nan")
+
+	// A models.json with nothing left in it is not a config Pi needs to read.
+	if len(providers) == 0 && len(cfg) == 1 {
+		return os.Remove(cfgPath)
+	}
+	cfg["providers"] = providers
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(cfgPath, out, 0o600)
 }
 
 func writeCodexConfig(cfgPath, apiKey string) error {
@@ -1392,18 +1525,23 @@ func writeCodexConfig(cfgPath, apiKey string) error {
 		return nil
 	}
 
+	// wire_api = "chat", not "responses": the cluster's /responses endpoint
+	// emits a single terminal event, so with "responses" the whole answer
+	// appears at once at the end instead of streaming.
+	codexModel, _ := catalog.Get(catalog.Coding)
+
 	// If no existing config, write a complete starter config.
 	if len(data) == 0 {
-		content := fmt.Sprintf(`model = "gemma4"
+		content := fmt.Sprintf(`model = %q
 model_provider = "nan"
-model_context_window = 131072
+model_context_window = %d
 
 [model_providers.nan]
 name = "NaN"
 base_url = "https://api.nan.builders/v1"
 experimental_bearer_token = %q
-wire_api = "responses"
-`, apiKey)
+wire_api = "chat"
+`, codexModel.ID, codexModel.Context, apiKey)
 		if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
 			return err
 		}
@@ -1413,14 +1551,14 @@ wire_api = "responses"
 	// Existing config: only append the provider section; preserve user's model/provider choices.
 	// model_context_window suppresses the "metadata not found" warning for nan models.
 	section := fmt.Sprintf(`
-model_context_window = 131072
+model_context_window = %d
 
 [model_providers.nan]
 name = "NaN"
 base_url = "https://api.nan.builders/v1"
 experimental_bearer_token = %q
-wire_api = "responses"
-`, apiKey)
+wire_api = "chat"
+`, codexModel.Context, apiKey)
 	content := strings.TrimRight(string(data), "\n") + "\n" + section
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
 		return err
@@ -1647,9 +1785,16 @@ func renderAbout(l layout) string {
 	accentStyle := lipgloss.NewStyle().Foreground(cCyan)
 	sectionStyle := lipgloss.NewStyle().Foreground(cGray).Bold(true)
 
-	b.WriteString(l.indent + logoStyle.Render("nan") +
-		"  " + dimStyle.Render("v"+Version) + "\n")
-	b.WriteString(l.indent + dimStyle.Render("nan.builders cloud CLI") + "\n\n")
+	// The banner needs room for the art with the text beside it; narrower than
+	// that it would wrap into nonsense, so the plain line stays.
+	banner := l.w >= BannerWidth+4
+	if banner {
+		b.WriteString(Banner(l.indent) + "\n")
+	} else {
+		b.WriteString(l.indent + logoStyle.Render("nan") +
+			"  " + dimStyle.Render("v"+Version) + "\n")
+		b.WriteString(l.indent + dimStyle.Render("nan.builders cloud CLI") + "\n\n")
+	}
 
 	b.WriteString(l.indent + sectionStyle.Render("Links") + "\n\n")
 	b.WriteString(l.indent + labelStyle.Render("Platform:") +
@@ -1657,9 +1802,13 @@ func renderAbout(l layout) string {
 	b.WriteString(l.indent + labelStyle.Render("Cloud:") +
 		linkStyle.Render("https://cloud.nan.builders") + "\n\n")
 
-	b.WriteString(l.indent + sectionStyle.Render("Maintainer") + "\n\n")
-	b.WriteString(l.indent + labelStyle.Render("Author:") +
-		accentStyle.Render("@Nxssie") + "\n\n")
+	// The banner already says who made it and who keeps it; repeating it four
+	// rows below is just the same line twice.
+	if !banner {
+		b.WriteString(l.indent + sectionStyle.Render("Maintainer") + "\n\n")
+		b.WriteString(l.indent + labelStyle.Render("Author:") +
+			accentStyle.Render("@Nxssie") + "\n\n")
+	}
 
 	b.WriteString(l.indent + sectionStyle.Render("Session") + "\n\n")
 	b.WriteString(l.indent + labelStyle.Render("Config:") +
@@ -1708,9 +1857,17 @@ func renderHelp() string {
 // ── entry point ───────────────────────────────────────────────────────────────
 
 func Run() error {
+	// A machine that has never logged in still gets the TUI: the Setup tab,
+	// which is the one that configures the tools, needs the API key and nothing
+	// else. Returning ErrNotLoggedIn here meant a fresh install could not open
+	// the dashboard at all, and the only way in was `nan auth login --token`
+	// with any string whatsoever.
 	sess, err := session.Load()
 	if err != nil {
-		return err
+		if !errors.Is(err, session.ErrNotLoggedIn) {
+			return err
+		}
+		sess = &session.Session{}
 	}
 	client := api.New(sess.Token)
 	m := newModel(client, sess)
@@ -1718,3 +1875,17 @@ func Run() error {
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
 }
+
+func isUpper(r rune) bool { return r >= 'A' && r <= 'Z' }
+
+// indentBlock indents EVERY line. `indent + Render(...)` only moves the first
+// one, which on a bordered box leaves the top edge two columns right of the
+// sides.
+func indentBlock(block, indent string) string {
+	lines := strings.Split(block, "\n")
+	for i, line := range lines {
+		lines[i] = indent + line
+	}
+	return strings.Join(lines, "\n")
+}
+

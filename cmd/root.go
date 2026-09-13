@@ -12,6 +12,12 @@ var rootCmd = &cobra.Command{
 	Use:     "nan",
 	Short:   "nan.builders cloud CLI",
 	Version: tui.Version,
+	// A sign-in link that did not work is not a usage mistake: printing the
+	// flag list under it buries the one line that says what happened. Execute()
+	// below prints the error itself, so cobra printing it too showed every
+	// failure twice.
+	SilenceUsage:  true,
+	SilenceErrors: true,
 	CompletionOptions: cobra.CompletionOptions{
 		DisableDefaultCmd: true,
 	},
@@ -21,18 +27,17 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
-	const (
-		violet = "\033[38;2;167;139;250m"
-		dim    = "\033[38;2;113;113;122m"
-		bold   = "\033[1m"
-		reset  = "\033[0m"
-	)
-	rootCmd.SetVersionTemplate(
-		"\n  " + bold + violet + "nan" + reset +
-			"  " + dim + "v{{.Version}}" + reset + "\n" +
-			"  " + dim + "nan.builders cloud CLI" + reset + "\n" +
-			"  " + dim + "by @Nxssie" + reset + "\n\n",
-	)
+	// SilenceUsage covers runtime failures, but a mistyped flag IS a usage
+	// mistake and the flag list is the answer to it.
+	rootCmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
+		c.Println(c.UsageString())
+		return err
+	})
+
+	// The same wordmark the About tab draws, so `--version` and the panel are
+	// recognisably the same program. This one is framed and stacked, which a
+	// command that prints once and exits can afford and a tab cannot.
+	rootCmd.SetVersionTemplate("\n" + tui.WelcomeStacked("  ") + "\n")
 }
 
 func Execute() {
