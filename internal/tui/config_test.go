@@ -501,3 +501,36 @@ func TestCostsFooterBoxIsSquare(t *testing.T) {
 		}
 	}
 }
+
+func TestBannerFitsAndCarriesTheNames(t *testing.T) {
+	out := Banner("  ")
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != len(wordmark) {
+		t.Fatalf("the banner is %d rows, the wordmark is %d", len(lines), len(wordmark))
+	}
+	for i, line := range lines {
+		if !strings.HasPrefix(line, "  ") {
+			t.Errorf("row %d does not carry the indent", i)
+		}
+		// It has to fit the narrowest panel it is drawn in.
+		if w := lipgloss.Width(line); w > BannerWidth+4 {
+			t.Errorf("row %d measures %d columns, wider than the About tab allows", i, w)
+		}
+	}
+	for _, want := range []string{"nan.builders", "@Nxssie", "Helmcode Team", Version} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the banner does not mention %q", want)
+		}
+	}
+}
+
+func TestAboutFallsBackToOneLineWhenNarrow(t *testing.T) {
+	// A 40-column terminal has no room for the art plus the wordmark, and a
+	// wrapped banner is worse than no banner.
+	if strings.Contains(renderAbout(newLayout(40, 24)), "█") {
+		t.Error("the banner is drawn at a width where it wraps")
+	}
+	if !strings.Contains(renderAbout(newLayout(80, 24)), "█") {
+		t.Error("the banner is missing at a width that fits it")
+	}
+}

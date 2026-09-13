@@ -1785,9 +1785,16 @@ func renderAbout(l layout) string {
 	accentStyle := lipgloss.NewStyle().Foreground(cCyan)
 	sectionStyle := lipgloss.NewStyle().Foreground(cGray).Bold(true)
 
-	b.WriteString(l.indent + logoStyle.Render("nan") +
-		"  " + dimStyle.Render("v"+Version) + "\n")
-	b.WriteString(l.indent + dimStyle.Render("nan.builders cloud CLI") + "\n\n")
+	// The banner needs room for the art with the text beside it; narrower than
+	// that it would wrap into nonsense, so the plain line stays.
+	banner := l.w >= BannerWidth+4
+	if banner {
+		b.WriteString(Banner(l.indent) + "\n")
+	} else {
+		b.WriteString(l.indent + logoStyle.Render("nan") +
+			"  " + dimStyle.Render("v"+Version) + "\n")
+		b.WriteString(l.indent + dimStyle.Render("nan.builders cloud CLI") + "\n\n")
+	}
 
 	b.WriteString(l.indent + sectionStyle.Render("Links") + "\n\n")
 	b.WriteString(l.indent + labelStyle.Render("Platform:") +
@@ -1795,9 +1802,13 @@ func renderAbout(l layout) string {
 	b.WriteString(l.indent + labelStyle.Render("Cloud:") +
 		linkStyle.Render("https://cloud.nan.builders") + "\n\n")
 
-	b.WriteString(l.indent + sectionStyle.Render("Maintainer") + "\n\n")
-	b.WriteString(l.indent + labelStyle.Render("Author:") +
-		accentStyle.Render("@Nxssie") + "\n\n")
+	// The banner already says who made it and who keeps it; repeating it four
+	// rows below is just the same line twice.
+	if !banner {
+		b.WriteString(l.indent + sectionStyle.Render("Maintainer") + "\n\n")
+		b.WriteString(l.indent + labelStyle.Render("Author:") +
+			accentStyle.Render("@Nxssie") + "\n\n")
+	}
 
 	b.WriteString(l.indent + sectionStyle.Render("Session") + "\n\n")
 	b.WriteString(l.indent + labelStyle.Render("Config:") +
@@ -1877,3 +1888,4 @@ func indentBlock(block, indent string) string {
 	}
 	return strings.Join(lines, "\n")
 }
+

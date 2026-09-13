@@ -34,18 +34,10 @@ func init() {
 		return err
 	})
 
-	const (
-		violet = "\033[38;2;167;139;250m"
-		dim    = "\033[38;2;113;113;122m"
-		bold   = "\033[1m"
-		reset  = "\033[0m"
-	)
-	rootCmd.SetVersionTemplate(
-		"\n  " + bold + violet + "nan" + reset +
-			"  " + dim + "v{{.Version}}" + reset + "\n" +
-			"  " + dim + "nan.builders cloud CLI" + reset + "\n" +
-			"  " + dim + "by @Nxssie" + reset + "\n\n",
-	)
+	// The same wordmark the About tab draws, so `--version` and the panel are
+	// recognisably the same program. This one is framed and stacked, which a
+	// command that prints once and exits can afford and a tab cannot.
+	rootCmd.SetVersionTemplate("\n" + tui.WelcomeStacked("  ") + "\n")
 }
 
 func Execute() {
