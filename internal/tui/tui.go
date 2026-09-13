@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -1708,9 +1709,17 @@ func renderHelp() string {
 // ── entry point ───────────────────────────────────────────────────────────────
 
 func Run() error {
+	// A machine that has never logged in still gets the TUI: the Setup tab,
+	// which is the one that configures the tools, needs the API key and nothing
+	// else. Returning ErrNotLoggedIn here meant a fresh install could not open
+	// the dashboard at all, and the only way in was `nan auth login --token`
+	// with any string whatsoever.
 	sess, err := session.Load()
 	if err != nil {
-		return err
+		if !errors.Is(err, session.ErrNotLoggedIn) {
+			return err
+		}
+		sess = &session.Session{}
 	}
 	client := api.New(sess.Token)
 	m := newModel(client, sess)

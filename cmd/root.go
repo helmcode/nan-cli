@@ -12,6 +12,12 @@ var rootCmd = &cobra.Command{
 	Use:     "nan",
 	Short:   "nan.builders cloud CLI",
 	Version: tui.Version,
+	// A sign-in link that did not work is not a usage mistake: printing the
+	// flag list under it buries the one line that says what happened. Execute()
+	// below prints the error itself, so cobra printing it too showed every
+	// failure twice.
+	SilenceUsage:  true,
+	SilenceErrors: true,
 	CompletionOptions: cobra.CompletionOptions{
 		DisableDefaultCmd: true,
 	},
@@ -21,6 +27,13 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
+	// SilenceUsage covers runtime failures, but a mistyped flag IS a usage
+	// mistake and the flag list is the answer to it.
+	rootCmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
+		c.Println(c.UsageString())
+		return err
+	})
+
 	const (
 		violet = "\033[38;2;167;139;250m"
 		dim    = "\033[38;2;113;113;122m"
