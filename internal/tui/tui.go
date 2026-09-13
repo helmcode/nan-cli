@@ -15,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/nxssie/nan-cli/internal/api"
+	catalog "github.com/nxssie/nan-cli/internal/models"
 	"github.com/nxssie/nan-cli/internal/session"
 )
 
@@ -1204,23 +1205,19 @@ func writeFactoryConfig(cfgPath, apiKey string) error {
 	}
 
 	// Append only missing models
-	nanModels := []struct{ id, display string }{
-		{"qwen3.6", "Qwen 3.6 35B A3B (NaN)"},
-		{"gemma4", "Gemma 4 26B A4B (NaN)"},
-		{"deepseek-v4-flash", "DeepSeek V4 Flash 284B A13B (NaN)"},
-	}
 	added := false
-	for _, nm := range nanModels {
-		if !existingIDs[nm.id] {
+	for _, nm := range catalog.All {
+		if !existingIDs[nm.ID] {
 			idx := len(models)
+			display := nm.Name + " (NaN)"
 			models = append(models, map[string]any{
-				"model":          nm.id,
-				"id":             factoryCustomID(nm.display, idx),
+				"model":          nm.ID,
+				"id":             factoryCustomID(display, idx),
 				"index":          idx,
 				"baseUrl":        "https://api.nan.builders/v1",
 				"apiKey":         apiKey,
-				"displayName":    nm.display,
-				"noImageSupport": false,
+				"displayName":    display,
+				"noImageSupport": !nm.Accepts(catalog.InputImage),
 				"provider":       "openai",
 			})
 			added = true
@@ -1231,10 +1228,11 @@ func writeFactoryConfig(cfgPath, apiKey string) error {
 	}
 	cfg["customModels"] = models
 
-	// Set qwen3.6 as default model if sessionDefaultSettings not present
+	// Leave it pointing at the model the quickstart starts everyone with. It
+	// used to be qwen3.6, which the docs now call the previous generation.
 	if _, ok := cfg["sessionDefaultSettings"]; !ok {
 		for _, m := range models {
-			if id, _ := m["model"].(string); id == "qwen3.6" {
+			if id, _ := m["model"].(string); id == catalog.Default {
 				cfg["sessionDefaultSettings"] = map[string]any{
 					"model":           m["id"],
 					"reasoningEffort": "none",
@@ -1269,10 +1267,24 @@ func writeOpencodeConfig(cfgPath, apiKey string) error {
 		providers = map[string]any{}
 	}
 
-	nanModels := map[string]any{
-		"qwen3.6":           map[string]any{"name": "Qwen 3.6 35B A3B"},
-		"gemma4":            map[string]any{"name": "Gemma 4 26B A4B"},
-		"deepseek-v4-flash": map[string]any{"name": "DeepSeek V4 Flash 284B A13B"},
+	// `limit` is not decoration: without it opencode falls back to its own
+	// guess at the window and compacts a 1M-token session as if it were a
+	// small one. An unknown key (this used to be written as `contextWindow`)
+	// raises nothing anyone sees, which is why nan.builders/docs/opencode
+	// spells the field out and why this writes it.
+	nanModels := map[string]any{}
+	for _, m := range catalog.All {
+		nanModels[m.ID] = map[string]any{
+			"name": m.Name,
+			"limit": map[string]any{
+				"context": m.Context,
+				"output":  m.Output,
+			},
+			"modalities": map[string]any{
+				"input":  m.Inputs,
+				"output": []string{"text"},
+			},
+		}
 	}
 
 	if nan, ok := providers["nan"].(map[string]any); ok {
@@ -1285,9 +1297,21 @@ func writeOpencodeConfig(cfgPath, apiKey string) error {
 				}
 				changed := false
 				for id, m := range nanModels {
-					if _, found := existing[id]; !found {
+					found, ok := existing[id].(map[string]any)
+					if !ok {
 						existing[id] = m
 						changed = true
+						continue
+					}
+					// An entry written by an older version of this CLI has no
+					// `limit` at all. Filling it in is the only way those
+					// configs ever stop compacting early; anything the member
+					// set themselves is left exactly as it is.
+					for _, field := range []string{"limit", "modalities"} {
+						if _, present := found[field]; !present {
+							found[field] = m.(map[string]any)[field]
+							changed = true
+						}
 					}
 				}
 				if !changed {
@@ -1335,7 +1359,24 @@ func writePiConfig(cfgPath, apiKey string) error {
 			return nil // already configured
 		}
 	}
-	const tmpl = `import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+	var entries strings.Builder
+	for _, m := range catalog.All {
+		quoted := make([]string, 0, len(m.Inputs))
+		for _, in := range m.Inputs {
+			quoted = append(quoted, fmt.Sprintf("%q", in))
+		}
+		fmt.Fprintf(&entries, piModelTmpl, m.ID, m.Name, m.Reasoning,
+			strings.Join(quoted, ", "), m.Context, m.Output)
+	}
+
+	content := fmt.Sprintf(piTmpl, apiKey, entries.String())
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(cfgPath, []byte(content), 0o600)
+}
+
+const piTmpl = `import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function (pi: ExtensionAPI) {
   pi.registerProvider("nan", {
@@ -1343,43 +1384,26 @@ export default function (pi: ExtensionAPI) {
     baseUrl: "https://api.nan.builders/v1",
     apiKey: %q,
     api: "openai-completions",
+    compat: { supportsDeveloperRole: true },
     models: [
-      {
-        id: "qwen3.6",
-        name: "Qwen 3.6 35B A3B",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128000,
-        maxTokens: 8192,
-      },
-      {
-        id: "gemma4",
-        name: "Gemma 4 26B A4B",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128000,
-        maxTokens: 8192,
-      },
-      {
-        id: "deepseek-v4-flash",
-        name: "DeepSeek V4 Flash 284B A13B",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128000,
-        maxTokens: 8192,
-      },
-    ],
+%s    ],
   });
 }
 `
-	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(cfgPath, []byte(fmt.Sprintf(tmpl, apiKey)), 0o600)
-}
+
+// contextWindow is the window the proxy serves and maxTokens the ceiling for a
+// single answer. Both were the same two numbers for every model, 128000 and
+// 8192, which on the 1M-token models is an eighth of the room a session has.
+const piModelTmpl = `      {
+        id: %q,
+        name: %q,
+        reasoning: %t,
+        input: [%s],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: %d,
+        maxTokens: %d,
+      },
+`
 
 func removePiConfig(cfgPath string) error {
 	err := os.Remove(cfgPath)
@@ -1395,18 +1419,23 @@ func writeCodexConfig(cfgPath, apiKey string) error {
 		return nil
 	}
 
+	// wire_api = "chat", not "responses": the cluster's /responses endpoint
+	// emits a single terminal event, so with "responses" the whole answer
+	// appears at once at the end instead of streaming.
+	codexModel, _ := catalog.Get(catalog.Coding)
+
 	// If no existing config, write a complete starter config.
 	if len(data) == 0 {
-		content := fmt.Sprintf(`model = "gemma4"
+		content := fmt.Sprintf(`model = %q
 model_provider = "nan"
-model_context_window = 131072
+model_context_window = %d
 
 [model_providers.nan]
 name = "NaN"
 base_url = "https://api.nan.builders/v1"
 experimental_bearer_token = %q
-wire_api = "responses"
-`, apiKey)
+wire_api = "chat"
+`, codexModel.ID, codexModel.Context, apiKey)
 		if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
 			return err
 		}
@@ -1416,14 +1445,14 @@ wire_api = "responses"
 	// Existing config: only append the provider section; preserve user's model/provider choices.
 	// model_context_window suppresses the "metadata not found" warning for nan models.
 	section := fmt.Sprintf(`
-model_context_window = 131072
+model_context_window = %d
 
 [model_providers.nan]
 name = "NaN"
 base_url = "https://api.nan.builders/v1"
 experimental_bearer_token = %q
-wire_api = "responses"
-`, apiKey)
+wire_api = "chat"
+`, codexModel.Context, apiKey)
 	content := strings.TrimRight(string(data), "\n") + "\n" + section
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
 		return err

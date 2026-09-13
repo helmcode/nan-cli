@@ -55,10 +55,7 @@ All tool auto-configuration logic lives in `internal/tui/tui.go`. The relevant f
 
 1. **Add an entry to `detectTools()`** with the tool's binary name and config file path.
 
-2. **Implement `writeXxxConfig(cfgPath, apiKey string) error`** — write the NaN provider block into the tool's config format. Always check if NaN is already present before writing, and include all current NaN models:
-   - `qwen3.6` — Qwen 3.6 35B A3B
-   - `gemma4` — Gemma 4 26B A4B
-   - `deepseek-v4-flash` — DeepSeek V4 Flash 284B A13B
+2. **Implement `writeXxxConfig(cfgPath, apiKey string) error`** — write the NaN provider block into the tool's config format. Always check if NaN is already present before writing, and build the model list by ranging over `catalog.All` from `internal/models`. Never write the ids by hand: three writers used to keep a list each, and all three had drifted to the same stale set of three models.
 
 3. **Implement `removeXxxConfig(cfgPath string) error`** — remove any NaN-related entries cleanly without touching the rest of the file.
 
@@ -68,13 +65,13 @@ All tool auto-configuration logic lives in `internal/tui/tui.go`. The relevant f
 
 ## Adding a new NaN model
 
-Models appear in three places in `tui.go`. Search for an existing model ID (e.g. `gemma4`) and add the new entry alongside it in each:
+Add it to `All` in `internal/models/models.go` and every writer picks it up.
 
-- `writeFactoryConfig` — `nanModels` slice
-- `writeOpencodeConfig` — `nanModels` map
-- `writePiConfig` — models array in the TypeScript template
+The window and the output budget are the ones the setup guides publish on nan.builders (/docs/opencode, /docs/pi). Those are measured against the proxy, so copy them as they are rather than rounding: a window written short makes the tool compact a session that had room left, and one written long makes it fill the conversation until the model starts refusing requests.
 
-The Codex config (`writeCodexConfig`) sets a default model but does not enumerate models, so no change is needed there.
+The Codex config (`writeCodexConfig`) does not enumerate models; it points at `catalog.Coding`.
+
+Then run `go test ./...`. `internal/tui/config_test.go` writes each config into a temp directory and checks it against the catalogue, which is what stops the lists from drifting again.
 
 ## Code style
 
