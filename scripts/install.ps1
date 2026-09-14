@@ -55,9 +55,7 @@ function Get-Arch {
     'X64'   { return 'amd64' }
     'Arm64' { return 'arm64' }
     default {
-      Write-Fail "unsupported architecture: $arch"
-      Write-Fail "the releases carry amd64 and arm64: https://github.com/$Repo/releases"
-      exit 1
+      throw "unsupported architecture: $arch`nthe releases carry amd64 and arm64: https://github.com/$Repo/releases"
     }
   }
 }
@@ -76,25 +74,22 @@ function Get-LatestVersion {
   # The GitHub API rate limits unauthenticated requests per IP, so this fails
   # for reasons that have nothing to do with this repo. Saying so beats letting
   # an empty version go into a URL and reporting a 404 from it.
-  Write-Fail 'could not work out the latest version from the GitHub API'
-  Write-Fail 'it rate limits unauthenticated requests, so this is usually temporary'
-  Write-Fail 'wait a few minutes, or pick a version yourself:'
-  Write-Host  '    & ([scriptblock]::Create((irm https://nan.builders/install.ps1))) -Version v0.1.4'
-  Write-Fail "the releases are at https://github.com/$Repo/releases"
-  exit 1
+  throw @"
+could not work out the latest version from the GitHub API
+it rate limits unauthenticated requests, so this is usually temporary
+wait a few minutes, or pick a version yourself:
+    & ([scriptblock]::Create((irm https://nan.builders/install.ps1))) -Version v0.1.5
+the releases are at https://github.com/$Repo/releases
+"@
 }
 
 function Assert-Checksum($file, $expected) {
   if (-not $expected) {
-    Write-Fail 'checksums.txt carries no entry for this archive'
-    exit 1
+    throw 'checksums.txt carries no entry for this archive'
   }
   $actual = (Get-FileHash -Path $file -Algorithm SHA256).Hash.ToLower()
   if ($actual -ne $expected.ToLower()) {
-    Write-Fail 'checksum mismatch'
-    Write-Fail "  expected: $expected"
-    Write-Fail "  got:      $actual"
-    exit 1
+    throw "checksum mismatch`n  expected: $expected`n  got:      $actual"
   }
 }
 
@@ -112,81 +107,105 @@ function Add-ToUserPath($dir) {
   return $true
 }
 
-$arch = Get-Arch
-if (-not $Version) {
-  Write-Step 'fetching latest release...'
-  $Version = Get-LatestVersion
-}
-if (-not $InstallDir) {
-  $InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\nan'
-}
+function Install-NanCli {
+  param([string]$Version, [string]$InstallDir)
 
-Write-Done "nan-cli $Version (windows/$arch)"
-
-$archive = "nan-cli_${Version}_windows_${arch}.zip"
-$base = "https://github.com/$Repo/releases/download/$Version"
-$tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("nan-install-" + [guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $tmp -Force | Out-Null
-
-try {
-  Write-Step "downloading $archive..."
-  try {
-    # -UseBasicParsing on every request here. Without it, PowerShell 5.1 hands
-    # the body to the Internet Explorer engine to build a DOM, and where that
-    # engine is absent or has never been through its first-run setup the call
-    # throws a NullReferenceException - which is what "Object reference not set
-    # to an instance of an object" means coming out of Invoke-WebRequest.
-    Invoke-WebRequest -Uri "$base/$archive" -OutFile (Join-Path $tmp $archive) -UseBasicParsing
-  } catch {
-    Write-Fail "could not download $archive"
-    Write-Fail "check that $Version is a published release: https://github.com/$Repo/releases"
-    exit 1
+  $arch = Get-Arch
+  if (-not $Version) {
+    Write-Step 'fetching latest release...'
+    $Version = Get-LatestVersion
+  }
+  if (-not $InstallDir) {
+    $InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\nan'
   }
 
-  Write-Step 'verifying checksum...'
-  # Downloaded to a file rather than read off the response. GitHub serves
-  # release assets as application/octet-stream, and for a non-text content type
-  # PowerShell hands back .Content as a Byte[], not a string: splitting that on
-  # a newline matches nothing and every archive reads as having no checksum.
-  # -OutFile takes the bytes as they come and Get-Content decodes them.
-  $checksumFile = Join-Path $tmp 'checksums.txt'
-  Invoke-WebRequest -Uri "$base/checksums.txt" -OutFile $checksumFile -UseBasicParsing
-  $expected = $null
-  foreach ($line in (Get-Content -Path $checksumFile)) {
-    if ($line -match "^([0-9a-fA-F]{64})\s+\*?$([regex]::Escape($archive))\s*$") {
-      $expected = $Matches[1]
+  Write-Done "nan-cli $Version (windows/$arch)"
+
+  $archive = "nan-cli_${Version}_windows_${arch}.zip"
+  $base = "https://github.com/$Repo/releases/download/$Version"
+  $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("nan-install-" + [guid]::NewGuid().ToString('N'))
+  New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+
+  try {
+    Write-Step "downloading $archive..."
+    try {
+      # -UseBasicParsing on every request here. Without it, PowerShell 5.1 hands
+      # the body to the Internet Explorer engine to build a DOM, and where that
+      # engine is absent or has never been through its first-run setup the call
+      # throws a NullReferenceException - which is what "Object reference not set
+      # to an instance of an object" means coming out of Invoke-WebRequest.
+      Invoke-WebRequest -Uri "$base/$archive" -OutFile (Join-Path $tmp $archive) -UseBasicParsing
+    } catch {
+      throw "could not download $archive`ncheck that $Version is a published release: https://github.com/$Repo/releases"
     }
-  }
-  Assert-Checksum (Join-Path $tmp $archive) $expected
 
-  Expand-Archive -Path (Join-Path $tmp $archive) -DestinationPath $tmp -Force
-  $binary = Join-Path $tmp 'nan.exe'
-  if (-not (Test-Path $binary)) {
-    Write-Fail 'the archive does not contain nan.exe'
+    Write-Step 'verifying checksum...'
+    # Downloaded to a file rather than read off the response. GitHub serves
+    # release assets as application/octet-stream, and for a non-text content type
+    # PowerShell hands back .Content as a Byte[], not a string: splitting that on
+    # a newline matches nothing and every archive reads as having no checksum.
+    # -OutFile takes the bytes as they come and Get-Content decodes them.
+    $checksumFile = Join-Path $tmp 'checksums.txt'
+    Invoke-WebRequest -Uri "$base/checksums.txt" -OutFile $checksumFile -UseBasicParsing
+    $expected = $null
+    foreach ($line in (Get-Content -Path $checksumFile)) {
+      if ($line -match "^([0-9a-fA-F]{64})\s+\*?$([regex]::Escape($archive))\s*$") {
+        $expected = $Matches[1]
+      }
+    }
+    Assert-Checksum (Join-Path $tmp $archive) $expected
+
+    Expand-Archive -Path (Join-Path $tmp $archive) -DestinationPath $tmp -Force
+    $binary = Join-Path $tmp 'nan.exe'
+    if (-not (Test-Path $binary)) {
+      throw 'the archive does not contain nan.exe'
+    }
+
+    Write-Step "installing to $(Join-Path $InstallDir 'nan.exe')..."
+    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+    # A running nan.exe holds a lock on its own file, so replacing it while the
+    # TUI is open fails with a message about the file being in use. Saying which
+    # file and why beats the raw exception.
+    try {
+      Copy-Item -Path $binary -Destination (Join-Path $InstallDir 'nan.exe') -Force
+    } catch {
+      throw "could not write $(Join-Path $InstallDir 'nan.exe')`nif nan is running, close it and try again"
+    }
+
+    Write-Done "installed $Version to $(Join-Path $InstallDir 'nan.exe')"
+
+    if (Add-ToUserPath $InstallDir) {
+      Write-Warn "$InstallDir was added to your PATH"
+      Write-Warn 'already-open terminals will not see it until they are restarted'
+    }
+    Write-Host ''
+    Write-Host 'Run ' -NoNewline; Write-Host 'nan' -ForegroundColor Cyan -NoNewline; Write-Host ' to get started.'
+  } finally {
+    Remove-Item -Path $tmp -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+
+# The entry point, and the reason it is shaped like this.
+#
+# This script is meant to be run as `irm https://nan.builders/install.ps1 | iex`,
+# and `iex` runs what it is given IN THE CURRENT SESSION. An `exit` there does
+# not end a script, it ends the session: in a terminal that means the tab
+# closes, instantly, taking the error message with it. Every failure path here
+# used to do exactly that, so the careful messages about rate limits and
+# checksums were written straight into a window that was already gone.
+#
+# So nothing below the function throws the session away. Failures come back as
+# exceptions, get printed, and the prompt is still there afterwards.
+try {
+  Install-NanCli -Version $Version -InstallDir $InstallDir
+} catch {
+  foreach ($line in ($_.Exception.Message -split "`n")) {
+    Write-Fail $line.TrimEnd()
+  }
+  # Run as a file (./install.ps1, or from CI) there is no session to protect and
+  # a non-zero status is what a caller checks. Piped into iex, MyCommand.Path is
+  # empty and exiting would be the very bug this is here to avoid.
+  if ($MyInvocation.MyCommand.Path) {
     exit 1
   }
-
-  Write-Step "installing to $InstallDir\nan.exe..."
-  New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-  # A running nan.exe holds a lock on its own file, so replacing it while the
-  # TUI is open fails with a message about the file being in use. Saying which
-  # file and why beats the raw exception.
-  try {
-    Copy-Item -Path $binary -Destination (Join-Path $InstallDir 'nan.exe') -Force
-  } catch {
-    Write-Fail "could not write $InstallDir\nan.exe"
-    Write-Fail 'if nan is running, close it and try again'
-    exit 1
-  }
-
-  Write-Done "installed $Version to $InstallDir\nan.exe"
-
-  if (Add-ToUserPath $InstallDir) {
-    Write-Warn "$InstallDir was added to your PATH"
-    Write-Warn 'already-open terminals will not see it until they are restarted'
-  }
-  Write-Host ''
-  Write-Host 'Run ' -NoNewline; Write-Host 'nan' -ForegroundColor Cyan -NoNewline; Write-Host ' to get started.'
-} finally {
-  Remove-Item -Path $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
