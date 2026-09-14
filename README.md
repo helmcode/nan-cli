@@ -14,6 +14,11 @@ By default installs to `/usr/local/bin`. Override with `INSTALL_DIR`:
 INSTALL_DIR=~/.local/bin curl -fsSL https://nan.builders/install | bash
 ```
 
+On Windows, download `nan-cli_<version>_windows_amd64.zip` (or `arm64`) from
+the [latest release](https://github.com/helmcode/nan-cli/releases/latest),
+unzip it and put `nan.exe` somewhere on your `PATH`. The installer above is
+bash, so it is not the way in there.
+
 ## Usage
 
 Run `nan` to open the TUI dashboard:
