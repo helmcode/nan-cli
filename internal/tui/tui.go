@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -1101,6 +1102,16 @@ func detectTools() []toolInfo {
 			binary:     "codex",
 			configPath: filepath.Join(home, ".codex", "config.toml"),
 		},
+		{
+			// Not a coding agent like the rest: it lives in the member's
+			// messaging channels. It is here because connecting it is the same
+			// two values, and because it is the one tool that tells us where
+			// its config is instead of making us guess.
+			name:        "Hermes",
+			binary:      "hermes",
+			configPath:  hermesConfigPath(hermesHome()),
+			installPath: hermesHome(),
+		},
 	}
 	for i := range candidates {
 		_, binErr := exec.LookPath(candidates[i].binary)
@@ -1199,6 +1210,8 @@ func configureTools(apiKey string, enabledTools map[string]bool) string {
 				err = writePiConfig(t.configPath, apiKey)
 			case "Codex":
 				err = writeCodexConfig(t.configPath, apiKey)
+			case "Hermes":
+				err = writeHermesConfig(filepath.Dir(t.configPath), apiKey)
 			}
 			if err != nil {
 				lastErr = err
@@ -1216,6 +1229,8 @@ func configureTools(apiKey string, enabledTools map[string]bool) string {
 				err = removePiConfig(t.configPath)
 			case "Codex":
 				err = removeCodexConfig(t.configPath)
+			case "Hermes":
+				err = removeHermesConfig(filepath.Dir(t.configPath))
 			}
 			if err != nil {
 				lastErr = err
@@ -1642,6 +1657,81 @@ wire_api = "chat"
 		return err
 	}
 	return os.WriteFile(cfgPath, []byte(content), 0o600)
+}
+
+// ── Hermes ───────────────────────────────────────────────────────────────────
+//
+// Every other tool here is configured by writing its file. Hermes is not,
+// because its config.yaml is a long commented document the member also edits
+// by hand, and because it ships the command to do it: `hermes config set`
+// writes a key without flattening the comments around it and rejects a key it
+// does not know. Reproducing that schema in Go would buy nothing and would
+// start drifting the day Hermes moves a field.
+//
+// Two things the tool knows and the docs page does not say. The path in
+// nan.builders/docs/hermes is the Unix one; on Windows Hermes keeps its home
+// under LOCALAPPDATA. And with the `custom` provider Hermes asks the endpoint
+// what it serves, so there is no model list to write here and none to keep in
+// step with the cluster - only which model to open with.
+
+// Swapped in tests, so nothing here spawns a process or goes near the
+// member's own Hermes. HERMES_HOME is passed on every call rather than
+// inherited: the writer configures the install it detected, not whichever one
+// the environment happens to point at.
+var runHermesConfig = func(home string, args ...string) error {
+	cmd := exec.Command("hermes", append([]string{"config"}, args...)...)
+	cmd.Env = append(os.Environ(), "HERMES_HOME="+home)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("hermes config %s: %s", strings.Join(args, " "), strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// The resolution Hermes itself uses: HERMES_HOME, then the platform default.
+func hermesHome() string {
+	if home := strings.TrimSpace(os.Getenv("HERMES_HOME")); home != "" {
+		return home
+	}
+	if runtime.GOOS == "windows" {
+		if local := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); local != "" {
+			return filepath.Join(local, "hermes")
+		}
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, "AppData", "Local", "hermes")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".hermes")
+}
+
+func hermesConfigPath(home string) string {
+	return filepath.Join(home, "config.yaml")
+}
+
+func writeHermesConfig(home, apiKey string) error {
+	settings := [][2]string{
+		{"model.provider", "custom"},
+		{"model.base_url", "https://api.nan.builders/v1"},
+		{"model.api_key", apiKey},
+		{"model.default", catalog.Coding},
+	}
+	for _, s := range settings {
+		if err := runHermesConfig(home, "set", s[0], s[1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// The same four keys and nothing else: a member's channels, skills and
+// persona live in this file too.
+func removeHermesConfig(home string) error {
+	for _, key := range []string{"model.api_key", "model.base_url", "model.default", "model.provider"} {
+		if err := runHermesConfig(home, "unset", key); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func removeCodexConfig(cfgPath string) error {

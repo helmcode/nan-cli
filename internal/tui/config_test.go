@@ -3,7 +3,9 @@ package tui
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -387,9 +389,20 @@ func TestConfigureToolsWritesEveryEnabledTool(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home) // os.UserHomeDir reads this one on Windows
+	// Hermes does not take its home from either of those, so without this the
+	// run reaches the real install and configures the machine it is testing
+	// on. Faking the runner as well means no hermes process is spawned at all,
+	// here or on a machine that has one.
+	hermesHomeDir := filepath.Join(home, "hermes")
+	t.Setenv("HERMES_HOME", hermesHomeDir)
+	if err := os.MkdirAll(hermesHomeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	hermesCalls := recordHermes(t)
 
 	// A tool counts as installed if its binary is on PATH *or* its config path
-	// exists, so an empty file each is enough to make all four visible.
+	// exists, so an empty file each is enough to make the file-written ones
+	// visible.
 	paths := map[string]string{
 		"Factory AI": filepath.Join(home, ".factory", "settings.json"),
 		"OpenCode":   filepath.Join(home, ".config", "opencode", "opencode.json"),
@@ -405,8 +418,11 @@ func TestConfigureToolsWritesEveryEnabledTool(t *testing.T) {
 		}
 	}
 
-	if msg := configureTools(testKey, nil); !strings.Contains(msg, "4 added") {
-		t.Fatalf("configureTools said %q, want the four tools written", msg)
+	if msg := configureTools(testKey, nil); !strings.Contains(msg, "5 added") {
+		t.Fatalf("configureTools said %q, want the five tools written", msg)
+	}
+	if len(*hermesCalls) == 0 {
+		t.Error("Hermes was counted but never configured")
 	}
 
 	for name, p := range paths {
@@ -626,5 +642,151 @@ func TestPiRemovalTakesTheDefaultItWrote(t *testing.T) {
 		if settings["defaultProvider"] == "nan" {
 			t.Error("Pi is left defaulting to a provider that is no longer in models.json")
 		}
+	}
+}
+
+// ── Hermes ───────────────────────────────────────────────────────────────────
+
+// Hermes is the first tool here that is not configured by writing its file.
+// Its config.yaml is a commented document a member edits, and it ships
+// `hermes config set`, which writes into it without flattening the comments
+// and validates the key while it is at it. So this writer drives the tool
+// instead of reproducing its schema, and what there is to test is the
+// conversation it has with it.
+func recordHermes(t *testing.T) *[][]string {
+	t.Helper()
+	var calls [][]string
+	original := runHermesConfig
+	runHermesConfig = func(home string, args ...string) error {
+		calls = append(calls, args)
+		return nil
+	}
+	t.Cleanup(func() { runHermesConfig = original })
+	return &calls
+}
+
+func TestHermesIsConfiguredThroughItsOwnConfigCommand(t *testing.T) {
+	calls := recordHermes(t)
+	if err := writeHermesConfig(t.TempDir(), testKey); err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]string{
+		// `custom` is the provider Hermes ships for any OpenAI-compatible
+		// endpoint. Its aliases (ollama, vllm, llamacpp) all map to this one.
+		"model.provider": "custom",
+		"model.base_url": "https://api.nan.builders/v1",
+		"model.api_key":  testKey,
+		"model.default":  catalog.Coding,
+	}
+	got := map[string]string{}
+	for _, c := range *calls {
+		if len(c) != 3 || c[0] != "set" {
+			t.Errorf("unexpected call %v", c)
+			continue
+		}
+		got[c[1]] = c[2]
+	}
+	for key, value := range want {
+		if got[key] != value {
+			t.Errorf("%s = %q, want %q", key, got[key], value)
+		}
+	}
+}
+
+// Hermes with a custom endpoint asks the cluster what it serves instead of
+// reading a list we write, so there is no model catalogue in this config and
+// no window to keep in step - the one thing it needs told is which model to
+// open with.
+func TestHermesIsNotSentAModelCatalogue(t *testing.T) {
+	calls := recordHermes(t)
+	if err := writeHermesConfig(t.TempDir(), testKey); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range *calls {
+		for _, arg := range c {
+			if strings.Contains(arg, "models") {
+				t.Errorf("call %v writes a model list Hermes discovers on its own", c)
+			}
+		}
+	}
+}
+
+func TestHermesRemovalTakesOnlyWhatWeWrote(t *testing.T) {
+	calls := recordHermes(t)
+	if err := removeHermesConfig(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range *calls {
+		if c[0] != "unset" {
+			t.Errorf("removal called %v, which is not an unset", c)
+		}
+		// The member's own settings live in the same file: their skills, their
+		// channels, their persona. Only the four keys we put there come out.
+		switch c[1] {
+		case "model.provider", "model.base_url", "model.api_key", "model.default":
+		default:
+			t.Errorf("removal unsets %q, which we never wrote", c[1])
+		}
+	}
+}
+
+// The path in nan.builders/docs/hermes, ~/.hermes/config.yaml, is the Unix
+// one. On Windows Hermes keeps it under LOCALAPPDATA, so a CLI that built the
+// path from the home directory would configure a Hermes that is not there.
+func TestHermesHomeFollowsTheToolNotTheDoc(t *testing.T) {
+	t.Setenv("HERMES_HOME", filepath.Join("some", "profile"))
+	if got := hermesHome(); got != filepath.Join("some", "profile") {
+		t.Errorf("HERMES_HOME ignored: got %q", got)
+	}
+
+	t.Setenv("HERMES_HOME", "")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	local := filepath.Join(home, "AppData", "Local")
+	t.Setenv("LOCALAPPDATA", local)
+
+	want := filepath.Join(home, ".hermes")
+	if runtime.GOOS == "windows" {
+		want = filepath.Join(local, "hermes")
+	}
+	if got := hermesHome(); got != want {
+		t.Errorf("hermesHome() = %q, want %q", got, want)
+	}
+}
+
+// Everything above agrees with a fake. This one agrees with Hermes, which is
+// the only agreement that keeps a member working, and it is why the writer
+// was built around `hermes config set` in the first place. Skipped where
+// Hermes is not installed, CI included.
+func TestHermesConfigAgainstTheRealBinary(t *testing.T) {
+	if _, err := exec.LookPath("hermes"); err != nil {
+		t.Skip("hermes is not installed here")
+	}
+	// Never the member's own Hermes: HERMES_HOME is what the writer passes to
+	// every call, so the whole exchange lands in a directory of this test's.
+	home := t.TempDir()
+	if err := writeHermesConfig(home, testKey); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(home, "config.yaml"))
+	if err != nil {
+		t.Fatalf("hermes wrote no config: %v", err)
+	}
+	written := string(data)
+	for _, want := range []string{"provider: custom", "base_url: https://api.nan.builders/v1", "default: " + catalog.Coding, testKey} {
+		if !strings.Contains(written, want) {
+			t.Errorf("config.yaml has no %q:\n%s", want, written)
+		}
+	}
+
+	if err := removeHermesConfig(home); err != nil {
+		t.Fatal(err)
+	}
+	data, _ = os.ReadFile(filepath.Join(home, "config.yaml"))
+	if strings.Contains(string(data), "api.nan.builders") {
+		t.Errorf("removal left the cluster behind:\n%s", data)
 	}
 }
