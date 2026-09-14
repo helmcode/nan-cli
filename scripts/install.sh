@@ -50,6 +50,24 @@ get_latest_version() {
   curl -sL "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | cut -d'"' -f4
 }
 
+# An unauthenticated GitHub API is rate limited per IP, so this call can come
+# back empty for reasons that have nothing to do with this repo. Without this
+# check the empty version went straight into the archive name, and what the
+# person saw was curl failing on a URL with a hole in it - which says nothing
+# about what actually happened or what to do next.
+require_version() {
+  if [ -n "$1" ]; then
+    return 0
+  fi
+  err "could not work out the latest version from the GitHub API"
+  err "it rate limits unauthenticated requests, so this is usually temporary"
+  err "wait a few minutes, or pick a version yourself:"
+  printf "    VERSION=v0.1.3 curl -fsSL https://nan.builders/install | bash
+" >&2
+  err "the releases are at https://github.com/$REPO/releases"
+  exit 1
+}
+
 verify_checksum() {
   local file="$1" expected="$2"
   local actual
@@ -99,6 +117,7 @@ main() {
   if [ -z "$VERSION" ]; then
     info "fetching latest release..."
     version="$(get_latest_version)"
+    require_version "$version"
   else
     version="$VERSION"
   fi
