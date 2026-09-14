@@ -717,7 +717,7 @@ func (m model) View() string {
 				content = renderCosts(usageData.(map[string]any), l)
 			}
 		case tabHome:
-			content = renderHome(l, m.sess.Token != "", m.sess.APIKey != "")
+			content = renderHome(l, m.sess.Token != "", m.sess.APIKey != "", m.mood())
 		case tabAbout:
 			content = renderAbout(l)
 		case tabSetup:
@@ -2449,7 +2449,7 @@ func (m model) renderSetup(l layout) string {
 
 // ── about renderer ───────────────────────────────────────────────────────────
 
-const Version = "0.1.12"
+const Version = "0.1.13"
 
 func renderAbout(l layout) string {
 	var b strings.Builder
@@ -2463,9 +2463,9 @@ func renderAbout(l layout) string {
 
 	// The banner needs room for the art with the text beside it; narrower than
 	// that it would wrap into nonsense, so the plain line stays.
-	banner := l.w >= BannerWidth+4
+	banner := l.w >= BannerWidthPlain+4
 	if banner {
-		b.WriteString(Banner(l.indent) + "\n")
+		b.WriteString(Banner(l.indent, moodNormal, l.w >= BannerWidth+4 && l.h >= BannerRoom) + "\n")
 	} else {
 		b.WriteString(l.indent + logoStyle.Render("nan") +
 			"  " + dimStyle.Render("v"+Version) + "\n")

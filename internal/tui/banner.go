@@ -36,6 +36,10 @@ var wordmark = []string{
 const (
 	wordmarkWidth = 30
 	sideGap       = 6
+	// Between the mascot and the wordmark. Wider than sideGap because the
+	// mascot is a solid shape and the letters are not: the same gap reads as
+	// crowding.
+	mascotGap = 4
 )
 
 func styles() (name, dim, text lipgloss.Style) {
@@ -86,20 +90,55 @@ var BannerWidth = func() int {
 			widest = w
 		}
 	}
-	return wordmarkWidth + sideGap + widest
+	return MascotWidth + mascotGap + wordmarkWidth + sideGap + widest
 }()
 
-// Banner draws the wordmark with the text beside it. Six rows, no frame: it is
-// what goes inside a tab that has other things to say.
-func Banner(indent string) string {
+// BannerWidthPlain is the same without the mascot, which is what a narrow
+// terminal gets.
+var BannerWidthPlain = BannerWidth - MascotWidth - mascotGap
+
+// Banner draws the mascot, then the wordmark, then the text. Eleven rows, no
+// frame: it is what goes inside a tab that has other things to say.
+//
+// The mascot is eleven rows and the wordmark six, so the letters are centred
+// against it rather than sat on its top edge - which put the whole of the
+// text above the eyes and read as two unrelated drawings.
+// MascotCost is the extra rows the mascot adds over the wordmark alone, and
+// BannerRoom the terminal height from which it is worth spending them. Home is
+// a landing screen: one that needs scrolling on a 24-row terminal has already
+// failed at the only thing it does, and the mascot is the part that goes.
+const (
+	MascotCost = MascotHeight - 6
+	BannerRoom = 24 + MascotCost + 1
+)
+
+func Banner(indent string, mood mascotMood, withMascot bool) string {
 	side := bannerSide()
-	var b strings.Builder
-	for i, row := range wordmark {
-		line := indent + paint(row)
-		if side[i] != "" {
-			line += strings.Repeat(" ", sideGap) + side[i]
+	if !withMascot {
+		var b strings.Builder
+		for i, row := range wordmark {
+			line := indent + paint(row)
+			if side[i] != "" {
+				line += strings.Repeat(" ", sideGap) + side[i]
+			}
+			b.WriteString(line + "\n")
 		}
-		b.WriteString(line + "\n")
+		return b.String()
+	}
+
+	art := renderMascot(mood)
+	top := (len(art) - len(wordmark)) / 2
+
+	var b strings.Builder
+	for i := 0; i < len(art); i++ {
+		line := indent + art[i] + strings.Repeat(" ", mascotGap)
+		if w := i - top; w >= 0 && w < len(wordmark) {
+			line += paint(wordmark[w])
+			if side[w] != "" {
+				line += strings.Repeat(" ", sideGap) + side[w]
+			}
+		}
+		b.WriteString(strings.TrimRight(line, " ") + "\n")
 	}
 	return b.String()
 }
@@ -121,7 +160,7 @@ func Welcome(indent string) string {
 
 	var b strings.Builder
 	b.WriteString(edge("┌─", "─┐") + "\n\n")
-	b.WriteString(Banner(indent + strings.Repeat(" ", pad)))
+	b.WriteString(Banner(indent+strings.Repeat(" ", pad), moodNormal, true))
 	b.WriteString("\n" + edge("└─", "─┘") + "\n")
 	return b.String()
 }
@@ -233,11 +272,11 @@ func renderNextStep(l layout, loggedIn, hasKey bool) string {
 	return b.String()
 }
 
-func renderHome(l layout, loggedIn, hasKey bool) string {
+func renderHome(l layout, loggedIn, hasKey bool, mood mascotMood) string {
 	var b strings.Builder
 
-	if l.w >= BannerWidth+4 {
-		b.WriteString(Banner(l.indent) + "\n")
+	if l.w >= BannerWidthPlain+4 {
+		b.WriteString(Banner(l.indent, mood, l.w >= BannerWidth+4 && l.h >= BannerRoom) + "\n")
 	} else {
 		name, dim, _ := styles()
 		b.WriteString(l.indent + name.Render("nan.builders") + "\n")
