@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -170,7 +171,69 @@ func WelcomeStacked(indent string) string {
 // what you were running. The keys are along the bottom of every tab too, but a
 // one-line footer is where you look when you already know what you are doing,
 // not when you have just arrived.
-func renderHome(l layout) string {
+// What a member has to do before the panel is any use to them, in the order
+// they have to do it.
+//
+// The first run of this on a fresh machine landed on Home, which explained
+// the arrow keys, and then answered every data tab with `unauthorized`.
+// Nothing anywhere said "log in", and the command that does it is a
+// subcommand you have to already know about. So Home leads with the step
+// that is missing, and stops mentioning it once it is done.
+func renderNextStep(l layout, loggedIn, hasKey bool) string {
+	if loggedIn && hasKey {
+		return ""
+	}
+
+	section := lipgloss.NewStyle().Foreground(cGray).Bold(true)
+	num := lipgloss.NewStyle().Foreground(cCyan).Bold(true)
+	cmd := lipgloss.NewStyle().Foreground(cWhite).Bold(true)
+	desc := lipgloss.NewStyle().Foreground(cGray)
+	done := lipgloss.NewStyle().Foreground(cDimGray)
+
+	var b strings.Builder
+	b.WriteString(l.indent + section.Render("Start here") + "\n\n")
+
+	steps := []struct {
+		what, why string
+		done      bool
+	}{
+		// Quitting comes first because it is not a key inside the panel: the
+		// next step is a command in the shell, and you cannot run one from here.
+		{"q", "quit, so you have your shell back", loggedIn},
+		{"nan auth login", "sign in - a link goes to your email", loggedIn},
+		{"nan", "come back, and press right for Setup", loggedIn},
+		{"e", "paste your API key in Setup", hasKey},
+		{"space, then c", "pick your tools and apply", false},
+	}
+
+	// One column for the commands, measured over all of them, so the reasons
+	// line up under each other the way the two lists below this one do.
+	column := 0
+	for _, s := range steps {
+		if w := lipgloss.Width(s.what); w > column {
+			column = w
+		}
+	}
+	column += 2
+
+	for i, st := range steps {
+		marker := num.Render(fmt.Sprintf("%d.", i+1))
+		body := cmd.Width(column).Render(st.what) + desc.Render(st.why)
+		if st.done {
+			marker = done.Render("✓ ")
+			body = done.Width(column).Render(st.what) + done.Render(st.why)
+		}
+		b.WriteString(l.indent + marker + " " + body + "\n")
+	}
+
+	if !loggedIn {
+		b.WriteString("\n" + l.indent + done.Render("Profile, Usage and Costs stay empty until you sign in.") + "\n")
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+func renderHome(l layout, loggedIn, hasKey bool) string {
 	var b strings.Builder
 
 	if l.w >= BannerWidth+4 {
@@ -180,6 +243,8 @@ func renderHome(l layout) string {
 		b.WriteString(l.indent + name.Render("nan.builders") + "\n")
 		b.WriteString(l.indent + dim.Render("cloud CLI · v"+Version) + "\n\n")
 	}
+
+	b.WriteString(renderNextStep(l, loggedIn, hasKey))
 
 	section := lipgloss.NewStyle().Foreground(cGray).Bold(true)
 	key := lipgloss.NewStyle().Foreground(lipgloss.Color(brandVioletText)).Bold(true)

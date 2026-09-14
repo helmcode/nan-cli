@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -568,7 +569,7 @@ func TestHomeIsTheFirstTabAndNeedsNoNetwork(t *testing.T) {
 }
 
 func TestHomeSaysHowToMoveAround(t *testing.T) {
-	out := renderHome(newLayout(80, 24))
+	out := renderHome(newLayout(80, 24), true, true)
 	for _, want := range []string{"█", "welcome to", "←/→", "↑/↓", "refresh", "quit", "Setup"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the Home tab does not mention %q", want)
@@ -1005,5 +1006,97 @@ func TestAboutShowsTheSessionPathThatExists(t *testing.T) {
 	}
 	if !strings.Contains(session.Path(), home) {
 		t.Errorf("session.Path() = %q, which is not under the home it was given", session.Path())
+	}
+}
+
+// A fresh install on a machine that has never logged in drew "unauthorized"
+// over Profile, Usage and Models: the platform's word for what it decided, and
+// not one word about what to do next. Reported from a real first run.
+func TestDataTabsSayToLogInRatherThanUnauthorized(t *testing.T) {
+	m := setupModel(t, &session.Session{})
+
+	for _, id := range []tabID{tabProfile, tabUsage, tabModels, tabCosts} {
+		if !m.needsLogin(id) {
+			t.Errorf("%v: would go to the network with no session and report `unauthorized`", id)
+		}
+	}
+
+	// And the message is the one that names the command to run.
+	msg, ok := m.fetchTab(tabProfile)().(fetchErrMsg)
+	if !ok || !errors.Is(msg.err, session.ErrNotLoggedIn) {
+		t.Errorf("Profile reports %v, want the error that says `nan auth login`", msg.err)
+	}
+}
+
+// The three tabs that need nothing from the platform have to stay usable with
+// no session: Setup is where a member pastes the key in the first place.
+func TestTheOfflineTabsNeverAskForALogin(t *testing.T) {
+	m := setupModel(t, &session.Session{})
+
+	for _, id := range []tabID{tabHome, tabAbout, tabSetup} {
+		if m.needsLogin(id) {
+			t.Errorf("%v: asks for a login it does not need", id)
+		}
+	}
+}
+
+// An API key opens /v1/models on its own, so that tab stays useful to someone
+// who pasted a key and never logged in.
+func TestModelsStillLoadsWithAKeyAndNoSession(t *testing.T) {
+	m := setupModel(t, &session.Session{APIKey: testKey})
+
+	if m.needsLogin(tabModels) {
+		t.Error("a member with an API key is told to log in for the Models tab")
+	}
+}
+
+// ── the first run ────────────────────────────────────────────────────────────
+
+// The first time this was opened on a machine that had never logged in, Home
+// explained the arrow keys and every data tab answered "unauthorized". Nothing
+// anywhere said to log in, and the command that does it is a subcommand you
+// have to already know exists.
+func TestHomeLeadsWithSigningInWhenThereIsNoSession(t *testing.T) {
+	out := renderHome(newLayout(90, 40), false, false)
+
+	for _, want := range []string{"Start here", "nan auth login", "stay empty until you sign in"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("Home does not mention %q to someone with no session", want)
+		}
+	}
+	// Quitting is step one and not an afterthought: the next step is a command
+	// in the shell, which cannot be run with this panel open.
+	if !strings.Contains(out, "quit, so you have your shell back") {
+		t.Error("Home tells a member to run a shell command without telling them to leave first")
+	}
+}
+
+// Signed in but with no key, the sign-in steps are done and the one that is
+// not is the key.
+func TestHomeMovesOnOnceSignedIn(t *testing.T) {
+	out := renderHome(newLayout(90, 40), true, false)
+
+	if !strings.Contains(out, "Start here") {
+		t.Fatal("Home stops guiding before the setup is finished")
+	}
+	if !strings.Contains(out, "paste your API key") {
+		t.Error("Home does not name the step that is actually left")
+	}
+	// The done ones are still listed, struck through by their marker, so the
+	// list does not renumber itself between runs.
+	if !strings.Contains(out, "✓") {
+		t.Error("finished steps are not marked as finished")
+	}
+}
+
+// And once there is nothing left to do it gets out of the way.
+func TestHomeDropsTheGuideWhenSetupIsDone(t *testing.T) {
+	out := renderHome(newLayout(90, 40), true, true)
+
+	if strings.Contains(out, "Start here") {
+		t.Error("Home still shows the first-run steps to a configured member")
+	}
+	if !strings.Contains(out, "Getting around") {
+		t.Error("the rest of Home went with it")
 	}
 }
