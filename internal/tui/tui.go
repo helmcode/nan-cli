@@ -133,6 +133,9 @@ type configuredMsg struct {
 	written []string
 }
 
+// Sent once, by Init, so the panel can pick up wherever the setup was left.
+type firstRunMsg struct{}
+
 type linkSentMsg struct{ err error }
 type signedInMsg struct{ err error }
 
@@ -208,8 +211,10 @@ func newModel(client *api.Client, sess *session.Session) model {
 }
 
 func (m model) Init() tea.Cmd {
-	m.loading = true
-	return tea.Batch(m.spin.Tick, m.fetchTab(tabDefs[0].id))
+	// Init takes a value receiver and returns only a Cmd, so anything it
+	// changes about the model is thrown away. The first-run question is asked
+	// as a message instead, and answered in Update where the state lives.
+	return tea.Batch(m.spin.Tick, func() tea.Msg { return firstRunMsg{} })
 }
 
 func (m model) activeID() tabID { return tabDefs[m.active].id }
@@ -252,6 +257,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setupMsg = msg.msg
 		m.configured = msg.written
 
+	case firstRunMsg:
+		return m, m.resumeSetup()
+
 	case linkSentMsg:
 		m.loginBusy = false
 		if msg.err != nil {
@@ -288,7 +296,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cache = make(map[tabID]any)
 		m.err = nil
 		m.keyAsked = false
-		return m, m.maybeLoad()
+		// And straight on to whatever is still missing, which on a fresh
+		// machine is the key.
+		return m, tea.Batch(m.maybeLoad(), m.resumeSetup())
 
 	case keyStatusMsg:
 		m.keyStatus = msg.status
@@ -300,6 +310,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.keyCheck = "error: the cluster refused this key — " + msg.err.Error()
 		} else {
 			m.keyCheck = fmt.Sprintf("key accepted by the cluster · %d models", msg.models)
+			// The last link in the chain. Signing in leads to the key, and the
+			// key leads here - to the tools, which is the step the panel
+			// cannot take for someone: writing into their opencode or their
+			// codex is a side effect that has to be asked for, so this names
+			// the key to press rather than pressing it.
+			if n := installedTools(); n > 0 {
+				m.keyCheck += fmt.Sprintf("  ·  press c to configure the %d tools found", n)
+			}
 		}
 
 	case tea.KeyMsg:
@@ -452,14 +470,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// which is the tab you have to already be on to know that - and
 			// Home tells everyone to press `e` from Home.
 			if !m.showHelp && m.loginStage == loginOff {
-				if m.activeID() != tabSetup {
-					m.active = tabIndex(tabSetup)
-					m.scrollY = 0
-				}
-				m.editingKey = true
-				m.keyInput.SetValue("")
-				m.keyInput.Focus()
-				m.setupMsg = ""
+				return m, m.startKeyEdit()
 			}
 		case "c":
 			if !m.showHelp && m.activeID() == tabSetup && !m.configuring {
@@ -541,6 +552,39 @@ func (m *model) startLogin() tea.Cmd {
 	m.loginInput.Placeholder = "you@example.com"
 	m.loginInput.Prompt = "Email: "
 	return m.loginInput.Focus()
+}
+
+// startKeyEdit opens the API key field, moving to the tab that shows it.
+func (m *model) startKeyEdit() tea.Cmd {
+	if m.activeID() != tabSetup {
+		m.active = tabIndex(tabSetup)
+		m.scrollY = 0
+	}
+	m.editingKey = true
+	m.keyInput.SetValue("")
+	m.setupMsg = ""
+	return m.keyInput.Focus()
+}
+
+// resumeSetup asks for the first thing that is missing, and for nothing when
+// nothing is.
+//
+// It runs when the panel opens and again after each step finishes, which is
+// what turns three separate keys into one sequence: a fresh machine is asked
+// for an account, then for a key, then left on the tab that configures the
+// tools. Before this, all three were things the member had to know to press.
+//
+// It is a nudge and not a gate. Esc leaves any of them, and a member who came
+// to look at their usage is not held hostage by a setup they did not ask for -
+// the Setup tab has always worked with no session at all, and that stays true.
+func (m *model) resumeSetup() tea.Cmd {
+	switch {
+	case m.sess.Token == "":
+		return m.startLogin()
+	case m.sess.APIKey == "":
+		return m.startKeyEdit()
+	}
+	return nil
 }
 
 func (m *model) cancelLogin() {
@@ -1579,6 +1623,17 @@ func (m model) toolEnabled(name string) bool {
 // Hermes in the list that is four processes, several seconds, with no repaint
 // and no key accepted. Reported as "se ha quedado paralizado y no sabia que
 // pasaba", which is the only thing it could look like.
+// How many of the tools it knows about are on this machine.
+func installedTools() int {
+	n := 0
+	for _, t := range detectTools() {
+		if t.installed {
+			n++
+		}
+	}
+	return n
+}
+
 func configureTools(apiKey string, enabledTools map[string]bool) (string, []string) {
 	isEnabled := func(name string) bool {
 		if enabledTools == nil {
@@ -2449,7 +2504,7 @@ func (m model) renderSetup(l layout) string {
 
 // ── about renderer ───────────────────────────────────────────────────────────
 
-const Version = "0.1.14"
+const Version = "0.1.15"
 
 func renderAbout(l layout) string {
 	var b strings.Builder
