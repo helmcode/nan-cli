@@ -46,7 +46,7 @@ The Setup tab lets you configure AI coding tools to use the NaN API automaticall
 
 - [OpenCode](https://opencode.ai)
 - [Factory AI](https://factory.ai) (`droid`)
-- [Pi](https://pi.ai)
+- [Pi](https://pi.dev)
 - [Codex](https://github.com/openai/codex)
 - [Hermes](https://hermes-agent.nousresearch.com/)
 
