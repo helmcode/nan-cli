@@ -15,8 +15,16 @@ on:
 
 jobs:
   test:
-    name: Vet & Test
-    runs-on: ubuntu-latest
+    # Everything here ran on ubuntu only, so darwin was a platform we shipped
+    # binaries for and had never executed a line on: it cross-compiled, and
+    # that was the whole of the evidence. The config writers are full of paths
+    # and of os.UserHomeDir, which is exactly the code that differs.
+    name: Vet & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -67,6 +75,7 @@ jobs:
       # below would have found the Byte[] bug - only running it did - but each
       # is a mechanical rule for a mistake that already cost a release.
       - name: Check the PowerShell installer
+        if: matrix.os == 'ubuntu-latest'
         shell: pwsh
         run: |
           $script = Get-Content -Raw scripts/install.ps1
@@ -178,3 +187,37 @@ jobs:
             $depth += ([regex]::Matches($line, '{')).Count - ([regex]::Matches($line, '}')).Count
           }
           Write-Host "installer parses, web requests basic-parsed, no unguarded exit, arch survives without .NET, no preference leaks"
+
+  # The other half of the same gap: scripts/install.sh is the way in for every
+  # member on macOS and Linux, and nothing had ever run it end to end. It was
+  # syntax-checked and its failure path exercised by hand; the path that
+  # actually installs - resolve the release, download, verify the checksum,
+  # unpack, put the binary somewhere - had not been.
+  #
+  # This runs it exactly as a member does, against the published release, and
+  # then runs what it installed.
+  installer:
+    name: Install from the published release (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # INSTALL_DIR inside the runner's temp, so there is no sudo prompt and
+      # nothing to clean up. The default path is /usr/local/bin and that is
+      # what the sudo fallback is for; this checks the installer, not sudo.
+      - name: Run the installer
+        run: INSTALL_DIR="$RUNNER_TEMP/bin" bash scripts/install.sh
+
+      - name: Run what it installed
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/bin/nan" --version
+          "$RUNNER_TEMP/bin/nan" --help > /dev/null
+          # The subcommands reach for a session and must fail cleanly without
+          # one rather than panic, which is the state a fresh machine is in.
+          "$RUNNER_TEMP/bin/nan" me || true
