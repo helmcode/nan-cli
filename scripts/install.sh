@@ -62,7 +62,7 @@ require_version() {
   err "could not work out the latest version from the GitHub API"
   err "it rate limits unauthenticated requests, so this is usually temporary"
   err "wait a few minutes, or pick a version yourself:"
-  printf "    VERSION=v0.1.3 curl -fsSL https://nan.builders/install | bash
+  printf "    VERSION=v0.1.4 curl -fsSL https://nan.builders/install | bash
 " >&2
   err "the releases are at https://github.com/$REPO/releases"
   exit 1
