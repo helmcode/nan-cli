@@ -128,6 +128,11 @@ type keyCheckedMsg struct {
 // someone to quit and run something is the detour this replaced.
 var errNotSignedIn = errors.New("not signed in — press s")
 
+type configuredMsg struct {
+	msg     string
+	written []string
+}
+
 type linkSentMsg struct{ err error }
 type signedInMsg struct{ err error }
 
@@ -153,6 +158,9 @@ type model struct {
 	keyCheck    string
 
 	// Signing in, without leaving the panel. See startLogin.
+	configuring bool
+	configured  []string
+
 	loginStage loginStage
 	loginInput textinput.Model
 	loginEmail string
@@ -224,7 +232,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lay = newLayout(msg.Width, msg.Height)
 
 	case spinner.TickMsg:
-		if m.loading {
+		if m.loading || m.configuring {
 			var cmd tea.Cmd
 			m.spin, cmd = m.spin.Update(msg)
 			return m, cmd
@@ -238,6 +246,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case fetchErrMsg:
 		m.loading = false
 		m.err = msg.err
+
+	case configuredMsg:
+		m.configuring = false
+		m.setupMsg = msg.msg
+		m.configured = msg.written
 
 	case linkSentMsg:
 		m.loginBusy = false
@@ -404,7 +417,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case " ":
-			if !m.showHelp && m.activeID() == tabSetup {
+			if !m.showHelp && m.activeID() == tabSetup && !m.configuring {
 				tools := detectTools()
 				if m.setupCursor < len(tools) && tools[m.setupCursor].installed {
 					name := tools[m.setupCursor].name
@@ -449,15 +462,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.setupMsg = ""
 			}
 		case "c":
-			if !m.showHelp && m.activeID() == tabSetup {
+			if !m.showHelp && m.activeID() == tabSetup && !m.configuring {
 				// Pressing the key that configures everything and having
 				// nothing happen, with nothing said, is the worst of the
 				// three possible answers.
 				if m.sess.APIKey == "" {
 					m.setupMsg = "error: set your API key first — press e"
-				} else {
-					m.setupMsg = configureTools(m.sess.APIKey, m.sess.EnabledTools)
+					return m, nil
 				}
+				m.configuring = true
+				m.configured = nil
+				m.setupMsg = ""
+				key, tools := m.sess.APIKey, m.sess.EnabledTools
+				return m, tea.Batch(m.spin.Tick, func() tea.Msg {
+					msg, written := configureTools(key, tools)
+					return configuredMsg{msg, written}
+				})
 			}
 		}
 	}
@@ -1551,7 +1571,15 @@ func (m model) toolEnabled(name string) bool {
 	return true
 }
 
-func configureTools(apiKey string, enabledTools map[string]bool) string {
+// Writes the configs, and says which tools it wrote so the tab can tell a
+// member how to use each one.
+//
+// This runs off the event loop. It used to be called straight out of the key
+// handler, which meant the panel sat frozen for as long as it took - and with
+// Hermes in the list that is four processes, several seconds, with no repaint
+// and no key accepted. Reported as "se ha quedado paralizado y no sabia que
+// pasaba", which is the only thing it could look like.
+func configureTools(apiKey string, enabledTools map[string]bool) (string, []string) {
 	isEnabled := func(name string) bool {
 		if enabledTools == nil {
 			return true
@@ -1563,6 +1591,7 @@ func configureTools(apiKey string, enabledTools map[string]bool) string {
 	}
 	tools := detectTools()
 	var lastErr error
+	var written []string
 	added, removed := 0, 0
 	for _, t := range tools {
 		if !t.installed {
@@ -1586,6 +1615,7 @@ func configureTools(apiKey string, enabledTools map[string]bool) string {
 				lastErr = err
 			} else {
 				added++
+				written = append(written, t.name)
 			}
 		} else if t.configured {
 			var err error
@@ -1609,7 +1639,7 @@ func configureTools(apiKey string, enabledTools map[string]bool) string {
 		}
 	}
 	if lastErr != nil {
-		return "error: " + lastErr.Error()
+		return "error: " + lastErr.Error(), written
 	}
 	parts := []string{}
 	if added > 0 {
@@ -1619,9 +1649,9 @@ func configureTools(apiKey string, enabledTools map[string]bool) string {
 		parts = append(parts, fmt.Sprintf("%d removed", removed))
 	}
 	if len(parts) == 0 {
-		return "nothing to sync"
+		return "nothing to sync", written
 	}
-	return strings.Join(parts, "  ·  ")
+	return strings.Join(parts, "  ·  "), written
 }
 
 func factoryCustomID(displayName string, index int) string {
@@ -2246,6 +2276,27 @@ func (m model) renderLogin(l layout) string {
 	return b.String()
 }
 
+// How to actually use each tool once its config is written. The panel said
+// "4 added" and stopped there, which answers what it did and not the question
+// a member is left holding: and now what. These are the steps each tool page
+// on nan.builders publishes under "check that it works".
+var nextStepFor = map[string][2]string{
+	"OpenCode":   {"opencode", "then /models inside it, and pick a NaN one"},
+	"Codex":      {"codex", "already aimed at the cluster; codex --model <id> to switch"},
+	"Pi":         {"pi", "NaN is already its default provider"},
+	"Factory AI": {"droid", "pick a model with (NaN) in its name"},
+	"Hermes":     {"hermes doctor", "says whether the provider answers, then talk to it"},
+}
+
+// Pads to a column width. renderCosts keeps its own; this is package-level
+// because a second renderer now needs the same thing.
+func lpadTo(v string, w int) string {
+	if len(v) >= w {
+		return v
+	}
+	return v + strings.Repeat(" ", w-len(v))
+}
+
 func (m model) renderSetup(l layout) string {
 	var b strings.Builder
 
@@ -2301,12 +2352,37 @@ func (m model) renderSetup(l layout) string {
 
 	// ── Tools ────────────────────────────────────────────────────────────────
 	b.WriteString("\n" + l.indent + titleStyle.Render("Tools") + "\n")
+	if m.configuring {
+		// Several seconds, because Hermes is configured by running Hermes.
+		// Saying so beats a panel that looks hung.
+		b.WriteString(l.indent + m.spin.View() +
+			dimStyle.Render(" writing the configs - a few seconds, Hermes is asked rather than written") + "\n")
+	}
 	if m.setupMsg != "" {
 		style := okStyle
 		if strings.HasPrefix(m.setupMsg, "error") {
 			style = errStyle
 		}
 		b.WriteString(l.indent + style.Render(m.setupMsg) + "\n")
+	}
+
+	// And now what. The answer used to be nowhere in the panel.
+	if len(m.configured) > 0 {
+		b.WriteString("\n" + l.indent + titleStyle.Render("Now open them") + "\n\n")
+		width := 0
+		for _, name := range m.configured {
+			if step, ok := nextStepFor[name]; ok && len(step[0]) > width {
+				width = len(step[0])
+			}
+		}
+		for _, name := range m.configured {
+			step, ok := nextStepFor[name]
+			if !ok {
+				continue
+			}
+			b.WriteString(l.indent + accentStyle.Render(lpadTo(step[0], width+2)) +
+				dimStyle.Render(step[1]) + "\n")
+		}
 	}
 	b.WriteString("\n")
 
@@ -2373,7 +2449,7 @@ func (m model) renderSetup(l layout) string {
 
 // ── about renderer ───────────────────────────────────────────────────────────
 
-const Version = "0.1.11"
+const Version = "0.1.12"
 
 func renderAbout(l layout) string {
 	var b strings.Builder

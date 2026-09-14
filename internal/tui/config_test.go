@@ -422,11 +422,22 @@ func TestConfigureToolsWritesEveryEnabledTool(t *testing.T) {
 		}
 	}
 
-	if msg := configureTools(testKey, nil); !strings.Contains(msg, "5 added") {
+	msg, written := configureTools(testKey, nil)
+	if !strings.Contains(msg, "5 added") {
 		t.Fatalf("configureTools said %q, want the five tools written", msg)
 	}
 	if len(*hermesCalls) == 0 {
 		t.Error("Hermes was counted but never configured")
+	}
+	// The names come back so the tab can say how to use each one; a tool
+	// written but not named leaves a member with a config and no next step.
+	if len(written) != 5 {
+		t.Errorf("configureTools named %v, want all five it wrote", written)
+	}
+	for _, name := range written {
+		if _, ok := nextStepFor[name]; !ok {
+			t.Errorf("%s is configured and the tab has nothing to tell anyone about using it", name)
+		}
 	}
 
 	for name, p := range paths {
@@ -447,7 +458,8 @@ func TestConfigureToolsWritesEveryEnabledTool(t *testing.T) {
 	}
 
 	// And unticking a tool takes only that one out.
-	if msg := configureTools(testKey, map[string]bool{"Pi": false}); !strings.Contains(msg, "1 removed") {
+	msg, _ = configureTools(testKey, map[string]bool{"Pi": false})
+	if !strings.Contains(msg, "1 removed") {
 		t.Errorf("configureTools said %q, want Pi removed", msg)
 	}
 	if isNaNConfigured("Pi", paths["Pi"]) {
@@ -1225,5 +1237,56 @@ func TestTheKeyForTheKeyWorksFromWhereItIsAdvertised(t *testing.T) {
 	}
 	if after.activeID() != tabSetup {
 		t.Error("e opened the key editor without moving to the tab that shows it")
+	}
+}
+
+// Pressing c used to call configureTools straight out of the key handler, so
+// the panel sat frozen for as long as it took - and with Hermes in the list
+// that is four processes and several seconds, with no repaint and no key
+// accepted. Reported as the panel being hung, which is the only thing it
+// could look like.
+func TestConfiguringDoesNotBlockTheEventLoop(t *testing.T) {
+	m := setupModel(t, &session.Session{Token: "t", APIKey: testKey})
+	m.lay = newLayout(90, 30)
+	m.active = tabIndex(tabSetup)
+	recordHermes(t)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	after := updated.(model)
+
+	if !after.configuring {
+		t.Error("c does not put the tab into a state it can draw")
+	}
+	if cmd == nil {
+		t.Fatal("c did the work inline instead of handing back a command")
+	}
+	// And the tab says so rather than looking hung.
+	if out := after.renderSetup(after.lay); !strings.Contains(out, "writing the configs") {
+		t.Errorf("nothing on screen says it is working:\n%s", out)
+	}
+}
+
+// "5 added" answers what it did, not the question a member is left holding.
+func TestTheTabSaysHowToUseWhatItJustConfigured(t *testing.T) {
+	m := setupModel(t, &session.Session{Token: "t", APIKey: testKey})
+	m.lay = newLayout(90, 40)
+	m.configured = []string{"OpenCode", "Codex"}
+
+	out := m.renderSetup(m.lay)
+	for _, want := range []string{"Now open them", "opencode", "/models", "codex"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the tab does not mention %q after configuring", want)
+		}
+	}
+}
+
+// Every tool the Setup tab can configure has to have something to say about
+// using it, or the list it prints has a hole in it exactly where a member
+// looks.
+func TestEveryConfigurableToolHasANextStep(t *testing.T) {
+	for _, tool := range detectTools() {
+		if _, ok := nextStepFor[tool.name]; !ok {
+			t.Errorf("%s can be configured and has no next step", tool.name)
+		}
 	}
 }
