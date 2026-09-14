@@ -48,8 +48,15 @@ The Setup tab lets you configure AI coding tools to use the NaN API automaticall
 - [Factory AI](https://factory.ai) (`droid`)
 - [Pi](https://pi.ai)
 - [Codex](https://github.com/openai/codex)
+- [Hermes](https://hermes-agent.nousresearch.com/)
 
 Press `e` to set your API key, `space` to toggle tools, and `c` to apply the configuration.
+
+Only installed tools are listed, and only the NaN part of each config is
+touched: everything else in those files is left as it was, and unticking a
+tool takes ours back out. The key you paste is checked against the cluster
+before you apply it, so a mistyped one is caught here rather than as a 401
+inside each tool later.
 
 ## Build from source
 
