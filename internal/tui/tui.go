@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -842,15 +843,34 @@ type providerPricing struct {
 	outPer1M float64 // $ per 1M output tokens
 }
 
-// Prices as of mid-2026 (per 1M tokens).
+// Per 1M tokens, read off each vendor's own pricing page on 2026-09-14.
+//
+// Five of the six rows this replaced were wrong, and all five were wrong in
+// the same direction: the output price too low. GPT-5.5 was published at $20
+// against a real $30, Gemini 3.1 Pro at $8 against $12, Gemini 2.5 Flash at
+// $0.35/$1.05 against $0.30/$2.50, and "GPT-5.4 Mini" was not a model anyone
+// sells. Sonnet 4.6 was priced correctly and had become a legacy model, with
+// Sonnet 5 both newer and cheaper.
+//
+// A tab whose whole claim is "this is what you would have paid elsewhere"
+// understating every competitor is the one direction it must not be wrong in.
+//
+// Two of these carry a condition the table cannot express, so they are taken
+// at their lowest published rate and the comparison stays conservative:
+// Gemini 3.1 Pro costs $4/$18 above a 200k-token prompt, and Gemini 3.8 Flash
+// is on a promotional rate that doubles on 2027-01-01. TestGeminiFlashPromo
+// fails on that date so the number is changed rather than forgotten.
 var pricingTable = []providerPricing{
-	{"Claude Sonnet 4.6", "Anthropic", 3.00, 15.00},
+	{"Claude Sonnet 5", "Anthropic", 2.00, 10.00},
 	{"Claude Haiku 4.5", "Anthropic", 1.00, 5.00},
-	{"GPT-5.5", "OpenAI", 5.00, 20.00},
-	{"GPT-5.4 Mini", "OpenAI", 0.40, 1.60},
-	{"Gemini 3.1 Pro", "Google", 2.00, 8.00},
-	{"Gemini 2.5 Flash", "Google", 0.35, 1.05},
+	{"GPT-5.6 Terra", "OpenAI", 2.00, 12.00},
+	{"GPT-5.6 Luna", "OpenAI", 0.20, 1.20},
+	{"Gemini 3.1 Pro", "Google", 2.00, 12.00},
+	{"Gemini 3.8 Flash", "Google", 0.75, 3.75},
 }
+
+// The day Gemini 3.8 Flash stops being half price.
+var geminiFlashPromoEnds = time.Date(2027, time.January, 1, 0, 0, 0, 0, time.UTC)
 
 var providerColor = map[string]lipgloss.TerminalColor{
 	"Anthropic": lipgloss.Color("#F97316"),

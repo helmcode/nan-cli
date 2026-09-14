@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -868,4 +869,62 @@ func TestHelpListsTheKeysHomePromises(t *testing.T) {
 			t.Errorf("the help screen does not mention %q", want)
 		}
 	}
+}
+
+// ── the cost comparison ──────────────────────────────────────────────────────
+
+// The Costs tab exists to answer "what would this have cost me elsewhere".
+// Every number in it is typed in by hand from a vendor's pricing page, nothing
+// reads them back, and the table went a long time with five of six rows wrong
+// - each of them understating the competitor. These are the mechanical checks
+// that catch the shapes of wrong a reader would not notice.
+func TestPricingTableIsPlausible(t *testing.T) {
+	if len(pricingTable) == 0 {
+		t.Fatal("nothing to compare against")
+	}
+	seen := map[string]bool{}
+	for _, p := range pricingTable {
+		if p.inPer1M <= 0 || p.outPer1M <= 0 {
+			t.Errorf("%s: a free model is a typo, not a price (%v/%v)", p.model, p.inPer1M, p.outPer1M)
+		}
+		// Every frontier vendor charges more for output than for input, so a
+		// row where that flips is a transposed pair. None of the six wrong
+		// rows failed this way - they were each plausible and simply not what
+		// the vendor charged - which is the point: this catches the typo, and
+		// only reading the pricing page catches the rest.
+		if p.outPer1M < p.inPer1M {
+			t.Errorf("%s: output (%v) cheaper than input (%v) - transposed?", p.model, p.outPer1M, p.inPer1M)
+		}
+		if seen[p.model] {
+			t.Errorf("%s is listed twice", p.model)
+		}
+		seen[p.model] = true
+		if p.provider == "" {
+			t.Errorf("%s has no provider, so it renders with no colour and no attribution", p.model)
+		}
+	}
+}
+
+// Every provider in the table needs a colour, or it renders grey and looks
+// like a different kind of row.
+func TestEveryPricedProviderHasAColour(t *testing.T) {
+	for _, p := range pricingTable {
+		if _, ok := providerColor[p.provider]; !ok {
+			t.Errorf("%s has no colour in providerColor", p.provider)
+		}
+	}
+}
+
+// Gemini 3.8 Flash is on a promotional rate that doubles on 2027-01-01. That
+// is a number which is right today and silently wrong on a date we already
+// know, which no amount of care at review time catches. This is the only
+// thing that will.
+func TestGeminiFlashPromoHasNotExpired(t *testing.T) {
+	if time.Now().Before(geminiFlashPromoEnds) {
+		return
+	}
+	t.Errorf("Gemini 3.8 Flash's promotional rate ended on %s: "+
+		"its price in pricingTable doubles to 1.50/7.50, and the Costs tab has been "+
+		"understating Google ever since. Update the row and move geminiFlashPromoEnds "+
+		"or drop it if the row no longer needs one.", geminiFlashPromoEnds.Format("2006-01-02"))
 }
