@@ -78,16 +78,29 @@ func runLogin(cmd *cobra.Command, args []string) error {
 
 	in := bufio.NewScanner(os.Stdin)
 
+	// Both dead ends below name the flag that skips the prompt. They used to
+	// say only that the email was missing or malformed, which is the whole
+	// story when someone typed it wrong and none of it when the prompt itself
+	// never reached them - a terminal that renders a command's output as a
+	// block, a shell running one command at a time, anything piping into this.
+	// The `--link` half of this flow has said so for a while; this half did
+	// not, so the first of the two prompts was the one you could get stuck on.
+	const emailHint = "pass it instead:\n\n  nan auth login --email you@example.com"
+
 	email := strings.TrimSpace(emailFlag)
 	if email == "" {
 		fmt.Print("Email: ")
 		if !in.Scan() {
-			return fmt.Errorf("no email provided")
+			fmt.Println()
+			return fmt.Errorf("nothing to read from here — %s", emailHint)
 		}
 		email = strings.TrimSpace(in.Text())
 	}
 	if !strings.Contains(email, "@") {
-		return fmt.Errorf("not an email address: %q", email)
+		if email == "" {
+			return fmt.Errorf("no email — %s", emailHint)
+		}
+		return fmt.Errorf("not an email address: %q — %s", email, emailHint)
 	}
 
 	if err := requestSignInLink(email); err != nil {
