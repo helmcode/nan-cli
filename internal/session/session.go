@@ -23,6 +23,18 @@ func dir() (string, error) {
 	return filepath.Join(home, ".config", "nan"), nil
 }
 
+// Path is where the session actually lives, for the About tab to show. It was
+// a "~/.config/nan/session.json" typed into the renderer, which is not a path
+// on Windows and is not where anything is: a member told to look there finds
+// nothing, and the tilde is not something Explorer resolves.
+func Path() string {
+	d, err := dir()
+	if err != nil {
+		return filepath.Join(".config", "nan", "session.json")
+	}
+	return filepath.Join(d, "session.json")
+}
+
 func Load() (*Session, error) {
 	d, err := dir()
 	if err != nil {

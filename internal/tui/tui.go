@@ -2153,7 +2153,7 @@ func renderAbout(l layout) string {
 
 	b.WriteString(l.indent + sectionStyle.Render("Session") + "\n\n")
 	b.WriteString(l.indent + labelStyle.Render("Config:") +
-		dimStyle.Render("~/.config/nan/session.json") + "\n")
+		dimStyle.Render(session.Path()) + "\n")
 
 	return b.String()
 }

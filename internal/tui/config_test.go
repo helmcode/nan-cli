@@ -987,3 +987,23 @@ func TestCostsRowsAreNotDoubleSpaced(t *testing.T) {
 		}
 	}
 }
+
+// The About tab printed "~/.config/nan/session.json" as a literal. On Windows
+// that is not a path, not where the file is, and not something Explorer
+// resolves - so a member told to look there finds nothing.
+func TestAboutShowsTheSessionPathThatExists(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	out := renderAbout(newLayout(100, 30))
+	if strings.Contains(out, "~/") {
+		t.Error("the About tab still prints a tilde path")
+	}
+	if want := session.Path(); !strings.Contains(out, want) {
+		t.Errorf("the About tab does not show %q", want)
+	}
+	if !strings.Contains(session.Path(), home) {
+		t.Errorf("session.Path() = %q, which is not under the home it was given", session.Path())
+	}
+}
