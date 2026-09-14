@@ -204,6 +204,12 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
 
+    # The unauthenticated GitHub API allows 60 requests an hour per IP, and
+    # hosted runners share addresses: without a token this job fails on the
+    # version lookup at random, which is a flake and not a finding.
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -221,3 +227,51 @@ jobs:
           # The subcommands reach for a session and must fail cleanly without
           # one rather than panic, which is the state a fresh machine is in.
           "$RUNNER_TEMP/bin/nan" me || true
+
+      # The default path, with no INSTALL_DIR. This is what the one-liner on
+      # nan.builders actually does, and it is the line printed in the README.
+      - name: Install where the one-liner puts it
+        run: |
+          set -euo pipefail
+          bash scripts/install.sh
+          command -v nan
+          nan --version
+
+      # The version lookup failing has to SAY so. It did not: the pipeline runs
+      # under `set -euo pipefail`, so a grep finding no tag_name - which is the
+      # rate-limited case - killed the script one line before the message that
+      # explains it. The message was written this morning and was unreachable.
+      # Found by this job, on macOS, the first time it ran.
+      - name: The failed lookup explains itself
+        env:
+          GITHUB_TOKEN: ""
+        run: |
+          set -uo pipefail
+          out="$(REPO=helmcode/this-repo-does-not-exist bash scripts/install.sh 2>&1)" || true
+          echo "$out"
+          grep -q "could not work out the latest version" <<<"$out" || {
+            echo "::error::the lookup failed without explaining itself" >&2
+            exit 1
+          }
+
+      # And the branch nobody had ever taken: a destination the user cannot
+      # write to, where install_bin falls back to sudo. On a runner both
+      # /usr/local/bin and the temp dir are writable, so the fallback would
+      # never fire on its own and "it installs fine" would say nothing about
+      # it. A root-owned directory forces it.
+      - name: Force the sudo fallback
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /opt/nan-sudo-test
+          sudo chmod 755 /opt/nan-sudo-test
+          sudo chown root /opt/nan-sudo-test
+
+          INSTALL_DIR=/opt/nan-sudo-test/bin bash scripts/install.sh 2>&1 | tee out.txt
+
+          # It has to have actually taken that branch, not quietly succeeded.
+          grep -q "retrying with sudo" out.txt || {
+            echo "::error::the sudo fallback never fired, so this proves nothing" >&2
+            exit 1
+          }
+          /opt/nan-sudo-test/bin/nan --version
+          test -x /opt/nan-sudo-test/bin/nan
