@@ -1400,3 +1400,100 @@ func TestTheMascotGivesWayOnAShortTerminal(t *testing.T) {
 		t.Error("the mascot never appears, even with room for it")
 	}
 }
+
+// ── the first run, as one sequence ───────────────────────────────────────────
+
+// Three keys a member had to know to press - s, then e, then c - with nothing
+// leading from one to the next. The panel asks for each in turn now.
+func TestAFreshMachineIsAskedToSignInImmediately(t *testing.T) {
+	m := setupModel(t, &session.Session{})
+
+	if cmd := m.resumeSetup(); cmd == nil {
+		t.Fatal("nothing happens when the panel opens with no session")
+	}
+	if m.loginStage != loginAskEmail {
+		t.Errorf("the panel opens on stage %v, want the email question", m.loginStage)
+	}
+}
+
+// Signed in already, but no key: that is the next thing missing, so that is
+// what it asks for.
+func TestASignedInMachineIsAskedForTheKey(t *testing.T) {
+	m := setupModel(t, &session.Session{Token: "t"})
+	m.lay = newLayout(90, 30)
+
+	m.resumeSetup()
+	if m.loginStage != loginOff {
+		t.Error("it asks for an account that is already there")
+	}
+	if !m.editingKey {
+		t.Error("the key field is not open")
+	}
+	if m.activeID() != tabSetup {
+		t.Error("the key field is open on a tab that does not show it")
+	}
+}
+
+// And a member who has everything is left alone. This is the one that would
+// annoy people most if it regressed.
+func TestAConfiguredMachineIsNotAskedForAnything(t *testing.T) {
+	m := setupModel(t, &session.Session{Token: "t", APIKey: testKey})
+
+	if cmd := m.resumeSetup(); cmd != nil {
+		t.Error("a configured member is asked to set something up again")
+	}
+	if m.loginStage != loginOff || m.editingKey {
+		t.Error("the panel opens into a setup step that is already done")
+	}
+}
+
+// Init cannot mutate the model - value receiver, returns only a Cmd - so it
+// asks Update instead. If that message ever stops arriving, nothing on a fresh
+// machine happens at all and the whole sequence is silently gone.
+func TestTheFirstRunQuestionIsActuallyAsked(t *testing.T) {
+	m := setupModel(t, &session.Session{})
+
+	cmd := m.Init()
+	if cmd == nil {
+		t.Fatal("Init does nothing")
+	}
+	updated, _ := m.Update(firstRunMsg{})
+	if updated.(model).loginStage != loginAskEmail {
+		t.Error("the first-run message does not start the sign-in")
+	}
+}
+
+// Signing in leads to the key without the member pressing anything.
+func TestSigningInLeadsStraightToTheKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HERMES_HOME", filepath.Join(home, "h"))
+
+	m := newModel(api.New(""), &session.Session{})
+	m.lay = newLayout(90, 30)
+	if err := session.Save(&session.Session{Token: "a-token"}); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, _ := m.Update(signedInMsg{nil})
+	after := updated.(model)
+	if !after.editingKey {
+		t.Error("after signing in the member is left to work out that `e` is next")
+	}
+}
+
+// And the key leads to the tools - named, not pressed: writing into someone's
+// opencode is a side effect that has to be asked for.
+func TestTheAcceptedKeyPointsAtTheToolsStep(t *testing.T) {
+	m := setupModel(t, &session.Session{Token: "t", APIKey: testKey})
+
+	updated, _ := m.Update(keyCheckedMsg{models: 7})
+	got := updated.(model).keyCheck
+	if !strings.Contains(got, "key accepted") {
+		t.Errorf("the check says %q", got)
+	}
+	if installedTools() > 0 && !strings.Contains(got, "press c") {
+		t.Errorf("the check says %q, which does not lead anywhere", got)
+	}
+}
