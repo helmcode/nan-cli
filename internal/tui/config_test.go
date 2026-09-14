@@ -857,3 +857,15 @@ func TestSetupShowsAKeyTheClusterRefused(t *testing.T) {
 		t.Error("a refused key is not reported in the Setup tab")
 	}
 }
+
+// The Home tab tells a member that `?` lists "every shortcut, including the
+// ones for Setup". It listed e and c and not space, which is the one that
+// decides which tools get written at all.
+func TestHelpListsTheKeysHomePromises(t *testing.T) {
+	out := renderHelp()
+	for _, want := range []string{"space", "e", "c"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the help screen does not mention %q", want)
+		}
+	}
+}

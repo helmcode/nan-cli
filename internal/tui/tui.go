@@ -317,9 +317,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.setupMsg = ""
 			}
 		case "c":
-			if !m.showHelp && m.activeID() == tabSetup && m.sess.APIKey != "" {
-				msg := configureTools(m.sess.APIKey, m.sess.EnabledTools)
-				m.setupMsg = msg
+			if !m.showHelp && m.activeID() == tabSetup {
+				// Pressing the key that configures everything and having
+				// nothing happen, with nothing said, is the worst of the
+				// three possible answers.
+				if m.sess.APIKey == "" {
+					m.setupMsg = "error: set your API key first — press e"
+				} else {
+					m.setupMsg = configureTools(m.sess.APIKey, m.sess.EnabledTools)
+				}
 			}
 		}
 	}
@@ -332,7 +338,9 @@ func (m *model) maybeLoad() tea.Cmd {
 	// waits: no spinner, no error state, nothing that stops a member pasting
 	// a key on a train.
 	if id == tabSetup {
-		if m.keyAsked {
+		// Nothing to ask on a machine that has not logged in: the call would
+		// come back 401 and be swallowed.
+		if m.keyAsked || m.sess.Token == "" {
 			return nil
 		}
 		m.keyAsked = true
@@ -2090,7 +2098,8 @@ func renderHelp() string {
 		{"↑/↓  k/j", "scroll"},
 		{"r", "refresh current tab"},
 		{"e", "edit API key (Setup tab)"},
-		{"c", "configure tools (Setup tab)"},
+		{"space", "tick or untick the tool under the cursor (Setup tab)"},
+		{"c", "configure the ticked tools (Setup tab)"},
 		{"?", "toggle this help"},
 		{"q / Esc", "quit"},
 	}
