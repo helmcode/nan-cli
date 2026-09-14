@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -422,7 +423,7 @@ func TestConfigureToolsWritesEveryEnabledTool(t *testing.T) {
 		}
 	}
 
-	msg, written := configureTools(testKey, nil)
+	msg, written, failed := configureTools(testKey, nil)
 	if !strings.Contains(msg, "5 added") {
 		t.Fatalf("configureTools said %q, want the five tools written", msg)
 	}
@@ -431,6 +432,9 @@ func TestConfigureToolsWritesEveryEnabledTool(t *testing.T) {
 	}
 	// The names come back so the tab can say how to use each one; a tool
 	// written but not named leaves a member with a config and no next step.
+	if len(failed) != 0 {
+		t.Errorf("tools failed on a clean run: %v", failed)
+	}
 	if len(written) != 5 {
 		t.Errorf("configureTools named %v, want all five it wrote", written)
 	}
@@ -458,7 +462,7 @@ func TestConfigureToolsWritesEveryEnabledTool(t *testing.T) {
 	}
 
 	// And unticking a tool takes only that one out.
-	msg, _ = configureTools(testKey, map[string]bool{"Pi": false})
+	msg, _, _ = configureTools(testKey, map[string]bool{"Pi": false})
 	if !strings.Contains(msg, "1 removed") {
 		t.Errorf("configureTools said %q, want Pi removed", msg)
 	}
@@ -1682,5 +1686,87 @@ func TestSigningOutIsAdvertisedWhereItIsLookedFor(t *testing.T) {
 	// And not offered to somebody who has no session to end.
 	if out := renderHome(newLayout(96, 40), false, false, moodNormal); strings.Contains(out, "sign out") {
 		t.Error("Home offers to sign out of a session that is not there")
+	}
+}
+
+// One tool failing used to read as the whole step failing: the message became
+// "error: <whatever the last one said>" and the configs that HAD been written
+// went unmentioned. Reported from a machine where Hermes would not configure,
+// which left the setup on its last screen with nothing to do but escape.
+func TestOneToolFailingDoesNotLoseTheOthers(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	hermesHomeDir := filepath.Join(home, "hermes")
+	t.Setenv("HERMES_HOME", hermesHomeDir)
+	if err := os.MkdirAll(hermesHomeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Hermes refuses; everything else is written as usual.
+	original := runHermesConfig
+	runHermesConfig = func(string, ...string) error {
+		return fmt.Errorf("hermes config set: exit status 1\nsomething it printed\nand more of it")
+	}
+	t.Cleanup(func() { runHermesConfig = original })
+
+	for _, p := range []string{
+		filepath.Join(home, ".factory", "settings.json"),
+		filepath.Join(home, ".config", "opencode", "opencode.json"),
+		filepath.Join(home, ".pi", "agent", "models.json"),
+		filepath.Join(home, ".codex", "config.toml"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	msg, written, failed := configureTools(testKey, nil)
+
+	if !strings.Contains(msg, "4 added") {
+		t.Errorf("the message is %q, and does not say what worked", msg)
+	}
+	if !strings.Contains(msg, "Hermes failed") {
+		t.Errorf("the message is %q, and does not name what did not", msg)
+	}
+	if len(written) != 4 {
+		t.Errorf("wrote %v, want the four that did not fail", written)
+	}
+	if len(failed) != 1 || failed[0].name != "Hermes" {
+		t.Fatalf("failures are %v, want just Hermes", failed)
+	}
+	// The summary takes one line of what a tool printed, not the paragraph.
+	if strings.ContainsAny(failed[0].firstLine(), "\r\n") {
+	}
+}
+
+// And the step finishes anyway. Holding somebody on the last screen of a setup
+// with no way on but escape is the thing that was reported.
+func TestAFailedToolDoesNotStrandTheSetup(t *testing.T) {
+	m := setupModel(t, &session.Session{Token: "t", APIKey: testKey})
+	m.lay = newLayout(96, 44)
+	m.wizard = wizardTools
+
+	updated, _ := m.Update(configuredMsg{
+		msg:     "4 added  ·  Hermes failed",
+		written: []string{"OpenCode"},
+		failed:  []toolFailure{{"Hermes", "hermes config set: exit status 1"}},
+	})
+	after := updated.(model)
+
+	if after.wizard != wizardDone {
+		t.Error("a failed tool holds the setup on its last step")
+	}
+	out := after.renderWizard(after.lay)
+	if !strings.Contains(out, "Hermes") {
+		t.Error("the screen does not say which tool failed")
+	}
+	if !strings.Contains(out, "The rest went in") {
+		t.Error("the screen does not say the others worked")
+	}
+	if !strings.Contains(out, "press c again") {
+		t.Error("the screen does not say what can be done about it")
 	}
 }

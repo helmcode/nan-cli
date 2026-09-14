@@ -131,6 +131,7 @@ var errNotSignedIn = errors.New("not signed in — press s")
 type configuredMsg struct {
 	msg     string
 	written []string
+	failed  []toolFailure
 }
 
 // Sent once, by Init, so the panel can pick up wherever the setup was left.
@@ -163,6 +164,7 @@ type model struct {
 	// Signing in, without leaving the panel. See startLogin.
 	configuring bool
 	configured  []string
+	failures    []toolFailure
 
 	// Set by the first press of `o`, cleared by anything else: signing out is
 	// not something to do to somebody on a stray keystroke.
@@ -312,11 +314,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case configuredMsg:
 		m.configuring = false
-		if m.wizard == wizardTools && !strings.HasPrefix(msg.msg, "error") {
-			m.wizard = wizardDone
-		}
 		m.setupMsg = msg.msg
 		m.configured = msg.written
+		m.failures = msg.failed
+		// The step is finished either way. One tool refusing to be configured
+		// is not a reason to hold somebody on the last screen of a setup with
+		// no way on but escape - which is exactly what it did, and what was
+		// reported. What failed is shown, and they can carry on.
+		if m.wizard == wizardTools {
+			m.wizard = wizardDone
+		}
 
 	case firstRunMsg:
 		return m, m.resumeSetup()
@@ -605,8 +612,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.setupMsg = ""
 				key, tools := m.sess.APIKey, m.sess.EnabledTools
 				return m, tea.Batch(m.spin.Tick, func() tea.Msg {
-					msg, written := configureTools(key, tools)
-					return configuredMsg{msg, written}
+					msg, written, failed := configureTools(key, tools)
+					return configuredMsg{msg, written, failed}
 				})
 			}
 		}
@@ -1779,7 +1786,23 @@ func installedTools() int {
 	return n
 }
 
-func configureTools(apiKey string, enabledTools map[string]bool) (string, []string) {
+// What went wrong for one tool, kept apart from the others so a failure in one
+// does not read as a failure in all of them.
+type toolFailure struct {
+	name   string
+	reason string
+}
+
+// firstLine of a reason, for a summary. A tool that is configured by running
+// it - Hermes - hands back whatever it printed, which can be a paragraph.
+func (f toolFailure) firstLine() string {
+	if i := strings.IndexAny(f.reason, "\r\n"); i >= 0 {
+		return strings.TrimSpace(f.reason[:i])
+	}
+	return strings.TrimSpace(f.reason)
+}
+
+func configureTools(apiKey string, enabledTools map[string]bool) (string, []string, []toolFailure) {
 	isEnabled := func(name string) bool {
 		if enabledTools == nil {
 			return true
@@ -1790,8 +1813,8 @@ func configureTools(apiKey string, enabledTools map[string]bool) (string, []stri
 		return true
 	}
 	tools := detectTools()
-	var lastErr error
 	var written []string
+	var failed []toolFailure
 	added, removed := 0, 0
 	for _, t := range tools {
 		if !t.installed {
@@ -1812,7 +1835,7 @@ func configureTools(apiKey string, enabledTools map[string]bool) (string, []stri
 				err = writeHermesConfig(filepath.Dir(t.configPath), apiKey)
 			}
 			if err != nil {
-				lastErr = err
+				failed = append(failed, toolFailure{t.name, err.Error()})
 			} else {
 				added++
 				written = append(written, t.name)
@@ -1832,15 +1855,17 @@ func configureTools(apiKey string, enabledTools map[string]bool) (string, []stri
 				err = removeHermesConfig(filepath.Dir(t.configPath))
 			}
 			if err != nil {
-				lastErr = err
+				failed = append(failed, toolFailure{t.name, err.Error()})
 			} else {
 				removed++
 			}
 		}
 	}
-	if lastErr != nil {
-		return "error: " + lastErr.Error(), written
-	}
+	// One tool failing used to throw away everything that worked: the message
+	// became "error: <whatever the last one said>" and the four configs that
+	// had just been written went unmentioned. A member with a broken Hermes
+	// was told the whole step had failed, and left on it with nothing to do
+	// but escape.
 	parts := []string{}
 	if added > 0 {
 		parts = append(parts, fmt.Sprintf("%d added", added))
@@ -1848,10 +1873,13 @@ func configureTools(apiKey string, enabledTools map[string]bool) (string, []stri
 	if removed > 0 {
 		parts = append(parts, fmt.Sprintf("%d removed", removed))
 	}
-	if len(parts) == 0 {
-		return "nothing to sync", written
+	for _, f := range failed {
+		parts = append(parts, f.name+" failed")
 	}
-	return strings.Join(parts, "  ·  "), written
+	if len(parts) == 0 {
+		return "nothing to sync", written, nil
+	}
+	return strings.Join(parts, "  ·  "), written, failed
 }
 
 func factoryCustomID(displayName string, index int) string {
@@ -2505,7 +2533,32 @@ func (m model) renderWizard(l layout) string {
 		} else if m.setupMsg != "" {
 			b.WriteString("\n" + m.wrapped(l, m.setupMsg) + "\n")
 		}
+		b.WriteString(m.renderFailures(l))
 	}
+	return b.String()
+}
+
+// What would not configure, and what to do about it.
+//
+// One tool failing used to read as the whole step failing, and left a member
+// on the last screen of a setup with nothing to do but press escape. The rest
+// of the tools were configured and nothing said so.
+func (m model) renderFailures(l layout) string {
+	if len(m.failures) == 0 {
+		return ""
+	}
+	bad := lipgloss.NewStyle().Foreground(cRed)
+	dim := lipgloss.NewStyle().Foreground(cDimGray)
+
+	var b strings.Builder
+	b.WriteString("\n")
+	for _, f := range m.failures {
+		b.WriteString(m.wrapped(l, "error: "+f.name+" — "+f.firstLine()) + "\n")
+	}
+	_ = bad
+	b.WriteString("\n" + l.indent + dim.Render(
+		"The rest went in. Fix that one and press c again, or carry on without it - "+
+			"its page on nan.builders has the manual steps.") + "\n")
 	return b.String()
 }
 
@@ -2701,6 +2754,8 @@ func (m model) renderSetup(l layout) string {
 		b.WriteString(l.indent + style.Render(m.setupMsg) + "\n")
 	}
 
+	b.WriteString(m.renderFailures(l))
+
 	// And now what. The answer used to be nowhere in the panel.
 	if len(m.configured) > 0 {
 		b.WriteString("\n" + l.indent + titleStyle.Render("Now open them") + "\n\n")
@@ -2745,7 +2800,7 @@ func (m model) renderSetup(l layout) string {
 
 // ── about renderer ───────────────────────────────────────────────────────────
 
-const Version = "0.1.17"
+const Version = "0.1.18"
 
 func renderAbout(l layout) string {
 	var b strings.Builder
