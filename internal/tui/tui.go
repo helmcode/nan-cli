@@ -978,6 +978,9 @@ func renderTabBar(active int, l layout) string {
 
 // ── profile renderer ──────────────────────────────────────────────────────────
 
+// renderProfile also carries the sign-out, because the account screen is where
+// somebody goes looking for it. It was only behind `?`, which is a place you
+// find something in if you already suspect it is there.
 func renderProfile(data map[string]any, l layout) string {
 	var b strings.Builder
 	kStyle := lipgloss.NewStyle().Foreground(cGray).Width(l.keyW)
@@ -991,6 +994,10 @@ func renderProfile(data map[string]any, l layout) string {
 		val := censor(k, fmt.Sprintf("%v", v))
 		b.WriteString(l.indent + kStyle.Render(humanKey(k)+":") + vStyle.Render(val) + "\n")
 	}
+
+	b.WriteString("\n" + l.indent +
+		lipgloss.NewStyle().Foreground(cCyan).Bold(true).Render("o") +
+		lipgloss.NewStyle().Foreground(cGray).Render("  sign out of this account, twice to confirm") + "\n")
 	return b.String()
 }
 
@@ -2726,7 +2733,11 @@ func (m model) renderSetup(l layout) string {
 	if m.sess.APIKey == "" {
 		b.WriteString(l.indent + dimStyle.Render("Set an API key first (e).") + "\n")
 	} else {
-		b.WriteString(l.indent + dimStyle.Render("↑/↓ navigate   space toggle   c configure selected") + "\n")
+		keys := "↑/↓ navigate   space toggle   c configure selected"
+		if m.sess.Token != "" {
+			keys += "   o sign out"
+		}
+		b.WriteString(l.indent + dimStyle.Render(keys) + "\n")
 	}
 
 	return b.String()
@@ -2734,7 +2745,7 @@ func (m model) renderSetup(l layout) string {
 
 // ── about renderer ───────────────────────────────────────────────────────────
 
-const Version = "0.1.16"
+const Version = "0.1.17"
 
 func renderAbout(l layout) string {
 	var b strings.Builder

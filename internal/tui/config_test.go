@@ -1653,3 +1653,34 @@ func TestSigningOutStartsTheSetupAgain(t *testing.T) {
 		t.Errorf("after signing out the panel is at %v, want the first step", out.wizard)
 	}
 }
+
+// Signing out was only behind `?`, which is a place you look for something if
+// you already suspect it is there. Reported as exactly that: "en ningún lado
+// aparece que pulsando o dos veces te deslogeas".
+func TestSigningOutIsAdvertisedWhereItIsLookedFor(t *testing.T) {
+	// The account screen, which is where a person goes for account things.
+	profile := renderProfile(map[string]any{"handle": "bperez"}, newLayout(90, 30))
+	if !strings.Contains(profile, "sign out") {
+		t.Error("the Profile tab does not offer to sign out")
+	}
+	if !strings.Contains(profile, "twice") {
+		t.Error("Profile does not say it takes two presses, which is the surprising half")
+	}
+
+	// The Setup tab footer, next to the other keys it lists.
+	m := setupModel(t, &session.Session{Token: "t", APIKey: testKey})
+	m.lay = newLayout(96, 40)
+	if out := m.renderSetup(m.lay); !strings.Contains(out, "o sign out") {
+		t.Error("the Setup tab lists its keys and leaves this one out")
+	}
+
+	// Home, where the keys are introduced.
+	if out := renderHome(newLayout(96, 40), true, true, moodNormal); !strings.Contains(out, "sign out") {
+		t.Error("Home lists the keys and leaves this one out")
+	}
+
+	// And not offered to somebody who has no session to end.
+	if out := renderHome(newLayout(96, 40), false, false, moodNormal); strings.Contains(out, "sign out") {
+		t.Error("Home offers to sign out of a session that is not there")
+	}
+}
