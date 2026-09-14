@@ -536,10 +536,15 @@ func TestCostsFooterBoxIsSquare(t *testing.T) {
 }
 
 func TestBannerFitsAndCarriesTheNames(t *testing.T) {
-	out := Banner("  ")
+	out := Banner("  ", moodNormal, true)
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	if len(lines) != len(wordmark) {
-		t.Fatalf("the banner is %d rows, the wordmark is %d", len(lines), len(wordmark))
+	if len(lines) != MascotHeight {
+		t.Fatalf("the banner is %d rows, the mascot is %d", len(lines), MascotHeight)
+	}
+	// Without it, the wordmark alone, which is what a short terminal gets.
+	plain := strings.Split(strings.TrimRight(Banner("  ", moodNormal, false), "\n"), "\n")
+	if len(plain) != len(wordmark) {
+		t.Errorf("the plain banner is %d rows, the wordmark is %d", len(plain), len(wordmark))
 	}
 	for i, line := range lines {
 		if !strings.HasPrefix(line, "  ") {
@@ -563,7 +568,7 @@ func TestAboutFallsBackToOneLineWhenNarrow(t *testing.T) {
 	if strings.Contains(renderAbout(newLayout(40, 24)), "█") {
 		t.Error("the banner is drawn at a width where it wraps")
 	}
-	if !strings.Contains(renderAbout(newLayout(80, 24)), "█") {
+	if !strings.Contains(renderAbout(newLayout(BannerWidthPlain+4, 24)), "█") {
 		t.Error("the banner is missing at a width that fits it")
 	}
 }
@@ -582,7 +587,7 @@ func TestHomeIsTheFirstTabAndNeedsNoNetwork(t *testing.T) {
 }
 
 func TestHomeSaysHowToMoveAround(t *testing.T) {
-	out := renderHome(newLayout(80, 24), true, true)
+	out := renderHome(newLayout(BannerWidthPlain+4, 24), true, true, moodNormal)
 	for _, want := range []string{"█", "welcome to", "←/→", "↑/↓", "refresh", "quit", "Setup"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the Home tab does not mention %q", want)
@@ -1074,7 +1079,7 @@ func TestModelsStillLoadsWithAKeyAndNoSession(t *testing.T) {
 // anywhere said to log in, and the command that does it is a subcommand you
 // have to already know exists.
 func TestHomeLeadsWithSigningInWhenThereIsNoSession(t *testing.T) {
-	out := renderHome(newLayout(90, 40), false, false)
+	out := renderHome(newLayout(90, 40), false, false, moodNormal)
 
 	for _, want := range []string{"Start here", "sign in", "stay empty until you sign in"} {
 		if !strings.Contains(out, want) {
@@ -1095,7 +1100,7 @@ func TestHomeLeadsWithSigningInWhenThereIsNoSession(t *testing.T) {
 // Signed in but with no key, the sign-in steps are done and the one that is
 // not is the key.
 func TestHomeMovesOnOnceSignedIn(t *testing.T) {
-	out := renderHome(newLayout(90, 40), true, false)
+	out := renderHome(newLayout(90, 40), true, false, moodNormal)
 
 	if !strings.Contains(out, "Start here") {
 		t.Fatal("Home stops guiding before the setup is finished")
@@ -1112,7 +1117,7 @@ func TestHomeMovesOnOnceSignedIn(t *testing.T) {
 
 // And once there is nothing left to do it gets out of the way.
 func TestHomeDropsTheGuideWhenSetupIsDone(t *testing.T) {
-	out := renderHome(newLayout(90, 40), true, true)
+	out := renderHome(newLayout(90, 40), true, true, moodNormal)
 
 	if strings.Contains(out, "Start here") {
 		t.Error("Home still shows the first-run steps to a configured member")
@@ -1288,5 +1293,110 @@ func TestEveryConfigurableToolHasANextStep(t *testing.T) {
 		if _, ok := nextStepFor[tool.name]; !ok {
 			t.Errorf("%s can be configured and has no next step", tool.name)
 		}
+	}
+}
+
+// ── the mascot ───────────────────────────────────────────────────────────────
+
+// Every face has to be the same grid, or the head jumps around as the panel
+// changes what it is doing.
+func TestEveryFaceIsTheSameHead(t *testing.T) {
+	for mood, grid := range mascotFaces {
+		if len(grid) != 21 {
+			t.Errorf("mood %d is %d pixels tall, want 21", mood, len(grid))
+		}
+		for y, row := range grid {
+			if len(row) != MascotWidth {
+				t.Errorf("mood %d row %d is %d wide, want %d", mood, y, len(row), MascotWidth)
+			}
+		}
+	}
+	// Every mood has to actually change the eyes, or a face that is supposed
+	// to say something says the same thing as the last one.
+	seen := map[string]mascotMood{}
+	for mood, grid := range mascotFaces {
+		eyes := ""
+		for _, row := range grid {
+			for _, c := range row {
+				if c == 'O' {
+					eyes += "O"
+				} else {
+					eyes += "."
+				}
+			}
+		}
+		if other, dup := seen[eyes]; dup {
+			t.Errorf("moods %d and %d draw the same eyes", other, mood)
+		}
+		seen[eyes] = mood
+	}
+
+	// And the silhouette itself has to be identical: only the eyes move.
+	base := mascotFaces[moodNormal]
+	for mood, grid := range mascotFaces {
+		for y := range grid {
+			for x := range grid[y] {
+				a, b := base[y][x], grid[y][x]
+				if (a == '#') != (b == '#') {
+					t.Fatalf("mood %d changes the body at %d,%d", mood, x, y)
+				}
+			}
+		}
+	}
+}
+
+// Two pixels to a cell, so 21 rows of pixels are 11 rows of terminal.
+func TestTheMascotIsHalfAsTallOnScreen(t *testing.T) {
+	art := renderMascot(moodNormal)
+	if len(art) != MascotHeight {
+		t.Errorf("the mascot draws %d rows, want %d", len(art), MascotHeight)
+	}
+	for i, row := range art {
+		if w := lipgloss.Width(row); w != MascotWidth {
+			t.Errorf("row %d measures %d columns, want %d", i, w, MascotWidth)
+		}
+	}
+}
+
+// The face answers "what is going on" without words, which is the question
+// this panel spent a long time failing to answer with them.
+func TestTheFaceFollowsWhatThePanelIsDoing(t *testing.T) {
+	base := func() model { return setupModel(t, &session.Session{Token: "t", APIKey: testKey}) }
+
+	m := setupModel(t, &session.Session{})
+	if got := m.mood(); got != moodAsleep {
+		t.Errorf("with no session the mascot is %v, want asleep", got)
+	}
+
+	m = base()
+	m.configuring = true
+	if got := m.mood(); got != moodThinking {
+		t.Errorf("while configuring the mascot is %v, want thinking", got)
+	}
+
+	m = base()
+	m.err = errNotSignedIn
+	if got := m.mood(); got != moodSad {
+		t.Errorf("on an error the mascot is %v, want sad", got)
+	}
+
+	m = base()
+	if got := m.mood(); got != moodHappy {
+		t.Errorf("all set, the mascot is %v, want happy", got)
+	}
+}
+
+// A landing screen that needs scrolling on a 24-row terminal has failed at the
+// one thing it does, and the mascot is the part that goes.
+func TestTheMascotGivesWayOnAShortTerminal(t *testing.T) {
+	wide := BannerWidth + 4
+	short := renderHome(newLayout(wide, 24), true, true, moodNormal)
+	if rows := len(strings.Split(strings.TrimRight(short, "\n"), "\n")); rows > 20 {
+		t.Errorf("Home is %d rows on a 24-row terminal, the viewport is 20", rows)
+	}
+
+	tall := renderHome(newLayout(wide, BannerRoom), true, true, moodNormal)
+	if len(strings.Split(tall, "\n")) <= len(strings.Split(short, "\n")) {
+		t.Error("the mascot never appears, even with room for it")
 	}
 }
