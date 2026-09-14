@@ -14,10 +14,20 @@ By default installs to `/usr/local/bin`. Override with `INSTALL_DIR`:
 INSTALL_DIR=~/.local/bin curl -fsSL https://nan.builders/install | bash
 ```
 
-On Windows, download `nan-cli_<version>_windows_amd64.zip` (or `arm64`) from
-the [latest release](https://github.com/helmcode/nan-cli/releases/latest),
-unzip it and put `nan.exe` somewhere on your `PATH`. The installer above is
-bash, so it is not the way in there.
+On Windows, from PowerShell:
+
+```powershell
+irm https://nan.builders/install.ps1 | iex
+```
+
+Same work: latest release, the `.zip` for your architecture, checksum verified,
+`nan.exe` into `%LOCALAPPDATA%\Programs
+an` and that directory added to your
+user `PATH`. Override with `-InstallDir`:
+
+```powershell
+& ([scriptblock]::Create((irm https://nan.builders/install.ps1))) -InstallDir "C:	ools"
+```
 
 ## Usage
 
