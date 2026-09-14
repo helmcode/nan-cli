@@ -206,6 +206,16 @@ func (m model) Init() tea.Cmd {
 
 func (m model) activeID() tabID { return tabDefs[m.active].id }
 
+// Where a tab sits in the bar, for the keys that jump straight to one.
+func tabIndex(id tabID) int {
+	for i, t := range tabDefs {
+		if t.id == id {
+			return i
+		}
+	}
+	return 0
+}
+
 // ── update ────────────────────────────────────────────────────────────────────
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -256,6 +266,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if sess, err := session.Load(); err == nil {
 			m.sess = sess
 		}
+		// And a client that carries it. The old one was built at start-up with
+		// whatever token existed then - none - so leaving it in place signed a
+		// member in and then answered every tab `unauthorized`, which reads
+		// exactly like the login having failed.
+		m.client = api.New(m.sess.Token)
 		m.cancelLogin()
 		m.cache = make(map[tabID]any)
 		m.err = nil
@@ -420,7 +435,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "e":
-			if !m.showHelp && m.activeID() == tabSetup {
+			// From any tab. It used to do nothing at all anywhere but Setup,
+			// which is the tab you have to already be on to know that - and
+			// Home tells everyone to press `e` from Home.
+			if !m.showHelp && m.loginStage == loginOff {
+				if m.activeID() != tabSetup {
+					m.active = tabIndex(tabSetup)
+					m.scrollY = 0
+				}
 				m.editingKey = true
 				m.keyInput.SetValue("")
 				m.keyInput.Focus()
@@ -2351,7 +2373,7 @@ func (m model) renderSetup(l layout) string {
 
 // ── about renderer ───────────────────────────────────────────────────────────
 
-const Version = "0.1.10"
+const Version = "0.1.11"
 
 func renderAbout(l layout) string {
 	var b strings.Builder

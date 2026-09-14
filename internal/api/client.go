@@ -21,6 +21,12 @@ func New(token string) *Client {
 	return &Client{token: token, http: &http.Client{}, baseURL: BaseURL}
 }
 
+// Token is what this client sends. The panel builds a client once, at start,
+// and has to build another when a member signs in from inside it - a client
+// still holding the token it started with sends an empty cookie and the
+// platform answers `unauthorized`, which reads exactly like a failed login.
+func (c *Client) Token() string { return c.token }
+
 func (c *Client) get(path string) ([]byte, error) {
 	base := c.baseURL
 	if base == "" {
