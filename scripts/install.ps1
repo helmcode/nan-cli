@@ -28,7 +28,7 @@
   irm https://nan.builders/install.ps1 | iex
 
 .EXAMPLE
-  & ([scriptblock]::Create((irm https://nan.builders/install.ps1))) -Version v0.1.3
+  & ([scriptblock]::Create((irm https://nan.builders/install.ps1))) -Version v0.1.4
 #>
 [CmdletBinding()]
 param(
@@ -79,7 +79,7 @@ function Get-LatestVersion {
   Write-Fail 'could not work out the latest version from the GitHub API'
   Write-Fail 'it rate limits unauthenticated requests, so this is usually temporary'
   Write-Fail 'wait a few minutes, or pick a version yourself:'
-  Write-Host  '    & ([scriptblock]::Create((irm https://nan.builders/install.ps1))) -Version v0.1.3'
+  Write-Host  '    & ([scriptblock]::Create((irm https://nan.builders/install.ps1))) -Version v0.1.4'
   Write-Fail "the releases are at https://github.com/$Repo/releases"
   exit 1
 }
@@ -131,7 +131,12 @@ New-Item -ItemType Directory -Path $tmp -Force | Out-Null
 try {
   Write-Step "downloading $archive..."
   try {
-    Invoke-WebRequest -Uri "$base/$archive" -OutFile (Join-Path $tmp $archive)
+    # -UseBasicParsing on every request here. Without it, PowerShell 5.1 hands
+    # the body to the Internet Explorer engine to build a DOM, and where that
+    # engine is absent or has never been through its first-run setup the call
+    # throws a NullReferenceException - which is what "Object reference not set
+    # to an instance of an object" means coming out of Invoke-WebRequest.
+    Invoke-WebRequest -Uri "$base/$archive" -OutFile (Join-Path $tmp $archive) -UseBasicParsing
   } catch {
     Write-Fail "could not download $archive"
     Write-Fail "check that $Version is a published release: https://github.com/$Repo/releases"
@@ -139,9 +144,15 @@ try {
   }
 
   Write-Step 'verifying checksum...'
-  $checksums = (Invoke-WebRequest -Uri "$base/checksums.txt").Content
+  # Downloaded to a file rather than read off the response. GitHub serves
+  # release assets as application/octet-stream, and for a non-text content type
+  # PowerShell hands back .Content as a Byte[], not a string: splitting that on
+  # a newline matches nothing and every archive reads as having no checksum.
+  # -OutFile takes the bytes as they come and Get-Content decodes them.
+  $checksumFile = Join-Path $tmp 'checksums.txt'
+  Invoke-WebRequest -Uri "$base/checksums.txt" -OutFile $checksumFile -UseBasicParsing
   $expected = $null
-  foreach ($line in $checksums -split "`n") {
+  foreach ($line in (Get-Content -Path $checksumFile)) {
     if ($line -match "^([0-9a-fA-F]{64})\s+\*?$([regex]::Escape($archive))\s*$") {
       $expected = $Matches[1]
     }

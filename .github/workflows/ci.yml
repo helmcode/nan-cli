@@ -54,9 +54,42 @@ jobs:
       - name: Cross-compile the release targets
         run: |
           set -euo pipefail
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
             os="${target%/*}"
             arch="${target#*/}"
             echo "building $os/$arch"
             CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -o /dev/null .
           done
+
+      # The installers are the one thing here that is not Go and is not tested
+      # by anything: they only run on a member's machine, and both times this
+      # one broke it broke at runtime with nothing to catch it. Neither rule
+      # below would have found the Byte[] bug - only running it did - but each
+      # is a mechanical rule for a mistake that already cost a release.
+      - name: Check the PowerShell installer
+        shell: pwsh
+        run: |
+          $script = Get-Content -Raw scripts/install.ps1
+
+          # Parse it, so a syntax error is not discovered by the first person
+          # to pipe it into iex.
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseInput($script, [ref]$null, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Host "::error::$($_.Message)" }
+            exit 1
+          }
+
+          # Every Invoke-WebRequest needs -UseBasicParsing. Without it,
+          # PowerShell 5.1 hands the body to the Internet Explorer engine, and
+          # where that is absent or has never run its first-run setup the call
+          # throws a NullReferenceException. It is the default from 6 up, so
+          # this never shows on a modern pwsh and always shows on Windows 10.
+          $lines = $script -split "`n"
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match 'Invoke-WebRequest' -and $lines[$i] -notmatch '-UseBasicParsing' -and $lines[$i] -notmatch '^\s*#') {
+              Write-Host "::error file=scripts/install.ps1,line=$($i + 1)::Invoke-WebRequest without -UseBasicParsing"
+              exit 1
+            }
+          }
+          Write-Host "installer parses, and every web request is basic-parsed"
