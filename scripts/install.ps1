@@ -47,17 +47,47 @@ function Write-Warn($message) { Write-Host "!  $message" -ForegroundColor Yellow
 function Write-Fail($message) { Write-Host "x  $message" -ForegroundColor Red }
 
 function Get-Arch {
-  # PROCESSOR_ARCHITECTURE reports the architecture of the *process* under
-  # WOW64, so a 32-bit PowerShell on an arm64 machine would claim x86. The OS
-  # architecture is the one that decides which binary runs.
-  $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
-  switch ($arch) {
-    'X64'   { return 'amd64' }
-    'Arm64' { return 'arm64' }
-    default {
-      throw "unsupported architecture: $arch`nthe releases carry amd64 and arm64: https://github.com/$Repo/releases"
-    }
+  # Two sources, because the better one is not always reachable.
+  #
+  # RuntimeInformation.OSArchitecture is the accurate answer: it reports the
+  # OS, and the OS is what decides which binary runs. But reaching for an
+  # arbitrary .NET type is exactly what ConstrainedLanguage mode blocks, which
+  # is the normal state of a machine under an AppLocker or WDAC policy, and the
+  # type does not exist at all before .NET Framework 4.7.1. In either case this
+  # used to leave $arch empty and report the machine as unsupported - a
+  # dead end over something that was never about the architecture.
+  $osArch = $null
+  try {
+    $osArch = "$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)"
+  } catch {
+    $osArch = $null
   }
+
+  # The environment answers the same question without touching .NET.
+  # PROCESSOR_ARCHITEW6432 is set only inside a 32-bit process on a 64-bit OS
+  # and carries the real OS architecture; PROCESSOR_ARCHITECTURE carries the
+  # process one. Read in that order they give the OS answer either way, which
+  # is why a 32-bit PowerShell on an arm64 machine does not end up asking for
+  # an x86 build that does not exist.
+  if (-not $osArch) {
+    $osArch = $env:PROCESSOR_ARCHITEW6432
+    if (-not $osArch) { $osArch = $env:PROCESSOR_ARCHITECTURE }
+  }
+
+  # -Regex over an explicitly stringified value, rather than a switch on the
+  # enum: it takes both spellings of each architecture and does not depend on
+  # how a given PowerShell renders an enum it may not have been able to load.
+  switch -Regex ("$osArch".Trim().ToUpperInvariant()) {
+    '^(X64|AMD64)$'    { return 'amd64' }
+    '^(ARM64|AARCH64)$' { return 'arm64' }
+  }
+
+  throw @"
+unsupported architecture: '$osArch'
+the releases carry amd64 and arm64: https://github.com/$Repo/releases
+if that value looks wrong for your machine, it is a bug in this installer:
+https://github.com/$Repo/issues
+"@
 }
 
 function Get-LatestVersion {
@@ -78,7 +108,7 @@ function Get-LatestVersion {
 could not work out the latest version from the GitHub API
 it rate limits unauthenticated requests, so this is usually temporary
 wait a few minutes, or pick a version yourself:
-    & ([scriptblock]::Create((irm https://nan.builders/install.ps1))) -Version v0.1.5
+    & ([scriptblock]::Create((irm https://nan.builders/install.ps1))) -Version v0.1.6
 the releases are at https://github.com/$Repo/releases
 "@
 }
