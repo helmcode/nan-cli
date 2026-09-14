@@ -92,4 +92,24 @@ jobs:
               exit 1
             }
           }
-          Write-Host "installer parses, and every web request is basic-parsed"
+          # No `exit` anywhere except the one guarded by MyInvocation.
+          #
+          # This script is published to be run as `irm ... | iex`, and `iex`
+          # runs what it is given in the CURRENT session: an `exit` there does
+          # not end a script, it ends the session. In a terminal that means the
+          # tab closes instantly, taking with it the error message printed one
+          # line earlier. Every failure path used to do exactly that, so the
+          # careful text about rate limits and checksums was written into a
+          # window that was already gone.
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -notmatch '^\s*exit\b') { continue }
+            $guarded = $false
+            for ($back = [Math]::Max(0, $i - 3); $back -lt $i; $back++) {
+              if ($lines[$back] -match 'MyInvocation\.MyCommand\.Path') { $guarded = $true }
+            }
+            if (-not $guarded) {
+              Write-Host "::error file=scripts/install.ps1,line=$($i + 1)::exit outside the MyInvocation guard closes the session when piped into iex"
+              exit 1
+            }
+          }
+          Write-Host "installer parses, every web request is basic-parsed, no unguarded exit"
