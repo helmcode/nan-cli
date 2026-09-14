@@ -193,16 +193,16 @@ func renderNextStep(l layout, loggedIn, hasKey bool) string {
 	var b strings.Builder
 	b.WriteString(l.indent + section.Render("Start here") + "\n\n")
 
+	// Every one of these is a key to press right here. The list used to open
+	// with "q, quit, so you have your shell back", because signing in meant
+	// leaving the panel for a subcommand and two prompts on stdin - which is
+	// where people got stuck, and the reason the panel signs you in itself now.
 	steps := []struct {
 		what, why string
 		done      bool
 	}{
-		// Quitting comes first because it is not a key inside the panel: the
-		// next step is a command in the shell, and you cannot run one from here.
-		{"q", "quit, so you have your shell back", loggedIn},
-		{"nan auth login", "sign in - a link goes to your email", loggedIn},
-		{"nan", "come back, and press right for Setup", loggedIn},
-		{"e", "paste your API key in Setup", hasKey},
+		{"s", "sign in - a link goes to your email", loggedIn},
+		{"e", "paste your API key, in Setup", hasKey},
 		{"space, then c", "pick your tools and apply", false},
 	}
 

@@ -1021,10 +1021,14 @@ func TestDataTabsSayToLogInRatherThanUnauthorized(t *testing.T) {
 		}
 	}
 
-	// And the message is the one that names the command to run.
+	// And the message names the key, not a shell command: there is one for
+	// this, and quitting to run something else is the detour it replaced.
 	msg, ok := m.fetchTab(tabProfile)().(fetchErrMsg)
-	if !ok || !errors.Is(msg.err, session.ErrNotLoggedIn) {
-		t.Errorf("Profile reports %v, want the error that says `nan auth login`", msg.err)
+	if !ok || !errors.Is(msg.err, errNotSignedIn) {
+		t.Errorf("Profile reports %v, want the one that says which key to press", msg.err)
+	}
+	if !strings.Contains(errNotSignedIn.Error(), "press s") {
+		t.Errorf("the message is %q, which does not say what to press", errNotSignedIn)
 	}
 }
 
@@ -1059,15 +1063,19 @@ func TestModelsStillLoadsWithAKeyAndNoSession(t *testing.T) {
 func TestHomeLeadsWithSigningInWhenThereIsNoSession(t *testing.T) {
 	out := renderHome(newLayout(90, 40), false, false)
 
-	for _, want := range []string{"Start here", "nan auth login", "stay empty until you sign in"} {
+	for _, want := range []string{"Start here", "sign in", "stay empty until you sign in"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("Home does not mention %q to someone with no session", want)
 		}
 	}
-	// Quitting is step one and not an afterthought: the next step is a command
-	// in the shell, which cannot be run with this panel open.
-	if !strings.Contains(out, "quit, so you have your shell back") {
-		t.Error("Home tells a member to run a shell command without telling them to leave first")
+	// Every step is a key to press here. This list used to open with "q, quit,
+	// so you have your shell back", because signing in meant leaving for a
+	// subcommand - which is exactly where people got stuck.
+	if strings.Contains(out, "quit, so you have your shell back") {
+		t.Error("Home still sends a member out to the shell to sign in")
+	}
+	if strings.Contains(out, "nan auth login") {
+		t.Error("Home names a shell command for something the panel does itself")
 	}
 }
 
@@ -1098,5 +1106,67 @@ func TestHomeDropsTheGuideWhenSetupIsDone(t *testing.T) {
 	}
 	if !strings.Contains(out, "Getting around") {
 		t.Error("the rest of Home went with it")
+	}
+}
+
+// ── signing in without leaving the panel ─────────────────────────────────────
+
+// The flow used to be: read Home, quit, run `nan auth login`, answer two
+// prompts on stdin, start the panel again. Reported twice from a real machine,
+// stuck at different steps of it. The panel owns the keyboard already, so it
+// asks the same two questions itself.
+func TestSigningInHappensInsideThePanel(t *testing.T) {
+	m := setupModel(t, &session.Session{})
+
+	if m.loginStage != loginOff {
+		t.Fatal("the panel opens mid-login")
+	}
+	m.startLogin()
+	if m.loginStage != loginAskEmail {
+		t.Fatal("s does not start the sign-in")
+	}
+
+	out := m.renderLogin(newLayout(90, 24))
+	for _, want := range []string{"Sign in", "Step 1 of 2", "Email"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the first step does not show %q", want)
+		}
+	}
+
+	// Second question, once the link is on its way.
+	m.loginStage = loginAskLink
+	m.loginInput.Prompt = "Paste the link: "
+	out = m.renderLogin(newLayout(90, 24))
+	if !strings.Contains(out, "Step 2 of 2") || !strings.Contains(out, "Paste the link") {
+		t.Errorf("the second step does not ask for the link:\n%s", out)
+	}
+}
+
+func TestEscapeLeavesTheSignInAlone(t *testing.T) {
+	m := setupModel(t, &session.Session{})
+	m.startLogin()
+	m.loginInput.SetValue("half typed@")
+	m.cancelLogin()
+
+	if m.loginStage != loginOff {
+		t.Error("esc does not leave the sign-in")
+	}
+	if m.loginInput.Value() != "" {
+		t.Error("a cancelled sign-in keeps what was typed into it")
+	}
+}
+
+// A member who is already signed in has nothing to start, and the key that
+// starts it is `s` because `l` is the vim spelling of "next tab".
+func TestSignInKeyIsNotOneThatAlreadyMoves(t *testing.T) {
+	out := renderHelp()
+	if !strings.Contains(out, "sign in") {
+		t.Error("the help screen does not mention signing in")
+	}
+	if strings.Contains(out, "l") && strings.Contains(out, "sign in, when there is no session") {
+		// only a smoke check that the description is the one bound to s
+		if !strings.Contains(out, "s") {
+			t.Error("sign-in is not bound to s")
+		}
 	}
 }

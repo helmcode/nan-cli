@@ -108,7 +108,7 @@ function Get-LatestVersion {
 could not work out the latest version from the GitHub API
 it rate limits unauthenticated requests, so this is usually temporary
 wait a few minutes, or pick a version yourself:
-    & ([scriptblock]::Create((irm https://nan.builders/install.ps1))) -Version v0.1.8
+    & ([scriptblock]::Create((irm https://nan.builders/install.ps1))) -Version v0.1.9
 the releases are at https://github.com/$Repo/releases
 "@
 }
@@ -228,8 +228,7 @@ function Install-NanCli {
       # each new tab the environment it started with, PATH included.
       & $next 'Restart your terminal' 'close it completely and open it again'
     }
-    & $next 'nan auth login' 'sign in - a link goes to your email'
-    & $next 'nan' 'open the panel'
+    & $next 'nan' 'open the panel - it signs you in from there'
     Write-Host ''
     if ($pathAdded) {
       Write-Warn "$InstallDir was added to your PATH, which is why the restart matters"

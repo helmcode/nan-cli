@@ -17,6 +17,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/nxssie/nan-cli/internal/api"
+	"github.com/nxssie/nan-cli/internal/auth"
 	catalog "github.com/nxssie/nan-cli/internal/models"
 	"github.com/nxssie/nan-cli/internal/session"
 )
@@ -122,6 +123,14 @@ type keyCheckedMsg struct {
 	err    error
 }
 
+// What an unauthenticated tab says. Not session.ErrNotLoggedIn, which names
+// the shell command: inside the panel there is a key for this, and telling
+// someone to quit and run something is the detour this replaced.
+var errNotSignedIn = errors.New("not signed in — press s")
+
+type linkSentMsg struct{ err error }
+type signedInMsg struct{ err error }
+
 // ── model ─────────────────────────────────────────────────────────────────────
 
 type model struct {
@@ -142,7 +151,24 @@ type model struct {
 	keyStatus   *api.KeyStatus
 	keyAsked    bool
 	keyCheck    string
+
+	// Signing in, without leaving the panel. See startLogin.
+	loginStage loginStage
+	loginInput textinput.Model
+	loginEmail string
+	loginMsg   string
+	loginBusy  bool
 }
+
+// Where a member is in the sign-in flow. It is two questions - an address and
+// the link that arrives at it - so it is two stages and not a wizard.
+type loginStage int
+
+const (
+	loginOff loginStage = iota
+	loginAskEmail
+	loginAskLink
+)
 
 func newModel(client *api.Client, sess *session.Session) model {
 	sp := spinner.New()
@@ -156,13 +182,20 @@ func newModel(client *api.Client, sess *session.Session) model {
 	ti.TextStyle = lipgloss.NewStyle().Foreground(cText)
 	ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(cDimGray)
 
+	li := textinput.New()
+	li.CharLimit = 2048 // a sign-in link is long
+	li.PromptStyle = lipgloss.NewStyle().Foreground(cCyan)
+	li.TextStyle = lipgloss.NewStyle().Foreground(cText)
+	li.PlaceholderStyle = lipgloss.NewStyle().Foreground(cDimGray)
+
 	return model{
-		client:   client,
-		sess:     sess,
-		cache:    make(map[tabID]any),
-		spin:     sp,
-		lay:      newLayout(80, 24),
-		keyInput: ti,
+		client:     client,
+		sess:       sess,
+		loginInput: li,
+		cache:      make(map[tabID]any),
+		spin:       sp,
+		lay:        newLayout(80, 24),
+		keyInput:   ti,
 	}
 }
 
@@ -196,6 +229,39 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.err = msg.err
 
+	case linkSentMsg:
+		m.loginBusy = false
+		if msg.err != nil {
+			m.loginMsg = "error: " + msg.err.Error()
+			m.loginStage = loginAskEmail
+			return m, m.loginInput.Focus()
+		}
+		m.loginStage = loginAskLink
+		m.loginMsg = "a link is on its way to " + m.loginEmail +
+			" — copy it out of the email without opening it, the link works once"
+		m.loginInput.SetValue("")
+		m.loginInput.Placeholder = "https://nan.builders/...?token=..."
+		m.loginInput.Prompt = "Paste the link: "
+		return m, m.loginInput.Focus()
+
+	case signedInMsg:
+		m.loginBusy = false
+		if msg.err != nil {
+			m.loginMsg = "error: " + msg.err.Error()
+			return m, m.loginInput.Focus()
+		}
+		// Reload the session so the token is the one just written, and drop
+		// the cached tabs: they are holding the `not logged in` they answered
+		// a moment ago.
+		if sess, err := session.Load(); err == nil {
+			m.sess = sess
+		}
+		m.cancelLogin()
+		m.cache = make(map[tabID]any)
+		m.err = nil
+		m.keyAsked = false
+		return m, m.maybeLoad()
+
 	case keyStatusMsg:
 		m.keyStatus = msg.status
 
@@ -209,6 +275,41 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		// The sign-in input takes every key while it is up, the same way the
+		// API key input does below it.
+		if m.loginStage != loginOff {
+			switch msg.String() {
+			case "enter":
+				if m.loginBusy {
+					return m, nil
+				}
+				value := strings.TrimSpace(m.loginInput.Value())
+				if value == "" {
+					return m, nil
+				}
+				m.loginBusy = true
+				if m.loginStage == loginAskEmail {
+					if !strings.Contains(value, "@") {
+						m.loginBusy = false
+						m.loginMsg = "error: that is not an email address"
+						return m, nil
+					}
+					m.loginEmail = value
+					m.loginMsg = "sending a link to " + value + "…"
+					return m, sendLink(value)
+				}
+				m.loginMsg = "signing in…"
+				return m, signIn(value)
+			case "esc":
+				m.cancelLogin()
+				return m, nil
+			default:
+				var cmd tea.Cmd
+				m.loginInput, cmd = m.loginInput.Update(msg)
+				return m, cmd
+			}
+		}
+
 		// When the API key input is active, route all keys to it
 		if m.editingKey {
 			switch msg.String() {
@@ -310,6 +411,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.scrollY = 0
 				return m, m.maybeLoad()
 			}
+		// `s` and not `l`: l is already the vim spelling of "next tab".
+		case "s":
+			// Any tab, because the one a member is looking at when this is
+			// needed is whichever they walked into and got told to sign in.
+			if !m.showHelp && m.sess.Token == "" {
+				return m, m.startLogin()
+			}
+
 		case "e":
 			if !m.showHelp && m.activeID() == tabSetup {
 				m.editingKey = true
@@ -371,6 +480,61 @@ func (m *model) maybeLoad() tea.Cmd {
 // itself: the platform hands that over once, at creation, and will not
 // repeat it - so the Setup tab cannot fill the field in for a member, only
 // tell them there is one to go and copy.
+// Signing in from inside the panel.
+//
+// The flow used to be: read Home, quit the panel, run `nan auth login`, answer
+// two prompts, start the panel again. Every one of those steps is somewhere to
+// get stuck, and the prompts are the worst of them - they are a bare
+// fmt.Print on stdin, and a terminal that renders a command as a block, or
+// eats the Enter that would answer them, leaves a member with no way forward
+// that reading the screen would show.
+//
+// The panel already owns the keyboard and already has a text input for the API
+// key. So it asks the same two questions here, where the keystrokes certainly
+// arrive, and the member never leaves the thing they just opened.
+func (m *model) startLogin() tea.Cmd {
+	m.loginStage = loginAskEmail
+	m.loginMsg = ""
+	m.loginInput.SetValue("")
+	m.loginInput.Placeholder = "you@example.com"
+	m.loginInput.Prompt = "Email: "
+	return m.loginInput.Focus()
+}
+
+func (m *model) cancelLogin() {
+	m.loginStage = loginOff
+	m.loginBusy = false
+	m.loginInput.Blur()
+	m.loginInput.SetValue("")
+	m.loginMsg = ""
+}
+
+func sendLink(email string) tea.Cmd {
+	return func() tea.Msg { return linkSentMsg{auth.RequestSignInLink(email)} }
+}
+
+func signIn(pasted string) tea.Cmd {
+	return func() tea.Msg {
+		token, err := auth.TokenFromLink(strings.TrimSpace(pasted))
+		if err != nil {
+			return signedInMsg{err}
+		}
+		sessionToken, err := auth.ExchangeToken(token)
+		if err != nil {
+			return signedInMsg{err}
+		}
+		current, err := session.Load()
+		if err != nil {
+			current = &session.Session{}
+		}
+		current.Token = sessionToken
+		if err := session.Save(current); err != nil {
+			return signedInMsg{err}
+		}
+		return signedInMsg{nil}
+	}
+}
+
 func (m model) fetchKeyStatus() tea.Cmd {
 	client := m.client
 	return func() tea.Msg {
@@ -424,7 +588,7 @@ func (m model) fetchTab(id tabID) tea.Cmd {
 	needsLogin := m.needsLogin(id)
 	return func() tea.Msg {
 		if needsLogin {
-			return fetchErrMsg{session.ErrNotLoggedIn}
+			return fetchErrMsg{errNotSignedIn}
 		}
 		switch id {
 		case tabProfile:
@@ -484,6 +648,18 @@ func (m model) View() string {
 	contentH := l.h - 4
 	if contentH < 1 {
 		contentH = 1
+	}
+
+	// Drawn over whatever tab is showing, because `s` works from all of them.
+	if m.loginStage != loginOff {
+		body := strings.Split(strings.TrimRight(m.renderLogin(l), "\n"), "\n")
+		for len(body) < contentH {
+			body = append(body, "")
+		}
+		b.WriteString(strings.Join(body[:contentH], "\n"))
+		b.WriteString("\n" + lipgloss.NewStyle().Foreground(cGray).
+			Render(l.indent+"enter to continue   esc to cancel"))
+		return b.String()
 	}
 
 	var content string
@@ -2012,6 +2188,42 @@ func removeOpencodeConfig(cfgPath string) error {
 	return os.WriteFile(cfgPath, out, 0o600)
 }
 
+// The sign-in questions, drawn where the tab content would be.
+func (m model) renderLogin(l layout) string {
+	title := lipgloss.NewStyle().Bold(true).Foreground(cWhite)
+	dim := lipgloss.NewStyle().Foreground(cGray)
+	errStyle := lipgloss.NewStyle().Foreground(cRed)
+	ok := lipgloss.NewStyle().Foreground(cCyan)
+
+	var b strings.Builder
+	b.WriteString(l.indent + title.Render("Sign in") + "\n\n")
+
+	step := "Step 1 of 2 — where should the link go?"
+	if m.loginStage == loginAskLink {
+		step = "Step 2 of 2 — the link from the email"
+	}
+	b.WriteString(l.indent + dim.Render(step) + "\n\n")
+
+	b.WriteString(l.indent + m.loginInput.View() + "\n")
+
+	if m.loginMsg != "" {
+		style := ok
+		if strings.HasPrefix(m.loginMsg, "error") {
+			style = errStyle
+		}
+		// A sign-in link is longer than any terminal, so this wraps rather
+		// than running off the side and taking the rest of the line with it.
+		wrapped := lipgloss.NewStyle().Width(l.w - lipgloss.Width(l.indent) - 1).
+			Render(style.Render(m.loginMsg))
+		b.WriteString("\n" + indentBlock(wrapped, l.indent) + "\n")
+	}
+
+	if m.loginStage == loginAskLink {
+		b.WriteString("\n" + l.indent + dim.Render("Nothing arrived? esc, then s to start again.") + "\n")
+	}
+	return b.String()
+}
+
 func (m model) renderSetup(l layout) string {
 	var b strings.Builder
 
@@ -2139,7 +2351,7 @@ func (m model) renderSetup(l layout) string {
 
 // ── about renderer ───────────────────────────────────────────────────────────
 
-const Version = "0.1.8"
+const Version = "0.1.9"
 
 func renderAbout(l layout) string {
 	var b strings.Builder
@@ -2190,6 +2402,7 @@ func renderHelp() string {
 		{"←/→  h/l  Tab", "switch tabs"},
 		{"↑/↓  k/j", "scroll"},
 		{"r", "refresh current tab"},
+		{"s", "sign in, when there is no session"},
 		{"e", "edit API key (Setup tab)"},
 		{"space", "tick or untick the tool under the cursor (Setup tab)"},
 		{"c", "configure the ticked tools (Setup tab)"},
