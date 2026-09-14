@@ -36,8 +36,18 @@ param(
   [string]$InstallDir = $env:NAN_INSTALL_DIR
 )
 
-$ErrorActionPreference = 'Stop'
-$ProgressPreference = 'SilentlyContinue'  # Write-Progress is slow over a pipe
+# The preferences below are set INSIDE the function, not here.
+#
+# `iex` runs this in the caller's session, so an assignment at this level is an
+# assignment to their shell, for the rest of its life. $ErrorActionPreference =
+# 'Stop' left behind that way turns every later non-terminating error in that
+# session into a terminating one - including inside the `prompt` function a
+# terminal like Warp installs to know where a command begins and ends. When
+# that throws, PowerShell falls back to its built-in `PS>` and the terminal
+# loses track of the session: the prompt is there and nothing typed at it does
+# anything. Which is exactly what was reported, twice.
+#
+# Inside a function the same assignment is local and goes away with the call.
 
 $Repo = 'helmcode/nan-cli'
 
@@ -108,7 +118,7 @@ function Get-LatestVersion {
 could not work out the latest version from the GitHub API
 it rate limits unauthenticated requests, so this is usually temporary
 wait a few minutes, or pick a version yourself:
-    & ([scriptblock]::Create((irm https://nan.builders/install.ps1))) -Version v0.1.9
+    & ([scriptblock]::Create((irm https://nan.builders/install.ps1))) -Version v0.1.10
 the releases are at https://github.com/$Repo/releases
 "@
 }
@@ -139,6 +149,10 @@ function Add-ToUserPath($dir) {
 
 function Install-NanCli {
   param([string]$Version, [string]$InstallDir)
+
+  # Local to this call. See the note where these used to live.
+  $ErrorActionPreference = 'Stop'
+  $ProgressPreference = 'SilentlyContinue'  # Write-Progress is slow over a pipe
 
   $arch = Get-Arch
   if (-not $Version) {
