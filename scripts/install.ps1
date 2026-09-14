@@ -108,7 +108,7 @@ function Get-LatestVersion {
 could not work out the latest version from the GitHub API
 it rate limits unauthenticated requests, so this is usually temporary
 wait a few minutes, or pick a version yourself:
-    & ([scriptblock]::Create((irm https://nan.builders/install.ps1))) -Version v0.1.6
+    & ([scriptblock]::Create((irm https://nan.builders/install.ps1))) -Version v0.1.7
 the releases are at https://github.com/$Repo/releases
 "@
 }
@@ -204,12 +204,36 @@ function Install-NanCli {
 
     Write-Done "installed $Version to $(Join-Path $InstallDir 'nan.exe')"
 
-    if (Add-ToUserPath $InstallDir) {
-      Write-Warn "$InstallDir was added to your PATH"
-      Write-Warn 'already-open terminals will not see it until they are restarted'
-    }
+    $pathAdded = Add-ToUserPath $InstallDir
+
+    # Numbered, because "Run nan to get started" was true and not enough: it
+    # was printed under a warning about restarting, from a shell that could not
+    # find `nan` yet, to someone who then had to work out that signing in is a
+    # subcommand nothing had mentioned. Three things have to happen in order,
+    # so they are listed in order.
     Write-Host ''
-    Write-Host 'Run ' -NoNewline; Write-Host 'nan' -ForegroundColor Cyan -NoNewline; Write-Host ' to get started.'
+    Write-Host 'Next:' -ForegroundColor White
+    Write-Host ''
+    $step = 0
+    $next = {
+      param($what, $why)
+      $script:step++
+      Write-Host ("  {0}. " -f $script:step) -NoNewline
+      Write-Host $what.PadRight(24) -ForegroundColor Cyan -NoNewline
+      Write-Host $why -ForegroundColor DarkGray
+    }
+    if ($pathAdded) {
+      # Not "open a new tab": a terminal that keeps one process alive for all
+      # of its tabs - Warp, Windows Terminal with a running profile - hands
+      # each new tab the environment it started with, PATH included.
+      & $next 'Restart your terminal' 'close it completely and open it again'
+    }
+    & $next 'nan auth login' 'sign in - a link goes to your email'
+    & $next 'nan' 'open the panel'
+    Write-Host ''
+    if ($pathAdded) {
+      Write-Warn "$InstallDir was added to your PATH, which is why the restart matters"
+    }
   } finally {
     Remove-Item -Path $tmp -Recurse -Force -ErrorAction SilentlyContinue
   }

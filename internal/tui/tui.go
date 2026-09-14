@@ -397,10 +397,35 @@ func checkKey(apiKey string) tea.Cmd {
 	}
 }
 
+// Whether this tab has nothing to ask for until the member logs in.
+//
+// Every tab below Home asks the platform for something, and the platform
+// answers a request with no session `unauthorized`. That word reached the
+// screen verbatim: a fresh install drew "unauthorized" over three of its six
+// tabs, which says what the server decided and not one word about what to do
+// about it. Reported from a real first run on Windows.
+//
+// The Models tab is the exception. An API key opens /v1/models on its own, so
+// a member who pasted a key into Setup and never logged in still gets that
+// one - which is the point of Setup working without a session at all.
+func (m model) needsLogin(id tabID) bool {
+	if m.sess.Token != "" {
+		return false
+	}
+	if id == tabModels && m.sess.APIKey != "" {
+		return false
+	}
+	return id != tabHome && id != tabAbout && id != tabSetup
+}
+
 func (m model) fetchTab(id tabID) tea.Cmd {
 	client := m.client
 	apiKey := m.sess.APIKey
+	needsLogin := m.needsLogin(id)
 	return func() tea.Msg {
+		if needsLogin {
+			return fetchErrMsg{session.ErrNotLoggedIn}
+		}
 		switch id {
 		case tabProfile:
 			data, err := client.GetMe()
@@ -474,7 +499,7 @@ func (m model) View() string {
 				content = renderCosts(usageData.(map[string]any), l)
 			}
 		case tabHome:
-			content = renderHome(l)
+			content = renderHome(l, m.sess.Token != "", m.sess.APIKey != "")
 		case tabAbout:
 			content = renderAbout(l)
 		case tabSetup:
@@ -2114,7 +2139,7 @@ func (m model) renderSetup(l layout) string {
 
 // ── about renderer ───────────────────────────────────────────────────────────
 
-const Version = "0.1.6"
+const Version = "0.1.7"
 
 func renderAbout(l layout) string {
 	var b strings.Builder
