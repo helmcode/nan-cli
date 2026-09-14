@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="helmcode/nan-cli"
+# Overridable so a fork can install its own build, and so the failure paths
+# below can be exercised against a repo that is not there.
+REPO="${REPO:-helmcode/nan-cli}"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 VERSION="${VERSION:-}"
 
@@ -47,7 +49,19 @@ detect_os() {
 }
 
 get_latest_version() {
-  curl -sL "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | cut -d'"' -f4
+  # A token if one is around. The unauthenticated API allows 60 requests an
+  # hour per IP, which anyone behind a shared address - an office, a CI runner,
+  # a phone tether - can be on the wrong side of through no fault of their own.
+  local auth=()
+  local token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+  if [ -n "$token" ]; then
+    auth=(-H "Authorization: Bearer $token")
+  fi
+  # `|| true` on the pipeline, because the caller decides what an empty answer
+  # means. Without it `set -euo pipefail` kills the script where grep finds no
+  # tag_name - which is exactly the rate-limited case - and the careful message
+  # below never runs. It was written, and it was unreachable.
+  curl -sL "${auth[@]}" "https://api.github.com/repos/$REPO/releases/latest"     | grep '"tag_name"' | cut -d'"' -f4 || true
 }
 
 # An unauthenticated GitHub API is rate limited per IP, so this call can come
@@ -116,7 +130,7 @@ main() {
 
   if [ -z "$VERSION" ]; then
     info "fetching latest release..."
-    version="$(get_latest_version)"
+    version="$(get_latest_version || true)"
     require_version "$version"
   else
     version="$VERSION"

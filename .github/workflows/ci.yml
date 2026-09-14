@@ -204,6 +204,12 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
 
+    # The unauthenticated GitHub API allows 60 requests an hour per IP, and
+    # hosted runners share addresses: without a token this job fails on the
+    # version lookup at random, which is a flake and not a finding.
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -230,6 +236,23 @@ jobs:
           bash scripts/install.sh
           command -v nan
           nan --version
+
+      # The version lookup failing has to SAY so. It did not: the pipeline runs
+      # under `set -euo pipefail`, so a grep finding no tag_name - which is the
+      # rate-limited case - killed the script one line before the message that
+      # explains it. The message was written this morning and was unreachable.
+      # Found by this job, on macOS, the first time it ran.
+      - name: The failed lookup explains itself
+        env:
+          GITHUB_TOKEN: ""
+        run: |
+          set -uo pipefail
+          out="$(REPO=helmcode/this-repo-does-not-exist bash scripts/install.sh 2>&1)" || true
+          echo "$out"
+          grep -q "could not work out the latest version" <<<"$out" || {
+            echo "::error::the lookup failed without explaining itself" >&2
+            exit 1
+          }
 
       # And the branch nobody had ever taken: a destination the user cannot
       # write to, where install_bin falls back to sudo. On a runner both
