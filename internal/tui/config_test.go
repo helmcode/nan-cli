@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/nxssie/nan-cli/internal/api"
@@ -1168,5 +1169,61 @@ func TestSignInKeyIsNotOneThatAlreadyMoves(t *testing.T) {
 		if !strings.Contains(out, "s") {
 			t.Error("sign-in is not bound to s")
 		}
+	}
+}
+
+// Signing in from the panel wrote the session and left the API client holding
+// the token it was built with at start-up, which on a fresh machine is none.
+// So it signed a member in and then answered every tab `unauthorized` - which
+// reads exactly like the login having failed, and was reported as such.
+func TestSigningInGivesTheClientTheNewToken(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HERMES_HOME", filepath.Join(home, "h"))
+
+	m := newModel(api.New(""), &session.Session{})
+	if m.client.Token() != "" {
+		t.Fatal("this test starts from a client with no token")
+	}
+
+	// What the flow leaves on disk before the panel is told about it.
+	if err := session.Save(&session.Session{Token: "a-fresh-session-token"}); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, _ := m.Update(signedInMsg{nil})
+	after := updated.(model)
+
+	if after.sess.Token != "a-fresh-session-token" {
+		t.Errorf("the panel did not pick up the session: %q", after.sess.Token)
+	}
+	if got := after.client.Token(); got != "a-fresh-session-token" {
+		t.Errorf("the client still sends %q, so every tab answers unauthorized", got)
+	}
+	if after.loginStage != loginOff {
+		t.Error("the sign-in is still on screen after it succeeded")
+	}
+	if len(after.cache) != 0 {
+		t.Error("the tabs keep the answers they got before signing in")
+	}
+}
+
+// `e` is published on Home as the way to set the API key, and Home is not
+// Setup. It did nothing at all anywhere but Setup - which is the tab you have
+// to already be on to know that.
+func TestTheKeyForTheKeyWorksFromWhereItIsAdvertised(t *testing.T) {
+	m := setupModel(t, &session.Session{Token: "t"})
+	m.lay = newLayout(90, 30)
+	m.active = tabIndex(tabHome)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	after := updated.(model)
+
+	if !after.editingKey {
+		t.Error("e from Home does nothing, which is where Home tells you to press it")
+	}
+	if after.activeID() != tabSetup {
+		t.Error("e opened the key editor without moving to the tab that shows it")
 	}
 }
