@@ -1475,7 +1475,47 @@ func writePiConfig(cfgPath, apiKey string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(cfgPath, data, 0o600)
+	if err := os.WriteFile(cfgPath, data, 0o600); err != nil {
+		return err
+	}
+	return writePiDefaults(piSettingsPath(cfgPath))
+}
+
+// Pi reads the provider it calls from a second file, and until this existed
+// the CLI wrote only the first one. nan.builders/docs/pi marks this step "not
+// optional" for a reason: with models.json alone Pi goes on calling its
+// factory provider, and what the member sees is a 401 that names neither file.
+func writePiDefaults(settingsPath string) error {
+	var settings map[string]any
+	if data, err := os.ReadFile(settingsPath); err == nil {
+		_ = json.Unmarshal(data, &settings)
+	}
+	if settings == nil {
+		settings = map[string]any{}
+	}
+
+	// A member who already picked a default picked it, and ours is one more
+	// provider they can switch to from inside Pi. This only fills the gap that
+	// leaves a fresh install calling nothing.
+	if _, chosen := settings["defaultProvider"]; chosen {
+		return nil
+	}
+	settings["defaultProvider"] = "nan"
+	settings["defaultModel"] = catalog.Coding
+
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o700); err != nil {
+		return err
+	}
+	out, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(settingsPath, out, 0o600)
+}
+
+// settings.json sits next to models.json in Pi's agent directory.
+func piSettingsPath(cfgPath string) string {
+	return filepath.Join(filepath.Dir(cfgPath), "settings.json")
 }
 
 // Pi's schema takes "text" and "image" and nothing else, so mimo-v2.5 goes in
@@ -1511,6 +1551,12 @@ func removePiConfig(cfgPath string) error {
 	}
 	delete(providers, "nan")
 
+	// A default pointing at a provider that is no longer in models.json is
+	// worse than no default: Pi starts and fails on the first message.
+	if err := removePiDefaults(piSettingsPath(cfgPath)); err != nil {
+		return err
+	}
+
 	// A models.json with nothing left in it is not a config Pi needs to read.
 	if len(providers) == 0 && len(cfg) == 1 {
 		return os.Remove(cfgPath)
@@ -1521,6 +1567,34 @@ func removePiConfig(cfgPath string) error {
 		return err
 	}
 	return os.WriteFile(cfgPath, out, 0o600)
+}
+
+// Only the default we wrote, and only while it still points at us: anything
+// the member set themselves is theirs.
+func removePiDefaults(settingsPath string) error {
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return nil
+	}
+	var settings map[string]any
+	if json.Unmarshal(data, &settings) != nil {
+		return nil
+	}
+	if settings["defaultProvider"] != "nan" {
+		return nil
+	}
+	delete(settings, "defaultProvider")
+	delete(settings, "defaultModel")
+
+	// The file existed only to hold our default, so it goes with it.
+	if len(settings) == 0 {
+		return os.Remove(settingsPath)
+	}
+	out, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(settingsPath, out, 0o600)
 }
 
 func writeCodexConfig(cfgPath, apiKey string) error {

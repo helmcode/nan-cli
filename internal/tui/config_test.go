@@ -562,3 +562,69 @@ func TestHomeSaysHowToMoveAround(t *testing.T) {
 		t.Errorf("Home is %d rows, the viewport of a 24-row terminal is %d", rows, 24-4)
 	}
 }
+
+// The provider block alone does not connect Pi to anything. Pi reads its
+// default from a second file, settings.json, and nan.builders/docs/pi marks
+// that step "not optional": without it Pi keeps calling its factory provider
+// and the member gets a 401 that names neither file. The CLI wrote the first
+// file and not the second, so enabling Pi from the Setup tab landed a member
+// squarely in the failure the docs call the most common one.
+func TestPiConfigWritesTheDefaultsOrPiStillAnswers401(t *testing.T) {
+	path := tempConfig(t, "models.json")
+	if err := writePiConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+
+	settings := readJSON(t, filepath.Join(filepath.Dir(path), "settings.json"))
+	if got := settings["defaultProvider"]; got != "nan" {
+		t.Errorf("defaultProvider = %v, want nan: Pi calls its factory provider otherwise", got)
+	}
+	if got := settings["defaultModel"]; got != catalog.Coding {
+		t.Errorf("defaultModel = %v, want %s", got, catalog.Coding)
+	}
+}
+
+// settings.json is Pi's, not ours: the default is the only key in it we have
+// any business writing.
+func TestPiConfigKeepsTheSettingsItDoesNotOwn(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "models.json")
+	settingsPath := filepath.Join(dir, "settings.json")
+	existing := `{"theme":"dark","defaultProvider":"openai","defaultModel":"gpt-5"}`
+	if err := os.WriteFile(settingsPath, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePiConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+
+	settings := readJSON(t, settingsPath)
+	if settings["theme"] != "dark" {
+		t.Error("a setting of theirs was dropped")
+	}
+	// A member who picked another provider picked it. Ours is one more
+	// provider in the file, and they can switch to it inside Pi.
+	if settings["defaultProvider"] != "openai" {
+		t.Error("a default the member chose was overwritten")
+	}
+}
+
+// Turning Pi off in the Setup tab has to leave Pi working, and a default
+// pointing at a provider that is no longer in models.json is not working.
+func TestPiRemovalTakesTheDefaultItWrote(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "models.json")
+	settingsPath := filepath.Join(dir, "settings.json")
+	if err := writePiConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := removePiConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
+		settings := readJSON(t, settingsPath)
+		if settings["defaultProvider"] == "nan" {
+			t.Error("Pi is left defaulting to a provider that is no longer in models.json")
+		}
+	}
+}
