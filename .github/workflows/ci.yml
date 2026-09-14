@@ -112,4 +112,50 @@ jobs:
               exit 1
             }
           }
-          Write-Host "installer parses, every web request is basic-parsed, no unguarded exit"
+          # Architecture detection has to survive the .NET type being out of
+          # reach. ConstrainedLanguage mode - the normal state of a machine
+          # under an AppLocker or WDAC policy - blocks arbitrary type access,
+          # and the type does not exist before .NET Framework 4.7.1. Either
+          # way the value came back empty and a perfectly ordinary x64 machine
+          # was reported as an unsupported architecture: a dead end over
+          # something that was never about the architecture.
+          $Repo = 'helmcode/nan-cli'
+          $collected = @()
+          $inside = $false
+          foreach ($line in $lines) {
+            if ($line -match '^function Get-Arch') { $inside = $true }
+            if ($inside) { $collected += $line }
+            if ($inside -and $line.TrimEnd() -eq '}') { break }
+          }
+          if ($collected.Count -eq 0) {
+            Write-Host "::error::could not find Get-Arch in the installer"
+            exit 1
+          }
+          $noDotNet = ($collected -join [Environment]::NewLine) -replace 'RuntimeInformation', 'NoSuchTypeHere'
+          foreach ($case in @(
+            @{ w6432 = '';      proc = 'AMD64'; want = 'amd64' },
+            @{ w6432 = '';      proc = 'ARM64'; want = 'arm64' },
+            # A 32-bit PowerShell on a 64-bit OS: the process says x86 and
+            # ARCHITEW6432 says what the OS really is. Asking in the wrong
+            # order sends an arm64 machine an x86 build nobody published.
+            @{ w6432 = 'ARM64'; proc = 'x86';   want = 'arm64' }
+          )) {
+            $env:PROCESSOR_ARCHITEW6432 = $case.w6432
+            $env:PROCESSOR_ARCHITECTURE = $case.proc
+            Invoke-Expression $noDotNet
+            # A throw here has to fail the step. Left uncaught it printed the
+            # installer's own error text and the job went green, which is a
+            # guard that guards nothing.
+            $got = $null
+            try {
+              $got = Get-Arch
+            } catch {
+              Write-Host "::error::with no .NET type, ARCHITEW6432='$($case.w6432)' ARCHITECTURE='$($case.proc)' threw instead of answering '$($case.want)'"
+              exit 1
+            }
+            if ($got -ne $case.want) {
+              Write-Host "::error::with no .NET type, ARCHITEW6432='$($case.w6432)' ARCHITECTURE='$($case.proc)' gave '$got', want '$($case.want)'"
+              exit 1
+            }
+          }
+          Write-Host "installer parses, web requests basic-parsed, no unguarded exit, arch detection survives without .NET"
