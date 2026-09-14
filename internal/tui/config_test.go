@@ -1497,3 +1497,159 @@ func TestTheAcceptedKeyPointsAtTheToolsStep(t *testing.T) {
 		t.Errorf("the check says %q, which does not lead anywhere", got)
 	}
 }
+
+// ── the guided setup ─────────────────────────────────────────────────────────
+
+func wizardAt(t *testing.T, step wizardStep) model {
+	t.Helper()
+	m := setupModel(t, &session.Session{})
+	m.lay = newLayout(96, 44)
+	m.wizard = step
+	return m
+}
+
+// Four numbered steps, in the member's own words, with the banner over them.
+// It replaced a screen that said "Step 1 of 2" and then handed you back to the
+// panel to find the other two yourself.
+func TestTheGuidedSetupShowsAllFourSteps(t *testing.T) {
+	out := wizardAt(t, wizardEmail).renderWizard(newLayout(96, 44))
+
+	for _, want := range []string{
+		"Setting up",
+		"1. Let's get you logged in",
+		"2. Let's confirm it with the magic link",
+		"3. Let's set up your API key",
+		"4. Let's configure your tools",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the setup screen does not show %q", want)
+		}
+	}
+	// And the banner, because the thing you just opened should say what it is.
+	if !strings.Contains(out, "nan.builders") {
+		t.Error("the setup screen has no banner")
+	}
+}
+
+// The one you are on is marked, and the ones behind it are ticked.
+func TestTheGuidedSetupSaysWhereYouAre(t *testing.T) {
+	third := wizardAt(t, wizardKey).renderWizard(newLayout(96, 44))
+	lines := strings.Split(third, "\n")
+	for _, line := range lines {
+		switch {
+		case strings.Contains(line, "1. Let's get you"), strings.Contains(line, "2. Let's confirm"):
+			if !strings.Contains(line, "✓") {
+				t.Errorf("a finished step is not ticked: %q", strings.TrimSpace(line))
+			}
+		case strings.Contains(line, "3. Let's set up"):
+			if !strings.Contains(line, "▶") {
+				t.Errorf("the current step is not marked: %q", strings.TrimSpace(line))
+			}
+		}
+	}
+}
+
+// A face per step, so the mascot is doing something that matches it.
+func TestEachStepHasItsOwnFace(t *testing.T) {
+	if wizardLink.mood() != moodThinking {
+		t.Error("waiting for a link is not a thinking face")
+	}
+	if wizardDone.mood() != moodHappy {
+		t.Error("finishing the setup is not a happy face")
+	}
+	for _, step := range []wizardStep{wizardEmail, wizardLink, wizardKey, wizardTools, wizardDone} {
+		if _, ok := mascotFaces[step.mood()]; !ok {
+			t.Errorf("step %v asks for a face that does not exist", step)
+		}
+	}
+}
+
+// Esc leaves the setup and lands in the panel. It must not quit the program:
+// someone who skipped a step has not asked to close the CLI.
+func TestEscapeLeavesTheSetupAndNotTheProgram(t *testing.T) {
+	m := wizardAt(t, wizardEmail)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	after := updated.(model)
+	if after.wizard != wizardOff {
+		t.Error("esc does not leave the setup")
+	}
+	if cmd != nil {
+		t.Error("esc during the setup quits the program")
+	}
+}
+
+// Signing out from the panel, which `nan auth logout` is no use for when you
+// are looking at the panel and want to switch accounts.
+func TestSigningOutTakesTwoPressesAndClearsEverything(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HERMES_HOME", filepath.Join(home, "h"))
+
+	sess := &session.Session{Token: "t", APIKey: testKey}
+	if err := session.Save(sess); err != nil {
+		t.Fatal(err)
+	}
+	m := newModel(api.New("t"), sess)
+	m.lay = newLayout(90, 30)
+	m.cache[tabUsage] = "somebody else's numbers"
+
+	press := func(m model, r rune) model {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		return updated.(model)
+	}
+
+	// One press asks.
+	after := press(m, 'o')
+	if after.sess.Token == "" {
+		t.Fatal("one press signed out, with no confirmation")
+	}
+	if !strings.Contains(after.setupMsg, "press o again") {
+		t.Errorf("the first press says %q", after.setupMsg)
+	}
+
+	// Anything else calls it off.
+	if press(after, 'r').confirmSignOut {
+		t.Error("the confirmation survives another key")
+	}
+
+	// Two presses do it, and take the key and the cached answers with them.
+	out := press(press(m, 'o'), 'o')
+	if out.sess.Token != "" || out.sess.APIKey != "" {
+		t.Error("signing out left the session behind")
+	}
+	if out.client.Token() != "" {
+		t.Error("the client still carries the old token")
+	}
+	if len(out.cache) != 0 {
+		t.Error("the tabs keep answers that were true for another account")
+	}
+	if _, err := session.Load(); err == nil {
+		t.Error("the session file is still on disk")
+	}
+}
+
+// And signing out drops straight back into the setup, which is the only thing
+// left to do.
+func TestSigningOutStartsTheSetupAgain(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HERMES_HOME", filepath.Join(home, "h"))
+	sess := &session.Session{Token: "t", APIKey: testKey}
+	if err := session.Save(sess); err != nil {
+		t.Fatal(err)
+	}
+	m := newModel(api.New("t"), sess)
+	m.lay = newLayout(90, 30)
+
+	press := func(m model, r rune) model {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		return updated.(model)
+	}
+	out := press(press(m, 'o'), 'o')
+	if out.wizard != wizardEmail {
+		t.Errorf("after signing out the panel is at %v, want the first step", out.wizard)
+	}
+}

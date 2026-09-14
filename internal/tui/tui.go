@@ -164,15 +164,73 @@ type model struct {
 	configuring bool
 	configured  []string
 
-	loginStage loginStage
-	loginInput textinput.Model
-	loginEmail string
-	loginMsg   string
-	loginBusy  bool
+	// Set by the first press of `o`, cleared by anything else: signing out is
+	// not something to do to somebody on a stray keystroke.
+	confirmSignOut bool
+	wizard         wizardStep
+	loginStage     loginStage
+	loginInput     textinput.Model
+	loginEmail     string
+	loginMsg       string
+	loginBusy      bool
+}
+
+// Where a member is in the guided setup. The inner inputs still drive
+// themselves - loginStage for the two sign-in questions, editingKey for the
+// key - and this is the step the screen is showing around them, so the panel
+// can draw the four of them as one sequence with a banner over it.
+type wizardStep int
+
+const (
+	wizardOff wizardStep = iota
+	wizardEmail
+	wizardLink
+	wizardKey
+	wizardTools
+	wizardDone
+)
+
+// The words are the member's, from the report that asked for this.
+var wizardSteps = [...]struct {
+	n     int
+	title string
+}{
+	{1, "Let's get you logged in"},
+	{2, "Let's confirm it with the magic link"},
+	{3, "Let's set up your API key"},
+	{4, "Let's configure your tools"},
+}
+
+// Which of the four a step belongs to. wizardLink is step 2, and everything
+// after the tools is step 4 still finishing.
+func (w wizardStep) index() int {
+	switch w {
+	case wizardEmail:
+		return 0
+	case wizardLink:
+		return 1
+	case wizardKey:
+		return 2
+	}
+	return 3
+}
+
+// The face for each, so the mascot is doing something that matches the step
+// rather than staring through it.
+func (w wizardStep) mood() mascotMood {
+	switch w {
+	case wizardEmail, wizardKey:
+		return moodNormal
+	case wizardLink:
+		return moodThinking
+	case wizardDone:
+		return moodHappy
+	}
+	return moodNormal
 }
 
 // Where a member is in the sign-in flow. It is two questions - an address and
-// the link that arrives at it - so it is two stages and not a wizard.
+// the link that arrives at it.
 type loginStage int
 
 const (
@@ -254,6 +312,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case configuredMsg:
 		m.configuring = false
+		if m.wizard == wizardTools && !strings.HasPrefix(msg.msg, "error") {
+			m.wizard = wizardDone
+		}
 		m.setupMsg = msg.msg
 		m.configured = msg.written
 
@@ -267,6 +328,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loginStage = loginAskEmail
 			return m, m.loginInput.Focus()
 		}
+		m.wizard = wizardLink
 		m.loginStage = loginAskLink
 		m.loginMsg = "a link is on its way to " + m.loginEmail +
 			" — copy it out of the email without opening it, the link works once"
@@ -292,7 +354,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// member in and then answered every tab `unauthorized`, which reads
 		// exactly like the login having failed.
 		m.client = api.New(m.sess.Token)
+		wasGuided := m.wizard != wizardOff
 		m.cancelLogin()
+		if wasGuided {
+			m.wizard = wizardKey
+		}
 		m.cache = make(map[tabID]any)
 		m.err = nil
 		m.keyAsked = false
@@ -317,6 +383,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// the key to press rather than pressing it.
 			if n := installedTools(); n > 0 {
 				m.keyCheck += fmt.Sprintf("  ·  press c to configure the %d tools found", n)
+			}
+			if m.wizard == wizardKey {
+				m.wizard = wizardTools
 			}
 		}
 
@@ -381,6 +450,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.editingKey = false
 				m.keyInput.Blur()
 				m.setupMsg = ""
+				// Leaving the field during the guided setup leaves the setup:
+				// staying would show step 3 with nothing to type into.
+				m.wizard = wizardOff
 			default:
 				var cmd tea.Cmd
 				m.keyInput, cmd = m.keyInput.Update(msg)
@@ -389,14 +461,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		if m.confirmSignOut && msg.String() != "o" {
+			m.confirmSignOut = false
+			m.setupMsg = ""
+		}
+
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
 		case "esc":
-			if m.showHelp {
+			switch {
+			case m.showHelp:
 				m.showHelp = false
-			} else {
+			case m.wizard != wizardOff:
+				// Out of the setup and into the panel. Not out of the program:
+				// someone who wanted that has q, and quitting the whole CLI
+				// because they skipped a step would be its own small betrayal.
+				m.wizard = wizardOff
+				m.active = tabIndex(tabSetup)
+			default:
 				return m, tea.Quit
+			}
+		case "enter":
+			if m.wizard == wizardDone {
+				m.wizard = wizardOff
+				m.active = tabIndex(tabHome)
+				return m, m.maybeLoad()
 			}
 		case "?":
 			m.showHelp = !m.showHelp
@@ -418,7 +508,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "up", "k":
 			if !m.showHelp {
-				if m.activeID() == tabSetup {
+				if m.activeID() == tabSetup || m.wizard == wizardTools {
 					if m.setupCursor > 0 {
 						m.setupCursor--
 					}
@@ -428,14 +518,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "down", "j":
 			if !m.showHelp {
-				if m.activeID() == tabSetup {
+				if m.activeID() == tabSetup || m.wizard == wizardTools {
 					m.setupCursor++
 				} else {
 					m.scrollY++
 				}
 			}
 		case " ":
-			if !m.showHelp && m.activeID() == tabSetup && !m.configuring {
+			if !m.showHelp && !m.configuring && (m.activeID() == tabSetup || m.wizard == wizardTools) {
 				tools := detectTools()
 				if m.setupCursor < len(tools) && tools[m.setupCursor].installed {
 					name := tools[m.setupCursor].name
@@ -457,6 +547,35 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.scrollY = 0
 				return m, m.maybeLoad()
 			}
+		// Signing out, in two presses. `nan auth logout` already existed as a
+		// command, which is no use to someone who is looking at the panel and
+		// wants to switch accounts.
+		case "o":
+			if m.showHelp || m.wizard != wizardOff || m.sess.Token == "" {
+				break
+			}
+			if !m.confirmSignOut {
+				m.confirmSignOut = true
+				m.setupMsg = "press o again to sign out, any other key to keep the session"
+				m.active = tabIndex(tabSetup)
+				break
+			}
+			m.confirmSignOut = false
+			if err := session.Delete(); err != nil {
+				m.setupMsg = "error: " + err.Error()
+				break
+			}
+			// Everything the session was holding goes with it: the key lives in
+			// the same file, and the tabs are full of answers that were true
+			// for somebody else.
+			m.sess = &session.Session{}
+			m.client = api.New("")
+			m.cache = make(map[tabID]any)
+			m.keyStatus, m.keyAsked, m.keyCheck = nil, false, ""
+			m.configured, m.setupMsg = nil, "signed out"
+			m.err = nil
+			return m, m.resumeSetup()
+
 		// `s` and not `l`: l is already the vim spelling of "next tab".
 		case "s":
 			// Any tab, because the one a member is looking at when this is
@@ -473,7 +592,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.startKeyEdit()
 			}
 		case "c":
-			if !m.showHelp && m.activeID() == tabSetup && !m.configuring {
+			if !m.showHelp && !m.configuring && (m.activeID() == tabSetup || m.wizard == wizardTools) {
 				// Pressing the key that configures everything and having
 				// nothing happen, with nothing said, is the worst of the
 				// three possible answers.
@@ -546,6 +665,7 @@ func (m *model) maybeLoad() tea.Cmd {
 // key. So it asks the same two questions here, where the keystrokes certainly
 // arrive, and the member never leaves the thing they just opened.
 func (m *model) startLogin() tea.Cmd {
+	m.wizard = wizardEmail
 	m.loginStage = loginAskEmail
 	m.loginMsg = ""
 	m.loginInput.SetValue("")
@@ -556,6 +676,9 @@ func (m *model) startLogin() tea.Cmd {
 
 // startKeyEdit opens the API key field, moving to the tab that shows it.
 func (m *model) startKeyEdit() tea.Cmd {
+	if m.wizard != wizardOff {
+		m.wizard = wizardKey
+	}
 	if m.activeID() != tabSetup {
 		m.active = tabIndex(tabSetup)
 		m.scrollY = 0
@@ -588,6 +711,7 @@ func (m *model) resumeSetup() tea.Cmd {
 }
 
 func (m *model) cancelLogin() {
+	m.wizard = wizardOff
 	m.loginStage = loginOff
 	m.loginBusy = false
 	m.loginInput.Blur()
@@ -728,7 +852,11 @@ func (m model) View() string {
 	}
 
 	var b strings.Builder
-	b.WriteString(renderTabBar(m.active, l) + "\n\n")
+	if m.wizard == wizardOff {
+		b.WriteString(renderTabBar(m.active, l) + "\n\n")
+	} else {
+		b.WriteString("\n")
+	}
 
 	// Content area height: total minus tab-bar, blank, blank-before-footer, footer
 	contentH := l.h - 4
@@ -736,15 +864,25 @@ func (m model) View() string {
 		contentH = 1
 	}
 
-	// Drawn over whatever tab is showing, because `s` works from all of them.
-	if m.loginStage != loginOff {
-		body := strings.Split(strings.TrimRight(m.renderLogin(l), "\n"), "\n")
+	// The guided setup owns the screen: no tab bar to wander off into, and the
+	// banner at the top so the thing you just opened says what it is.
+	if m.wizard != wizardOff {
+		hint := "enter to continue   esc to leave setup"
+		switch m.wizard {
+		case wizardTools:
+			hint = "↑/↓ pick   space toggle   c configure   esc to leave setup"
+		case wizardDone:
+			hint = "esc or enter to open the panel"
+		}
+		body := strings.Split(strings.TrimRight(m.renderWizard(l), "\n"), "\n")
 		for len(body) < contentH {
 			body = append(body, "")
 		}
-		b.WriteString(strings.Join(body[:contentH], "\n"))
-		b.WriteString("\n" + lipgloss.NewStyle().Foreground(cGray).
-			Render(l.indent+"enter to continue   esc to cancel"))
+		if len(body) > contentH {
+			body = body[:contentH]
+		}
+		b.WriteString(strings.Join(body, "\n"))
+		b.WriteString("\n" + lipgloss.NewStyle().Foreground(cGray).Render(l.indent+hint))
 		return b.String()
 	}
 
@@ -2296,6 +2434,86 @@ func removeOpencodeConfig(cfgPath string) error {
 }
 
 // The sign-in questions, drawn where the tab content would be.
+// The guided setup: the banner, the four steps with the one you are on marked,
+// and whatever that step needs underneath.
+//
+// It replaced a sign-in screen that showed "Step 1 of 2" and then handed you
+// back to the panel to find the other two yourself. Four numbered lines cost
+// almost nothing and answer "how much is left", which is the question someone
+// halfway through a setup is actually holding.
+func (m model) renderWizard(l layout) string {
+	title := lipgloss.NewStyle().Bold(true).Foreground(cWhite)
+	dim := lipgloss.NewStyle().Foreground(cDimGray)
+	done := lipgloss.NewStyle().Foreground(lipgloss.Color("#10B981"))
+	now := lipgloss.NewStyle().Foreground(cCyan).Bold(true)
+
+	var b strings.Builder
+	if l.w >= BannerWidthPlain+4 {
+		b.WriteString(Banner(l.indent, m.wizard.mood(),
+			l.w >= BannerWidth+4 && l.h >= BannerRoom) + "\n")
+	}
+
+	b.WriteString(l.indent + title.Render("Setting up") + "\n\n")
+
+	at := m.wizard.index()
+	for i, step := range wizardSteps {
+		marker, style := dim.Render("  "), dim
+		switch {
+		case i < at || m.wizard == wizardDone:
+			marker, style = done.Render("✓ "), dim
+		case i == at:
+			marker, style = now.Render("▶ "), now
+		}
+		b.WriteString(l.indent + marker +
+			style.Render(fmt.Sprintf("%d. %s", step.n, step.title)) + "\n")
+	}
+	b.WriteString("\n")
+
+	switch m.wizard {
+	case wizardEmail, wizardLink:
+		b.WriteString(l.indent + m.loginInput.View() + "\n")
+		if m.loginMsg != "" {
+			b.WriteString("\n" + m.wrapped(l, m.loginMsg) + "\n")
+		}
+	case wizardKey:
+		if m.editingKey {
+			b.WriteString(l.indent + m.keyInput.View() + "\n")
+		}
+		if m.keyCheck != "" {
+			b.WriteString("\n" + m.wrapped(l, m.keyCheck) + "\n")
+		}
+	case wizardTools, wizardDone:
+		if m.keyCheck != "" {
+			b.WriteString(l.indent + m.wrapped(l, m.keyCheck) + "\n\n")
+		}
+		tools := detectTools()
+		cursor := m.setupCursor
+		if len(tools) > 0 && cursor >= len(tools) {
+			cursor = len(tools) - 1
+		}
+		b.WriteString(m.renderToolList(l, tools, cursor))
+		if m.configuring {
+			b.WriteString("\n" + l.indent + m.spin.View() +
+				dim.Render(" writing the configs - a few seconds") + "\n")
+		} else if m.setupMsg != "" {
+			b.WriteString("\n" + m.wrapped(l, m.setupMsg) + "\n")
+		}
+	}
+	return b.String()
+}
+
+// A message wrapped to the panel, coloured by whether it is one. A sign-in
+// link is longer than any terminal.
+func (m model) wrapped(l layout, msg string) string {
+	style := lipgloss.NewStyle().Foreground(cCyan)
+	if strings.HasPrefix(msg, "error") {
+		style = lipgloss.NewStyle().Foreground(cRed)
+	}
+	return indentBlock(lipgloss.NewStyle().
+		Width(l.w-lipgloss.Width(l.indent)-1).
+		Render(style.Render(msg)), l.indent)
+}
+
 func (m model) renderLogin(l layout) string {
 	title := lipgloss.NewStyle().Bold(true).Foreground(cWhite)
 	dim := lipgloss.NewStyle().Foreground(cGray)
@@ -2350,6 +2568,61 @@ func lpadTo(v string, w int) string {
 		return v
 	}
 	return v + strings.Repeat(" ", w-len(v))
+}
+
+// renderToolList draws the tools and their state. Pulled out of the Setup
+// tab because the guided setup shows the same list as its last step, and two
+// copies of a list with a cursor in it would drift the first time either moved.
+func (m model) renderToolList(l layout, tools []toolInfo, cursor int) string {
+	dimStyle := lipgloss.NewStyle().Foreground(cDimGray)
+	okStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#10B981"))
+	warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B"))
+	var b strings.Builder
+	nameW := 14
+	for _, t := range tools {
+		if len(t.name) > nameW {
+			nameW = len(t.name)
+		}
+	}
+
+	checkStyle := lipgloss.NewStyle().Foreground(cCyan)
+	cursorStyle := lipgloss.NewStyle().Foreground(cCyan).Bold(true)
+
+	for i, t := range tools {
+		isCursor := i == cursor
+		enabled := m.toolEnabled(t.name)
+
+		cur := "  "
+		if isCursor {
+			cur = cursorStyle.Render("▶") + " "
+		}
+
+		var check string
+		if !t.installed {
+			check = dimStyle.Render("[ ]")
+		} else if enabled {
+			check = checkStyle.Render("[✓]")
+		} else {
+			check = dimStyle.Render("[ ]")
+		}
+
+		nameStyle := lipgloss.NewStyle().Foreground(cText).Width(nameW)
+		if isCursor {
+			nameStyle = nameStyle.Foreground(cWhite)
+		}
+
+		var status string
+		if !t.installed {
+			status = dimStyle.Render("not installed")
+		} else if t.configured {
+			status = okStyle.Render("✓ configured with NaN")
+		} else {
+			status = warnStyle.Render("○ not configured")
+		}
+
+		b.WriteString(l.indent + cur + check + " " + nameStyle.Render(t.name) + "  " + status + "\n")
+	}
+	return b.String()
 }
 
 func (m model) renderSetup(l layout) string {
@@ -2447,50 +2720,7 @@ func (m model) renderSetup(l layout) string {
 		cursor = len(tools) - 1
 	}
 
-	nameW := 14
-	for _, t := range tools {
-		if len(t.name) > nameW {
-			nameW = len(t.name)
-		}
-	}
-
-	checkStyle := lipgloss.NewStyle().Foreground(cCyan)
-	cursorStyle := lipgloss.NewStyle().Foreground(cCyan).Bold(true)
-
-	for i, t := range tools {
-		isCursor := i == cursor
-		enabled := m.toolEnabled(t.name)
-
-		cur := "  "
-		if isCursor {
-			cur = cursorStyle.Render("▶") + " "
-		}
-
-		var check string
-		if !t.installed {
-			check = dimStyle.Render("[ ]")
-		} else if enabled {
-			check = checkStyle.Render("[✓]")
-		} else {
-			check = dimStyle.Render("[ ]")
-		}
-
-		nameStyle := lipgloss.NewStyle().Foreground(cText).Width(nameW)
-		if isCursor {
-			nameStyle = nameStyle.Foreground(cWhite)
-		}
-
-		var status string
-		if !t.installed {
-			status = dimStyle.Render("not installed")
-		} else if t.configured {
-			status = okStyle.Render("✓ configured with NaN")
-		} else {
-			status = warnStyle.Render("○ not configured")
-		}
-
-		b.WriteString(l.indent + cur + check + " " + nameStyle.Render(t.name) + "  " + status + "\n")
-	}
+	b.WriteString(m.renderToolList(l, tools, cursor))
 
 	b.WriteString("\n")
 	if m.sess.APIKey == "" {
@@ -2504,7 +2734,7 @@ func (m model) renderSetup(l layout) string {
 
 // ── about renderer ───────────────────────────────────────────────────────────
 
-const Version = "0.1.15"
+const Version = "0.1.16"
 
 func renderAbout(l layout) string {
 	var b strings.Builder
@@ -2559,6 +2789,7 @@ func renderHelp() string {
 		{"e", "edit API key (Setup tab)"},
 		{"space", "tick or untick the tool under the cursor (Setup tab)"},
 		{"c", "configure the ticked tools (Setup tab)"},
+		{"o", "sign out, twice to confirm"},
 		{"?", "toggle this help"},
 		{"q / Esc", "quit"},
 	}
