@@ -12,14 +12,21 @@ const BaseURL = "https://cloud-api.nan.builders/api"
 type Client struct {
 	token string
 	http  *http.Client
+	// Defaults to BaseURL. A field rather than the constant so the tests can
+	// point the client at a server of their own.
+	baseURL string
 }
 
 func New(token string) *Client {
-	return &Client{token: token, http: &http.Client{}}
+	return &Client{token: token, http: &http.Client{}, baseURL: BaseURL}
 }
 
 func (c *Client) get(path string) ([]byte, error) {
-	req, err := http.NewRequest(http.MethodGet, BaseURL+path, nil)
+	base := c.baseURL
+	if base == "" {
+		base = BaseURL
+	}
+	req, err := http.NewRequest(http.MethodGet, base+path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -111,6 +118,31 @@ func ListModels(apiKey string) ([]string, error) {
 		ids = append(ids, m.ID)
 	}
 	return ids, nil
+}
+
+// KeyStatus is what the platform will say about a member's API key. Note what
+// is not in it: the key. GET /api/keys answers with metadata only - the secret
+// is handed over once, when it is created, and never again - so the Setup tab
+// cannot fetch a key on a member's behalf, only tell them whether they have
+// one and where it lives.
+type KeyStatus struct {
+	Exists bool   `json:"exists"`
+	Alias  string `json:"keyAlias"`
+	Name   string `json:"keyName"`
+	Region string `json:"region"`
+	Synced bool   `json:"secretSynced"`
+}
+
+func (c *Client) GetKeyStatus() (*KeyStatus, error) {
+	body, err := c.get("/keys")
+	if err != nil {
+		return nil, err
+	}
+	var status KeyStatus
+	if err := json.Unmarshal(body, &status); err != nil {
+		return nil, err
+	}
+	return &status, nil
 }
 
 func (c *Client) GetAgentsModels() (any, error) {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/nxssie/nan-cli/internal/api"
 	catalog "github.com/nxssie/nan-cli/internal/models"
 	"github.com/nxssie/nan-cli/internal/session"
 )
@@ -788,5 +789,71 @@ func TestHermesConfigAgainstTheRealBinary(t *testing.T) {
 	data, _ = os.ReadFile(filepath.Join(home, "config.yaml"))
 	if strings.Contains(string(data), "api.nan.builders") {
 		t.Errorf("removal left the cluster behind:\n%s", data)
+	}
+}
+
+// ── the API key, and what the platform will and will not tell us ─────────────
+
+func setupModel(t *testing.T, sess *session.Session) model {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HERMES_HOME", filepath.Join(home, "hermes"))
+	return newModel(nil, sess)
+}
+
+// The idea this replaced was to have the Setup tab fetch the key with the
+// session it already holds. It cannot: GET /api/keys answers with metadata
+// and no secret, because a key is shown once, at creation. What is left worth
+// doing is telling a member there is one and where it is, instead of showing
+// an empty field and nothing else.
+func TestSetupSaysWhereTheKeyIsWhenTheFieldIsEmpty(t *testing.T) {
+	m := setupModel(t, &session.Session{})
+	m.keyStatus = &api.KeyStatus{Exists: true, Alias: "an-alias"}
+
+	out := m.renderSetup(newLayout(80, 24))
+	for _, want := range []string{"an-alias", "cloud.nan.builders"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the Setup tab does not mention %q", want)
+		}
+	}
+}
+
+func TestSetupSaysWhenTheAccountHasNoKeyAtAll(t *testing.T) {
+	m := setupModel(t, &session.Session{})
+	m.keyStatus = &api.KeyStatus{Exists: false}
+
+	out := m.renderSetup(newLayout(80, 24))
+	if !strings.Contains(out, "no key yet") {
+		t.Error("an account with no key is told nothing about it")
+	}
+}
+
+// Once there is a key in the field the hint is noise, and the key itself is
+// never printed.
+func TestSetupHidesTheHintAndTheKeyOnceOneIsSet(t *testing.T) {
+	m := setupModel(t, &session.Session{APIKey: testKey})
+	m.keyStatus = &api.KeyStatus{Exists: true, Alias: "an-alias"}
+
+	out := m.renderSetup(newLayout(80, 24))
+	if strings.Contains(out, "an-alias") || strings.Contains(out, "cloud.nan.builders") {
+		t.Error("the hint is still shown after a key was set")
+	}
+	if strings.Contains(out, testKey) {
+		t.Error("the API key is printed on screen")
+	}
+}
+
+// A key the cluster refuses used to be found out five times over, as a 401
+// inside each tool it had been written into. It is said once, here, before
+// anything is written at all.
+func TestSetupShowsAKeyTheClusterRefused(t *testing.T) {
+	m := setupModel(t, &session.Session{APIKey: testKey})
+	m.keyCheck = "error: the cluster refused this key - the API key in Setup is not valid"
+
+	out := m.renderSetup(newLayout(80, 24))
+	if !strings.Contains(out, "refused this key") {
+		t.Error("a refused key is not reported in the Setup tab")
 	}
 }

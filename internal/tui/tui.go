@@ -112,6 +112,15 @@ type fetchedMsg struct {
 }
 type fetchErrMsg struct{ err error }
 
+// The Setup tab never blocks on the network: it is the one tab a member can
+// use with no connection, and the two things below are extra information
+// rather than its content. They arrive when they arrive.
+type keyStatusMsg struct{ status *api.KeyStatus }
+type keyCheckedMsg struct {
+	models int
+	err    error
+}
+
 // ── model ─────────────────────────────────────────────────────────────────────
 
 type model struct {
@@ -129,6 +138,9 @@ type model struct {
 	editingKey  bool
 	setupMsg    string
 	setupCursor int
+	keyStatus   *api.KeyStatus
+	keyAsked    bool
+	keyCheck    string
 }
 
 func newModel(client *api.Client, sess *session.Session) model {
@@ -183,22 +195,40 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.err = msg.err
 
+	case keyStatusMsg:
+		m.keyStatus = msg.status
+
+	case keyCheckedMsg:
+		// A key that the cluster refuses is worth saying once, here, rather
+		// than five times later as a 401 inside five different tools.
+		if msg.err != nil {
+			m.keyCheck = "error: the cluster refused this key — " + msg.err.Error()
+		} else {
+			m.keyCheck = fmt.Sprintf("key accepted by the cluster · %d models", msg.models)
+		}
+
 	case tea.KeyMsg:
 		// When the API key input is active, route all keys to it
 		if m.editingKey {
 			switch msg.String() {
 			case "enter":
 				val := strings.TrimSpace(m.keyInput.Value())
+				var check tea.Cmd
 				if val != "" {
 					m.sess.APIKey = val
 					if err := session.Save(m.sess); err != nil {
 						m.setupMsg = "error saving: " + err.Error()
 					} else {
 						m.setupMsg = "API key saved"
+						m.keyCheck = "checking it against the cluster…"
+						check = checkKey(val)
 					}
 				}
 				m.editingKey = false
 				m.keyInput.Blur()
+				if check != nil {
+					return m, check
+				}
 			case "esc":
 				m.editingKey = false
 				m.keyInput.Blur()
@@ -298,7 +328,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *model) maybeLoad() tea.Cmd {
 	id := m.activeID()
-	if id == tabHome || id == tabAbout || id == tabSetup {
+	// Setup asks the platform one thing, once, and stays usable while it
+	// waits: no spinner, no error state, nothing that stops a member pasting
+	// a key on a train.
+	if id == tabSetup {
+		if m.keyAsked {
+			return nil
+		}
+		m.keyAsked = true
+		return m.fetchKeyStatus()
+	}
+	if id == tabHome || id == tabAbout {
 		return nil
 	}
 	// Costs tab derives from usage data — load that if needed
@@ -316,6 +356,36 @@ func (m *model) maybeLoad() tea.Cmd {
 	m.loading = true
 	m.err = nil
 	return tea.Batch(m.spin.Tick, m.fetchTab(id))
+}
+
+// Whether the account has a key, and what it is called. Never the key
+// itself: the platform hands that over once, at creation, and will not
+// repeat it - so the Setup tab cannot fill the field in for a member, only
+// tell them there is one to go and copy.
+func (m model) fetchKeyStatus() tea.Cmd {
+	client := m.client
+	return func() tea.Msg {
+		status, err := client.GetKeyStatus()
+		if err != nil {
+			// Silent on purpose: this is a hint, and a member with no
+			// connection still has a Setup tab that works.
+			return keyStatusMsg{nil}
+		}
+		return keyStatusMsg{status}
+	}
+}
+
+// The one check that catches a mistyped key before it is copied into every
+// tool on the machine. /v1/models is the endpoint the key itself opens, so
+// a 401 here is exactly the 401 the tools would hit later.
+func checkKey(apiKey string) tea.Cmd {
+	return func() tea.Msg {
+		ids, err := api.ListModels(apiKey)
+		if err != nil {
+			return keyCheckedMsg{err: err}
+		}
+		return keyCheckedMsg{models: len(ids)}
+	}
 }
 
 func (m model) fetchTab(id tabID) tea.Cmd {
@@ -1865,6 +1935,33 @@ func (m model) renderSetup(l layout) string {
 	} else {
 		b.WriteString(l.indent + warnStyle.Render("No API key set") +
 			"  " + dimStyle.Render("e to set") + "\n")
+	}
+
+	// What the platform says about the account, once it has answered. The key
+	// itself never comes back from there, so the most this can do is say
+	// whether there is one to copy and where from - which still beats leaving
+	// a member staring at an empty field wondering what to paste.
+	if m.keyStatus != nil && m.sess.APIKey == "" {
+		hint := "this account has no key yet - create one at cloud.nan.builders"
+		if m.keyStatus.Exists {
+			name := m.keyStatus.Alias
+			if name == "" {
+				name = m.keyStatus.Name
+			}
+			hint = "your account has a key"
+			if name != "" {
+				hint += " (" + name + ")"
+			}
+			hint += " - copy it from cloud.nan.builders"
+		}
+		b.WriteString(l.indent + dimStyle.Render(hint) + "\n")
+	}
+	if m.keyCheck != "" {
+		style := okStyle
+		if strings.HasPrefix(m.keyCheck, "error") {
+			style = errStyle
+		}
+		b.WriteString(l.indent + style.Render(m.keyCheck) + "\n")
 	}
 
 	// ── Tools ────────────────────────────────────────────────────────────────
