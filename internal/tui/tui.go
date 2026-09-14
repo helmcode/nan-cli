@@ -7,8 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -111,6 +113,15 @@ type fetchedMsg struct {
 }
 type fetchErrMsg struct{ err error }
 
+// The Setup tab never blocks on the network: it is the one tab a member can
+// use with no connection, and the two things below are extra information
+// rather than its content. They arrive when they arrive.
+type keyStatusMsg struct{ status *api.KeyStatus }
+type keyCheckedMsg struct {
+	models int
+	err    error
+}
+
 // ── model ─────────────────────────────────────────────────────────────────────
 
 type model struct {
@@ -128,6 +139,9 @@ type model struct {
 	editingKey  bool
 	setupMsg    string
 	setupCursor int
+	keyStatus   *api.KeyStatus
+	keyAsked    bool
+	keyCheck    string
 }
 
 func newModel(client *api.Client, sess *session.Session) model {
@@ -182,22 +196,40 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.err = msg.err
 
+	case keyStatusMsg:
+		m.keyStatus = msg.status
+
+	case keyCheckedMsg:
+		// A key that the cluster refuses is worth saying once, here, rather
+		// than five times later as a 401 inside five different tools.
+		if msg.err != nil {
+			m.keyCheck = "error: the cluster refused this key — " + msg.err.Error()
+		} else {
+			m.keyCheck = fmt.Sprintf("key accepted by the cluster · %d models", msg.models)
+		}
+
 	case tea.KeyMsg:
 		// When the API key input is active, route all keys to it
 		if m.editingKey {
 			switch msg.String() {
 			case "enter":
 				val := strings.TrimSpace(m.keyInput.Value())
+				var check tea.Cmd
 				if val != "" {
 					m.sess.APIKey = val
 					if err := session.Save(m.sess); err != nil {
 						m.setupMsg = "error saving: " + err.Error()
 					} else {
 						m.setupMsg = "API key saved"
+						m.keyCheck = "checking it against the cluster…"
+						check = checkKey(val)
 					}
 				}
 				m.editingKey = false
 				m.keyInput.Blur()
+				if check != nil {
+					return m, check
+				}
 			case "esc":
 				m.editingKey = false
 				m.keyInput.Blur()
@@ -286,9 +318,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.setupMsg = ""
 			}
 		case "c":
-			if !m.showHelp && m.activeID() == tabSetup && m.sess.APIKey != "" {
-				msg := configureTools(m.sess.APIKey, m.sess.EnabledTools)
-				m.setupMsg = msg
+			if !m.showHelp && m.activeID() == tabSetup {
+				// Pressing the key that configures everything and having
+				// nothing happen, with nothing said, is the worst of the
+				// three possible answers.
+				if m.sess.APIKey == "" {
+					m.setupMsg = "error: set your API key first — press e"
+				} else {
+					m.setupMsg = configureTools(m.sess.APIKey, m.sess.EnabledTools)
+				}
 			}
 		}
 	}
@@ -297,7 +335,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *model) maybeLoad() tea.Cmd {
 	id := m.activeID()
-	if id == tabHome || id == tabAbout || id == tabSetup {
+	// Setup asks the platform one thing, once, and stays usable while it
+	// waits: no spinner, no error state, nothing that stops a member pasting
+	// a key on a train.
+	if id == tabSetup {
+		// Nothing to ask on a machine that has not logged in: the call would
+		// come back 401 and be swallowed.
+		if m.keyAsked || m.sess.Token == "" {
+			return nil
+		}
+		m.keyAsked = true
+		return m.fetchKeyStatus()
+	}
+	if id == tabHome || id == tabAbout {
 		return nil
 	}
 	// Costs tab derives from usage data — load that if needed
@@ -315,6 +365,36 @@ func (m *model) maybeLoad() tea.Cmd {
 	m.loading = true
 	m.err = nil
 	return tea.Batch(m.spin.Tick, m.fetchTab(id))
+}
+
+// Whether the account has a key, and what it is called. Never the key
+// itself: the platform hands that over once, at creation, and will not
+// repeat it - so the Setup tab cannot fill the field in for a member, only
+// tell them there is one to go and copy.
+func (m model) fetchKeyStatus() tea.Cmd {
+	client := m.client
+	return func() tea.Msg {
+		status, err := client.GetKeyStatus()
+		if err != nil {
+			// Silent on purpose: this is a hint, and a member with no
+			// connection still has a Setup tab that works.
+			return keyStatusMsg{nil}
+		}
+		return keyStatusMsg{status}
+	}
+}
+
+// The one check that catches a mistyped key before it is copied into every
+// tool on the machine. /v1/models is the endpoint the key itself opens, so
+// a 401 here is exactly the 401 the tools would hit later.
+func checkKey(apiKey string) tea.Cmd {
+	return func() tea.Msg {
+		ids, err := api.ListModels(apiKey)
+		if err != nil {
+			return keyCheckedMsg{err: err}
+		}
+		return keyCheckedMsg{models: len(ids)}
+	}
 }
 
 func (m model) fetchTab(id tabID) tea.Cmd {
@@ -763,15 +843,42 @@ type providerPricing struct {
 	outPer1M float64 // $ per 1M output tokens
 }
 
-// Prices as of mid-2026 (per 1M tokens).
+// Per 1M tokens, read off each vendor's own pricing page on 2026-09-14.
+//
+// Ten rows rather than the six this started as, and the reason is the spread
+// rather than the count. The tab multiplies a member's NaN token usage by each
+// of these, so a table that carried only mid-range models answered only the
+// mid-range question. From Luna at $0.20 in to Astra and Fable at $10, a
+// reader can find the row that matches what they would actually have reached
+// for instead of taking ours as the comparison.
+//
+// The six this replaced were five-sixths wrong, and all five in the same
+// direction - the output price too low. GPT-5.5 was published at $20 against a
+// real $30, Gemini 3.1 Pro at $8 against $12, Gemini 2.5 Flash at $0.35/$1.05
+// against $0.30/$2.50, and "GPT-5.4 Mini" was not a model anyone sells. A tab
+// whose whole claim is "this is what you would have paid elsewhere"
+// understating every competitor is the one direction it must not be wrong in.
+//
+// Two rows carry a condition the table cannot express, so each is taken at its
+// lowest published rate and the comparison stays conservative: Gemini 3.1 Pro
+// costs $4/$18 above a 200k-token prompt, and Gemini 3.8 Flash is on a
+// promotional rate that doubles on 2027-01-01. TestGeminiFlashPromoHasNotExpired
+// fails on that date so the number is changed rather than forgotten.
 var pricingTable = []providerPricing{
-	{"Claude Sonnet 4.6", "Anthropic", 3.00, 15.00},
+	{"Claude Fable 5.1", "Anthropic", 10.00, 50.00},
+	{"Claude Opus 5", "Anthropic", 5.00, 25.00},
+	{"Claude Sonnet 5", "Anthropic", 2.00, 10.00},
 	{"Claude Haiku 4.5", "Anthropic", 1.00, 5.00},
-	{"GPT-5.5", "OpenAI", 5.00, 20.00},
-	{"GPT-5.4 Mini", "OpenAI", 0.40, 1.60},
-	{"Gemini 3.1 Pro", "Google", 2.00, 8.00},
-	{"Gemini 2.5 Flash", "Google", 0.35, 1.05},
+	{"GPT-6 Astra", "OpenAI", 10.00, 50.00},
+	{"GPT-5.6 Sol", "OpenAI", 4.00, 20.00},
+	{"GPT-5.6 Terra", "OpenAI", 2.00, 12.00},
+	{"GPT-5.6 Luna", "OpenAI", 0.20, 1.20},
+	{"Gemini 3.1 Pro", "Google", 2.00, 12.00},
+	{"Gemini 3.8 Flash", "Google", 0.75, 3.75},
 }
+
+// The day Gemini 3.8 Flash stops being half price.
+var geminiFlashPromoEnds = time.Date(2027, time.January, 1, 0, 0, 0, 0, time.UTC)
 
 var providerColor = map[string]lipgloss.TerminalColor{
 	"Anthropic": lipgloss.Color("#F97316"),
@@ -846,15 +953,25 @@ func renderCosts(usage map[string]any, l layout) string {
 		call        string // "$876.11"
 	}
 
+	// Below this the provider word is dropped: it is the widest part of the
+	// label and the least load-bearing, because each provider already has its
+	// own colour and its own block of rows. Keeping it is what ran the table
+	// off the side of a split pane.
+	showProvider := l.w >= 72
+
 	rows := make([]row, len(pricingTable))
 	for i, p := range pricingTable {
 		pColor, ok := providerColor[p.provider]
 		if !ok {
 			pColor = cGray
 		}
-		plain := p.model + "  " + p.provider
-		styled := lipgloss.NewStyle().Foreground(cWhite).Bold(true).Render(p.model) +
-			"  " + lipgloss.NewStyle().Foreground(pColor).Render(p.provider)
+		plain := p.model
+		styled := lipgloss.NewStyle().Foreground(pColor).Bold(true).Render(p.model)
+		if showProvider {
+			plain = p.model + "  " + p.provider
+			styled = lipgloss.NewStyle().Foreground(cWhite).Bold(true).Render(p.model) +
+				"  " + lipgloss.NewStyle().Foreground(pColor).Render(p.provider)
+		}
 		rows[i] = row{
 			plainLabel:  plain,
 			styledLabel: styled,
@@ -911,9 +1028,19 @@ func renderCosts(usage map[string]any, l layout) string {
 
 	// Header
 	b.WriteString(l.indent + titleStyle.Render("COST COMPARISON") + "\n")
-	subtitle := "Estimated cost of your usage on other providers."
-	if l.w >= 72 {
-		subtitle = "Estimated cost based on your actual input/output tokens on other providers."
+	// Measured rather than guessed: the long line is 75 columns and was
+	// switched on from 72 up, so the width that turned it on was also the
+	// width it ran off. Longest first, and the first one that fits wins.
+	subtitle := ""
+	for _, candidate := range []string{
+		"Estimated cost based on your actual input/output tokens on other providers.",
+		"Estimated cost of your usage on other providers.",
+		"Estimated cost elsewhere.",
+	} {
+		subtitle = candidate
+		if lipgloss.Width(candidate)+lipgloss.Width(l.indent) <= l.w {
+			break
+		}
 	}
 	b.WriteString(l.indent + subStyle.Render(subtitle) + "\n\n")
 
@@ -933,8 +1060,17 @@ func renderCosts(usage map[string]any, l layout) string {
 	b.WriteString(l.indent + lipgloss.NewStyle().Foreground(cDimGray).
 		Render(strings.Repeat("─", divW)) + "\n\n")
 
-	// Data rows — pad label using plain-text length, then right-align costs
-	for _, r := range rows {
+	// Data rows — pad label using plain-text length, then right-align costs.
+	//
+	// One line each, with a blank line only where the provider changes. This
+	// used to put a blank line between every row, which read fine over six and
+	// stopped being a table at ten: two screens of alternating text and gap,
+	// impossible to run an eye down. The gaps that are left do some work -
+	// they group the rows by who charges them.
+	for i, r := range rows {
+		if i > 0 && pricingTable[i].provider != pricingTable[i-1].provider {
+			b.WriteString("\n")
+		}
 		labelPad := nameW - len(r.plainLabel)
 		if labelPad < 0 {
 			labelPad = 0
@@ -947,21 +1083,32 @@ func renderCosts(usage map[string]any, l layout) string {
 		} else {
 			line += "  " + totalStyle.Render(rpad(r.c30, c30W))
 		}
-		b.WriteString(l.indent + line + "\n\n")
+		b.WriteString(l.indent + line + "\n")
 	}
+	b.WriteString("\n")
 
 	// Footer — measure plain text width first to avoid border miscalculation
 	const notePlain = "NaN — Your usage is included in your membership. No per-token charges."
 	nanStyle := lipgloss.NewStyle().Foreground(cCyan).Bold(true)
 	note := nanStyle.Render("NaN") +
 		lipgloss.NewStyle().Foreground(cGray).Render(" — Your usage is included in your membership. No per-token charges.")
+	// Not len(): the em dash is one column and three bytes, so counting bytes
+	// drew the box two columns wider than its own text. And not the text width
+	// alone either: at 70 columns of content plus a border and the indent, the
+	// box ran off the side of any terminal narrower than about 74, which is
+	// where this tab gets read on half a laptop screen. The text wraps instead.
+	noteW := lipgloss.Width(notePlain)
+	if fits := l.w - lipgloss.Width(l.indent) - 4; noteW > fits {
+		noteW = fits
+	}
+	if noteW < 8 {
+		noteW = 8
+	}
 	noteStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(cBlueDim).
 		Padding(0, 1).
-		// Not len(): the em dash is one column and three bytes, so counting
-		// bytes drew the box two columns wider than its own text.
-		Width(lipgloss.Width(notePlain))
+		Width(noteW)
 	b.WriteString(indentBlock(noteStyle.Render(note), l.indent) + "\n")
 
 	return b.String()
@@ -1101,6 +1248,16 @@ func detectTools() []toolInfo {
 			binary:     "codex",
 			configPath: filepath.Join(home, ".codex", "config.toml"),
 		},
+		{
+			// Not a coding agent like the rest: it lives in the member's
+			// messaging channels. It is here because connecting it is the same
+			// two values, and because it is the one tool that tells us where
+			// its config is instead of making us guess.
+			name:        "Hermes",
+			binary:      "hermes",
+			configPath:  hermesConfigPath(hermesHome()),
+			installPath: hermesHome(),
+		},
 	}
 	for i := range candidates {
 		_, binErr := exec.LookPath(candidates[i].binary)
@@ -1199,6 +1356,8 @@ func configureTools(apiKey string, enabledTools map[string]bool) string {
 				err = writePiConfig(t.configPath, apiKey)
 			case "Codex":
 				err = writeCodexConfig(t.configPath, apiKey)
+			case "Hermes":
+				err = writeHermesConfig(filepath.Dir(t.configPath), apiKey)
 			}
 			if err != nil {
 				lastErr = err
@@ -1216,6 +1375,8 @@ func configureTools(apiKey string, enabledTools map[string]bool) string {
 				err = removePiConfig(t.configPath)
 			case "Codex":
 				err = removeCodexConfig(t.configPath)
+			case "Hermes":
+				err = removeHermesConfig(filepath.Dir(t.configPath))
 			}
 			if err != nil {
 				lastErr = err
@@ -1475,7 +1636,47 @@ func writePiConfig(cfgPath, apiKey string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(cfgPath, data, 0o600)
+	if err := os.WriteFile(cfgPath, data, 0o600); err != nil {
+		return err
+	}
+	return writePiDefaults(piSettingsPath(cfgPath))
+}
+
+// Pi reads the provider it calls from a second file, and until this existed
+// the CLI wrote only the first one. nan.builders/docs/pi marks this step "not
+// optional" for a reason: with models.json alone Pi goes on calling its
+// factory provider, and what the member sees is a 401 that names neither file.
+func writePiDefaults(settingsPath string) error {
+	var settings map[string]any
+	if data, err := os.ReadFile(settingsPath); err == nil {
+		_ = json.Unmarshal(data, &settings)
+	}
+	if settings == nil {
+		settings = map[string]any{}
+	}
+
+	// A member who already picked a default picked it, and ours is one more
+	// provider they can switch to from inside Pi. This only fills the gap that
+	// leaves a fresh install calling nothing.
+	if _, chosen := settings["defaultProvider"]; chosen {
+		return nil
+	}
+	settings["defaultProvider"] = "nan"
+	settings["defaultModel"] = catalog.Coding
+
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o700); err != nil {
+		return err
+	}
+	out, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(settingsPath, out, 0o600)
+}
+
+// settings.json sits next to models.json in Pi's agent directory.
+func piSettingsPath(cfgPath string) string {
+	return filepath.Join(filepath.Dir(cfgPath), "settings.json")
 }
 
 // Pi's schema takes "text" and "image" and nothing else, so mimo-v2.5 goes in
@@ -1511,6 +1712,12 @@ func removePiConfig(cfgPath string) error {
 	}
 	delete(providers, "nan")
 
+	// A default pointing at a provider that is no longer in models.json is
+	// worse than no default: Pi starts and fails on the first message.
+	if err := removePiDefaults(piSettingsPath(cfgPath)); err != nil {
+		return err
+	}
+
 	// A models.json with nothing left in it is not a config Pi needs to read.
 	if len(providers) == 0 && len(cfg) == 1 {
 		return os.Remove(cfgPath)
@@ -1521,6 +1728,34 @@ func removePiConfig(cfgPath string) error {
 		return err
 	}
 	return os.WriteFile(cfgPath, out, 0o600)
+}
+
+// Only the default we wrote, and only while it still points at us: anything
+// the member set themselves is theirs.
+func removePiDefaults(settingsPath string) error {
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return nil
+	}
+	var settings map[string]any
+	if json.Unmarshal(data, &settings) != nil {
+		return nil
+	}
+	if settings["defaultProvider"] != "nan" {
+		return nil
+	}
+	delete(settings, "defaultProvider")
+	delete(settings, "defaultModel")
+
+	// The file existed only to hold our default, so it goes with it.
+	if len(settings) == 0 {
+		return os.Remove(settingsPath)
+	}
+	out, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(settingsPath, out, 0o600)
 }
 
 func writeCodexConfig(cfgPath, apiKey string) error {
@@ -1568,6 +1803,81 @@ wire_api = "chat"
 		return err
 	}
 	return os.WriteFile(cfgPath, []byte(content), 0o600)
+}
+
+// ── Hermes ───────────────────────────────────────────────────────────────────
+//
+// Every other tool here is configured by writing its file. Hermes is not,
+// because its config.yaml is a long commented document the member also edits
+// by hand, and because it ships the command to do it: `hermes config set`
+// writes a key without flattening the comments around it and rejects a key it
+// does not know. Reproducing that schema in Go would buy nothing and would
+// start drifting the day Hermes moves a field.
+//
+// Two things the tool knows and the docs page does not say. The path in
+// nan.builders/docs/hermes is the Unix one; on Windows Hermes keeps its home
+// under LOCALAPPDATA. And with the `custom` provider Hermes asks the endpoint
+// what it serves, so there is no model list to write here and none to keep in
+// step with the cluster - only which model to open with.
+
+// Swapped in tests, so nothing here spawns a process or goes near the
+// member's own Hermes. HERMES_HOME is passed on every call rather than
+// inherited: the writer configures the install it detected, not whichever one
+// the environment happens to point at.
+var runHermesConfig = func(home string, args ...string) error {
+	cmd := exec.Command("hermes", append([]string{"config"}, args...)...)
+	cmd.Env = append(os.Environ(), "HERMES_HOME="+home)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("hermes config %s: %s", strings.Join(args, " "), strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// The resolution Hermes itself uses: HERMES_HOME, then the platform default.
+func hermesHome() string {
+	if home := strings.TrimSpace(os.Getenv("HERMES_HOME")); home != "" {
+		return home
+	}
+	if runtime.GOOS == "windows" {
+		if local := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); local != "" {
+			return filepath.Join(local, "hermes")
+		}
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, "AppData", "Local", "hermes")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".hermes")
+}
+
+func hermesConfigPath(home string) string {
+	return filepath.Join(home, "config.yaml")
+}
+
+func writeHermesConfig(home, apiKey string) error {
+	settings := [][2]string{
+		{"model.provider", "custom"},
+		{"model.base_url", "https://api.nan.builders/v1"},
+		{"model.api_key", apiKey},
+		{"model.default", catalog.Coding},
+	}
+	for _, s := range settings {
+		if err := runHermesConfig(home, "set", s[0], s[1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// The same four keys and nothing else: a member's channels, skills and
+// persona live in this file too.
+func removeHermesConfig(home string) error {
+	for _, key := range []string{"model.api_key", "model.base_url", "model.default", "model.provider"} {
+		if err := runHermesConfig(home, "unset", key); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func removeCodexConfig(cfgPath string) error {
@@ -1703,6 +2013,33 @@ func (m model) renderSetup(l layout) string {
 			"  " + dimStyle.Render("e to set") + "\n")
 	}
 
+	// What the platform says about the account, once it has answered. The key
+	// itself never comes back from there, so the most this can do is say
+	// whether there is one to copy and where from - which still beats leaving
+	// a member staring at an empty field wondering what to paste.
+	if m.keyStatus != nil && m.sess.APIKey == "" {
+		hint := "this account has no key yet - create one at cloud.nan.builders"
+		if m.keyStatus.Exists {
+			name := m.keyStatus.Alias
+			if name == "" {
+				name = m.keyStatus.Name
+			}
+			hint = "your account has a key"
+			if name != "" {
+				hint += " (" + name + ")"
+			}
+			hint += " - copy it from cloud.nan.builders"
+		}
+		b.WriteString(l.indent + dimStyle.Render(hint) + "\n")
+	}
+	if m.keyCheck != "" {
+		style := okStyle
+		if strings.HasPrefix(m.keyCheck, "error") {
+			style = errStyle
+		}
+		b.WriteString(l.indent + style.Render(m.keyCheck) + "\n")
+	}
+
 	// ── Tools ────────────────────────────────────────────────────────────────
 	b.WriteString("\n" + l.indent + titleStyle.Render("Tools") + "\n")
 	if m.setupMsg != "" {
@@ -1777,7 +2114,7 @@ func (m model) renderSetup(l layout) string {
 
 // ── about renderer ───────────────────────────────────────────────────────────
 
-const Version = "0.1.2"
+const Version = "0.1.3"
 
 func renderAbout(l layout) string {
 	var b strings.Builder
@@ -1816,7 +2153,7 @@ func renderAbout(l layout) string {
 
 	b.WriteString(l.indent + sectionStyle.Render("Session") + "\n\n")
 	b.WriteString(l.indent + labelStyle.Render("Config:") +
-		dimStyle.Render("~/.config/nan/session.json") + "\n")
+		dimStyle.Render(session.Path()) + "\n")
 
 	return b.String()
 }
@@ -1829,7 +2166,8 @@ func renderHelp() string {
 		{"↑/↓  k/j", "scroll"},
 		{"r", "refresh current tab"},
 		{"e", "edit API key (Setup tab)"},
-		{"c", "configure tools (Setup tab)"},
+		{"space", "tick or untick the tool under the cursor (Setup tab)"},
+		{"c", "configure the ticked tools (Setup tab)"},
 		{"?", "toggle this help"},
 		{"q / Esc", "quit"},
 	}

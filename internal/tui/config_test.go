@@ -3,12 +3,16 @@ package tui
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/nxssie/nan-cli/internal/api"
 	catalog "github.com/nxssie/nan-cli/internal/models"
 	"github.com/nxssie/nan-cli/internal/session"
 )
@@ -387,9 +391,20 @@ func TestConfigureToolsWritesEveryEnabledTool(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home) // os.UserHomeDir reads this one on Windows
+	// Hermes does not take its home from either of those, so without this the
+	// run reaches the real install and configures the machine it is testing
+	// on. Faking the runner as well means no hermes process is spawned at all,
+	// here or on a machine that has one.
+	hermesHomeDir := filepath.Join(home, "hermes")
+	t.Setenv("HERMES_HOME", hermesHomeDir)
+	if err := os.MkdirAll(hermesHomeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	hermesCalls := recordHermes(t)
 
 	// A tool counts as installed if its binary is on PATH *or* its config path
-	// exists, so an empty file each is enough to make all four visible.
+	// exists, so an empty file each is enough to make the file-written ones
+	// visible.
 	paths := map[string]string{
 		"Factory AI": filepath.Join(home, ".factory", "settings.json"),
 		"OpenCode":   filepath.Join(home, ".config", "opencode", "opencode.json"),
@@ -405,8 +420,11 @@ func TestConfigureToolsWritesEveryEnabledTool(t *testing.T) {
 		}
 	}
 
-	if msg := configureTools(testKey, nil); !strings.Contains(msg, "4 added") {
-		t.Fatalf("configureTools said %q, want the four tools written", msg)
+	if msg := configureTools(testKey, nil); !strings.Contains(msg, "5 added") {
+		t.Fatalf("configureTools said %q, want the five tools written", msg)
+	}
+	if len(*hermesCalls) == 0 {
+		t.Error("Hermes was counted but never configured")
 	}
 
 	for name, p := range paths {
@@ -560,5 +578,432 @@ func TestHomeSaysHowToMoveAround(t *testing.T) {
 	// failed at the one thing it does.
 	if rows := len(strings.Split(strings.TrimRight(out, "\n"), "\n")); rows > 24-4 {
 		t.Errorf("Home is %d rows, the viewport of a 24-row terminal is %d", rows, 24-4)
+	}
+}
+
+// The provider block alone does not connect Pi to anything. Pi reads its
+// default from a second file, settings.json, and nan.builders/docs/pi marks
+// that step "not optional": without it Pi keeps calling its factory provider
+// and the member gets a 401 that names neither file. The CLI wrote the first
+// file and not the second, so enabling Pi from the Setup tab landed a member
+// squarely in the failure the docs call the most common one.
+func TestPiConfigWritesTheDefaultsOrPiStillAnswers401(t *testing.T) {
+	path := tempConfig(t, "models.json")
+	if err := writePiConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+
+	settings := readJSON(t, filepath.Join(filepath.Dir(path), "settings.json"))
+	if got := settings["defaultProvider"]; got != "nan" {
+		t.Errorf("defaultProvider = %v, want nan: Pi calls its factory provider otherwise", got)
+	}
+	if got := settings["defaultModel"]; got != catalog.Coding {
+		t.Errorf("defaultModel = %v, want %s", got, catalog.Coding)
+	}
+}
+
+// settings.json is Pi's, not ours: the default is the only key in it we have
+// any business writing.
+func TestPiConfigKeepsTheSettingsItDoesNotOwn(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "models.json")
+	settingsPath := filepath.Join(dir, "settings.json")
+	existing := `{"theme":"dark","defaultProvider":"openai","defaultModel":"gpt-5"}`
+	if err := os.WriteFile(settingsPath, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePiConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+
+	settings := readJSON(t, settingsPath)
+	if settings["theme"] != "dark" {
+		t.Error("a setting of theirs was dropped")
+	}
+	// A member who picked another provider picked it. Ours is one more
+	// provider in the file, and they can switch to it inside Pi.
+	if settings["defaultProvider"] != "openai" {
+		t.Error("a default the member chose was overwritten")
+	}
+}
+
+// Turning Pi off in the Setup tab has to leave Pi working, and a default
+// pointing at a provider that is no longer in models.json is not working.
+func TestPiRemovalTakesTheDefaultItWrote(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "models.json")
+	settingsPath := filepath.Join(dir, "settings.json")
+	if err := writePiConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := removePiConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
+		settings := readJSON(t, settingsPath)
+		if settings["defaultProvider"] == "nan" {
+			t.Error("Pi is left defaulting to a provider that is no longer in models.json")
+		}
+	}
+}
+
+// ── Hermes ───────────────────────────────────────────────────────────────────
+
+// Hermes is the first tool here that is not configured by writing its file.
+// Its config.yaml is a commented document a member edits, and it ships
+// `hermes config set`, which writes into it without flattening the comments
+// and validates the key while it is at it. So this writer drives the tool
+// instead of reproducing its schema, and what there is to test is the
+// conversation it has with it.
+func recordHermes(t *testing.T) *[][]string {
+	t.Helper()
+	var calls [][]string
+	original := runHermesConfig
+	runHermesConfig = func(home string, args ...string) error {
+		calls = append(calls, args)
+		return nil
+	}
+	t.Cleanup(func() { runHermesConfig = original })
+	return &calls
+}
+
+func TestHermesIsConfiguredThroughItsOwnConfigCommand(t *testing.T) {
+	calls := recordHermes(t)
+	if err := writeHermesConfig(t.TempDir(), testKey); err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]string{
+		// `custom` is the provider Hermes ships for any OpenAI-compatible
+		// endpoint. Its aliases (ollama, vllm, llamacpp) all map to this one.
+		"model.provider": "custom",
+		"model.base_url": "https://api.nan.builders/v1",
+		"model.api_key":  testKey,
+		"model.default":  catalog.Coding,
+	}
+	got := map[string]string{}
+	for _, c := range *calls {
+		if len(c) != 3 || c[0] != "set" {
+			t.Errorf("unexpected call %v", c)
+			continue
+		}
+		got[c[1]] = c[2]
+	}
+	for key, value := range want {
+		if got[key] != value {
+			t.Errorf("%s = %q, want %q", key, got[key], value)
+		}
+	}
+}
+
+// Hermes with a custom endpoint asks the cluster what it serves instead of
+// reading a list we write, so there is no model catalogue in this config and
+// no window to keep in step - the one thing it needs told is which model to
+// open with.
+func TestHermesIsNotSentAModelCatalogue(t *testing.T) {
+	calls := recordHermes(t)
+	if err := writeHermesConfig(t.TempDir(), testKey); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range *calls {
+		for _, arg := range c {
+			if strings.Contains(arg, "models") {
+				t.Errorf("call %v writes a model list Hermes discovers on its own", c)
+			}
+		}
+	}
+}
+
+func TestHermesRemovalTakesOnlyWhatWeWrote(t *testing.T) {
+	calls := recordHermes(t)
+	if err := removeHermesConfig(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range *calls {
+		if c[0] != "unset" {
+			t.Errorf("removal called %v, which is not an unset", c)
+		}
+		// The member's own settings live in the same file: their skills, their
+		// channels, their persona. Only the four keys we put there come out.
+		switch c[1] {
+		case "model.provider", "model.base_url", "model.api_key", "model.default":
+		default:
+			t.Errorf("removal unsets %q, which we never wrote", c[1])
+		}
+	}
+}
+
+// The path in nan.builders/docs/hermes, ~/.hermes/config.yaml, is the Unix
+// one. On Windows Hermes keeps it under LOCALAPPDATA, so a CLI that built the
+// path from the home directory would configure a Hermes that is not there.
+func TestHermesHomeFollowsTheToolNotTheDoc(t *testing.T) {
+	t.Setenv("HERMES_HOME", filepath.Join("some", "profile"))
+	if got := hermesHome(); got != filepath.Join("some", "profile") {
+		t.Errorf("HERMES_HOME ignored: got %q", got)
+	}
+
+	t.Setenv("HERMES_HOME", "")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	local := filepath.Join(home, "AppData", "Local")
+	t.Setenv("LOCALAPPDATA", local)
+
+	want := filepath.Join(home, ".hermes")
+	if runtime.GOOS == "windows" {
+		want = filepath.Join(local, "hermes")
+	}
+	if got := hermesHome(); got != want {
+		t.Errorf("hermesHome() = %q, want %q", got, want)
+	}
+}
+
+// Everything above agrees with a fake. This one agrees with Hermes, which is
+// the only agreement that keeps a member working, and it is why the writer
+// was built around `hermes config set` in the first place. Skipped where
+// Hermes is not installed, CI included.
+func TestHermesConfigAgainstTheRealBinary(t *testing.T) {
+	if _, err := exec.LookPath("hermes"); err != nil {
+		t.Skip("hermes is not installed here")
+	}
+	// Never the member's own Hermes: HERMES_HOME is what the writer passes to
+	// every call, so the whole exchange lands in a directory of this test's.
+	home := t.TempDir()
+	if err := writeHermesConfig(home, testKey); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(home, "config.yaml"))
+	if err != nil {
+		t.Fatalf("hermes wrote no config: %v", err)
+	}
+	written := string(data)
+	for _, want := range []string{"provider: custom", "base_url: https://api.nan.builders/v1", "default: " + catalog.Coding, testKey} {
+		if !strings.Contains(written, want) {
+			t.Errorf("config.yaml has no %q:\n%s", want, written)
+		}
+	}
+
+	if err := removeHermesConfig(home); err != nil {
+		t.Fatal(err)
+	}
+	data, _ = os.ReadFile(filepath.Join(home, "config.yaml"))
+	if strings.Contains(string(data), "api.nan.builders") {
+		t.Errorf("removal left the cluster behind:\n%s", data)
+	}
+}
+
+// ── the API key, and what the platform will and will not tell us ─────────────
+
+func setupModel(t *testing.T, sess *session.Session) model {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HERMES_HOME", filepath.Join(home, "hermes"))
+	return newModel(nil, sess)
+}
+
+// The idea this replaced was to have the Setup tab fetch the key with the
+// session it already holds. It cannot: GET /api/keys answers with metadata
+// and no secret, because a key is shown once, at creation. What is left worth
+// doing is telling a member there is one and where it is, instead of showing
+// an empty field and nothing else.
+func TestSetupSaysWhereTheKeyIsWhenTheFieldIsEmpty(t *testing.T) {
+	m := setupModel(t, &session.Session{})
+	m.keyStatus = &api.KeyStatus{Exists: true, Alias: "an-alias"}
+
+	out := m.renderSetup(newLayout(80, 24))
+	for _, want := range []string{"an-alias", "cloud.nan.builders"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the Setup tab does not mention %q", want)
+		}
+	}
+}
+
+func TestSetupSaysWhenTheAccountHasNoKeyAtAll(t *testing.T) {
+	m := setupModel(t, &session.Session{})
+	m.keyStatus = &api.KeyStatus{Exists: false}
+
+	out := m.renderSetup(newLayout(80, 24))
+	if !strings.Contains(out, "no key yet") {
+		t.Error("an account with no key is told nothing about it")
+	}
+}
+
+// Once there is a key in the field the hint is noise, and the key itself is
+// never printed.
+func TestSetupHidesTheHintAndTheKeyOnceOneIsSet(t *testing.T) {
+	m := setupModel(t, &session.Session{APIKey: testKey})
+	m.keyStatus = &api.KeyStatus{Exists: true, Alias: "an-alias"}
+
+	out := m.renderSetup(newLayout(80, 24))
+	if strings.Contains(out, "an-alias") || strings.Contains(out, "cloud.nan.builders") {
+		t.Error("the hint is still shown after a key was set")
+	}
+	if strings.Contains(out, testKey) {
+		t.Error("the API key is printed on screen")
+	}
+}
+
+// A key the cluster refuses used to be found out five times over, as a 401
+// inside each tool it had been written into. It is said once, here, before
+// anything is written at all.
+func TestSetupShowsAKeyTheClusterRefused(t *testing.T) {
+	m := setupModel(t, &session.Session{APIKey: testKey})
+	m.keyCheck = "error: the cluster refused this key - the API key in Setup is not valid"
+
+	out := m.renderSetup(newLayout(80, 24))
+	if !strings.Contains(out, "refused this key") {
+		t.Error("a refused key is not reported in the Setup tab")
+	}
+}
+
+// The Home tab tells a member that `?` lists "every shortcut, including the
+// ones for Setup". It listed e and c and not space, which is the one that
+// decides which tools get written at all.
+func TestHelpListsTheKeysHomePromises(t *testing.T) {
+	out := renderHelp()
+	for _, want := range []string{"space", "e", "c"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the help screen does not mention %q", want)
+		}
+	}
+}
+
+// ── the cost comparison ──────────────────────────────────────────────────────
+
+// The Costs tab exists to answer "what would this have cost me elsewhere".
+// Every number in it is typed in by hand from a vendor's pricing page, nothing
+// reads them back, and the table went a long time with five of six rows wrong
+// - each of them understating the competitor. These are the mechanical checks
+// that catch the shapes of wrong a reader would not notice.
+func TestPricingTableIsPlausible(t *testing.T) {
+	if len(pricingTable) == 0 {
+		t.Fatal("nothing to compare against")
+	}
+	seen := map[string]bool{}
+	for _, p := range pricingTable {
+		if p.inPer1M <= 0 || p.outPer1M <= 0 {
+			t.Errorf("%s: a free model is a typo, not a price (%v/%v)", p.model, p.inPer1M, p.outPer1M)
+		}
+		// Every frontier vendor charges more for output than for input, so a
+		// row where that flips is a transposed pair. None of the six wrong
+		// rows failed this way - they were each plausible and simply not what
+		// the vendor charged - which is the point: this catches the typo, and
+		// only reading the pricing page catches the rest.
+		if p.outPer1M < p.inPer1M {
+			t.Errorf("%s: output (%v) cheaper than input (%v) - transposed?", p.model, p.outPer1M, p.inPer1M)
+		}
+		if seen[p.model] {
+			t.Errorf("%s is listed twice", p.model)
+		}
+		seen[p.model] = true
+		if p.provider == "" {
+			t.Errorf("%s has no provider, so it renders with no colour and no attribution", p.model)
+		}
+	}
+}
+
+// Every provider in the table needs a colour, or it renders grey and looks
+// like a different kind of row.
+func TestEveryPricedProviderHasAColour(t *testing.T) {
+	for _, p := range pricingTable {
+		if _, ok := providerColor[p.provider]; !ok {
+			t.Errorf("%s has no colour in providerColor", p.provider)
+		}
+	}
+}
+
+// Gemini 3.8 Flash is on a promotional rate that doubles on 2027-01-01. That
+// is a number which is right today and silently wrong on a date we already
+// know, which no amount of care at review time catches. This is the only
+// thing that will.
+func TestGeminiFlashPromoHasNotExpired(t *testing.T) {
+	if time.Now().Before(geminiFlashPromoEnds) {
+		return
+	}
+	t.Errorf("Gemini 3.8 Flash's promotional rate ended on %s: "+
+		"its price in pricingTable doubles to 1.50/7.50, and the Costs tab has been "+
+		"understating Google ever since. Update the row and move geminiFlashPromoEnds "+
+		"or drop it if the row no longer needs one.", geminiFlashPromoEnds.Format("2006-01-02"))
+}
+
+// The footer box was drawn at the width of its own text, 70 columns plus a
+// border and the indent, whatever terminal it was in. Anything narrower than
+// about 74 got a box running off the right-hand side - which is where this tab
+// is read on half a laptop screen.
+func TestCostsFitsTheTerminalItIsDrawnIn(t *testing.T) {
+	usage := map[string]any{
+		"last24h": map[string]any{"byModel": []any{
+			map[string]any{"model": "gemma4", "inputTokens": 1_000_000.0, "outputTokens": 500_000.0},
+		}},
+	}
+	for _, w := range []int{40, 50, 60, 72, 80, 120} {
+		for _, line := range strings.Split(renderCosts(usage, newLayout(w, 40)), "\n") {
+			if got := lipgloss.Width(line); got > w {
+				t.Errorf("at %d columns a line measures %d: %q", w, got, line)
+			}
+		}
+	}
+}
+
+// Ten rows with a blank line between each is not a table any more, it is two
+// screens of alternating text and gap. The blank lines that are left group the
+// rows by provider, which is the only thing they were ever doing well.
+func TestCostsRowsAreNotDoubleSpaced(t *testing.T) {
+	usage := map[string]any{
+		"last24h": map[string]any{"byModel": []any{
+			map[string]any{"model": "gemma4", "inputTokens": 1_000_000.0, "outputTokens": 500_000.0},
+		}},
+	}
+	out := renderCosts(usage, newLayout(100, 40))
+	lines := strings.Split(out, "\n")
+
+	// Find each priced row, then check the one after it is only blank when the
+	// provider changes.
+	index := map[string]int{}
+	for i, line := range lines {
+		for _, p := range pricingTable {
+			if strings.Contains(line, p.model) {
+				index[p.model] = i
+			}
+		}
+	}
+	for i := 0; i < len(pricingTable)-1; i++ {
+		this, next := pricingTable[i], pricingTable[i+1]
+		at, ok := index[this.model]
+		if !ok {
+			t.Errorf("%s is priced but never rendered", this.model)
+			continue
+		}
+		gap := strings.TrimSpace(lines[at+1]) == ""
+		if want := this.provider != next.provider; gap != want {
+			if want {
+				t.Errorf("no blank line between %s and %s, which are different providers", this.provider, next.provider)
+			} else {
+				t.Errorf("a blank line inside %s's rows, after %s", this.provider, this.model)
+			}
+		}
+	}
+}
+
+// The About tab printed "~/.config/nan/session.json" as a literal. On Windows
+// that is not a path, not where the file is, and not something Explorer
+// resolves - so a member told to look there finds nothing.
+func TestAboutShowsTheSessionPathThatExists(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	out := renderAbout(newLayout(100, 30))
+	if strings.Contains(out, "~/") {
+		t.Error("the About tab still prints a tilde path")
+	}
+	if want := session.Path(); !strings.Contains(out, want) {
+		t.Errorf("the About tab does not show %q", want)
+	}
+	if !strings.Contains(session.Path(), home) {
+		t.Errorf("session.Path() = %q, which is not under the home it was given", session.Path())
 	}
 }
