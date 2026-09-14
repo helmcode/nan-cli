@@ -289,15 +289,23 @@ func renderHome(l layout, loggedIn, hasKey bool, mood mascotMood) string {
 	key := lipgloss.NewStyle().Foreground(lipgloss.Color(brandVioletText)).Bold(true)
 	desc := lipgloss.NewStyle().Foreground(cGray)
 
-	b.WriteString(l.indent + section.Render("Getting around") + "\n\n")
+	// One blank line after the header, not two: "The tabs" below already does
+	// it this way, and the row that buys is what the sign-out line needs to fit
+	// a 24-row terminal.
+	b.WriteString(l.indent + section.Render("Getting around") + "\n")
 
 	keys := []struct{ k, d string }{
 		{"←/→", "move between tabs"},
 		{"↑/↓", "scroll the tab you are on"},
 		{"r", "refresh it"},
-		{"?", "every shortcut, including the ones for Setup"},
-		{"q", "quit"},
 	}
+	if loggedIn {
+		keys = append(keys, struct{ k, d string }{"o", "sign out of this account"})
+	}
+	keys = append(keys,
+		struct{ k, d string }{"?", "every shortcut, including the ones for Setup"},
+		struct{ k, d string }{"q", "quit"},
+	)
 	tabs := []struct{ k, d string }{
 		{"Usage", "what you have spent, over 24 hours, 30 days and all time"},
 		{"Models", "what your key can call, and what you have spent on each"},
