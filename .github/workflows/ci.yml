@@ -221,3 +221,34 @@ jobs:
           # The subcommands reach for a session and must fail cleanly without
           # one rather than panic, which is the state a fresh machine is in.
           "$RUNNER_TEMP/bin/nan" me || true
+
+      # The default path, with no INSTALL_DIR. This is what the one-liner on
+      # nan.builders actually does, and it is the line printed in the README.
+      - name: Install where the one-liner puts it
+        run: |
+          set -euo pipefail
+          bash scripts/install.sh
+          command -v nan
+          nan --version
+
+      # And the branch nobody had ever taken: a destination the user cannot
+      # write to, where install_bin falls back to sudo. On a runner both
+      # /usr/local/bin and the temp dir are writable, so the fallback would
+      # never fire on its own and "it installs fine" would say nothing about
+      # it. A root-owned directory forces it.
+      - name: Force the sudo fallback
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /opt/nan-sudo-test
+          sudo chmod 755 /opt/nan-sudo-test
+          sudo chown root /opt/nan-sudo-test
+
+          INSTALL_DIR=/opt/nan-sudo-test/bin bash scripts/install.sh 2>&1 | tee out.txt
+
+          # It has to have actually taken that branch, not quietly succeeded.
+          grep -q "retrying with sudo" out.txt || {
+            echo "::error::the sudo fallback never fired, so this proves nothing" >&2
+            exit 1
+          }
+          /opt/nan-sudo-test/bin/nan --version
+          test -x /opt/nan-sudo-test/bin/nan
