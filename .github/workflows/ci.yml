@@ -158,4 +158,23 @@ jobs:
               exit 1
             }
           }
-          Write-Host "installer parses, web requests basic-parsed, no unguarded exit, arch detection survives without .NET"
+          # Nothing may set a preference variable at script scope. `iex` runs
+          # this in the caller's session, so an assignment out there is an
+          # assignment to their shell for the rest of its life.
+          # $ErrorActionPreference = 'Stop' left behind turns every later
+          # non-terminating error in that session terminating - including
+          # inside the prompt function a terminal like Warp installs to know
+          # where a command begins and ends. When that throws, PowerShell
+          # falls back to its built-in PS> and the terminal loses the session:
+          # a prompt sits there and nothing typed at it does anything.
+          $depth = 0
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            $line = $lines[$i]
+            if ($line -match '^\s*#') { continue }
+            if ($depth -eq 0 -and $line -match '^\s*\$(ErrorAction|Progress|Warning|Information|Debug|Verbose|Confirm)Preference\s*=') {
+              Write-Host "::error file=scripts/install.ps1,line=$($i + 1)::a preference set at script scope follows the member into their shell; set it inside a function"
+            exit 1
+            }
+            $depth += ([regex]::Matches($line, '{')).Count - ([regex]::Matches($line, '}')).Count
+          }
+          Write-Host "installer parses, web requests basic-parsed, no unguarded exit, arch survives without .NET, no preference leaks"
