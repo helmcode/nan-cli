@@ -52,16 +52,24 @@ get_latest_version() {
   # A token if one is around. The unauthenticated API allows 60 requests an
   # hour per IP, which anyone behind a shared address - an office, a CI runner,
   # a phone tether - can be on the wrong side of through no fault of their own.
-  local auth=()
-  local token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
-  if [ -n "$token" ]; then
-    auth=(-H "Authorization: Bearer $token")
-  fi
+  #
+  # Two branches and no array. macOS ships bash 3.2.57, frozen in 2007 by its
+  # licence, and there "${arr[@]}" on an EMPTY array under `set -u` is an
+  # unbound variable - fixed in bash 4.4, which no Mac has. That is not an edge
+  # case, it is every Mac: the script died on its first request and then blamed
+  # the GitHub rate limit for it.
+  #
   # `|| true` on the pipeline, because the caller decides what an empty answer
   # means. Without it `set -euo pipefail` kills the script where grep finds no
-  # tag_name - which is exactly the rate-limited case - and the careful message
-  # below never runs. It was written, and it was unreachable.
-  curl -sL "${auth[@]}" "https://api.github.com/repos/$REPO/releases/latest"     | grep '"tag_name"' | cut -d'"' -f4 || true
+  # tag_name - which is the rate-limited case - and the message explaining it
+  # never runs.
+  local url="https://api.github.com/repos/$REPO/releases/latest"
+  local token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+  if [ -n "$token" ]; then
+    curl -sL -H "Authorization: Bearer $token" "$url" | grep '"tag_name"' | cut -d'"' -f4 || true
+  else
+    curl -sL "$url" | grep '"tag_name"' | cut -d'"' -f4 || true
+  fi
 }
 
 # An unauthenticated GitHub API is rate limited per IP, so this call can come
@@ -74,9 +82,9 @@ require_version() {
     return 0
   fi
   err "could not work out the latest version from the GitHub API"
-  err "it rate limits unauthenticated requests, so this is usually temporary"
+  err "the usual cause is its rate limit on unauthenticated requests, which passes"
   err "wait a few minutes, or pick a version yourself:"
-  printf "    VERSION=v0.1.18 curl -fsSL https://nan.builders/install | bash
+  printf "    VERSION=v0.1.19 curl -fsSL https://nan.builders/install | bash
 " >&2
   err "the releases are at https://github.com/$REPO/releases"
   exit 1

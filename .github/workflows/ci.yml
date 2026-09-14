@@ -216,8 +216,17 @@ jobs:
       # INSTALL_DIR inside the runner's temp, so there is no sudo prompt and
       # nothing to clean up. The default path is /usr/local/bin and that is
       # what the sudo fallback is for; this checks the installer, not sudo.
+      # /bin/bash explicitly, and the versions on the log, so which shell this
+      # ran under is a fact and not an assumption. macOS ships bash 3.2.57 -
+      # frozen in 2007 by its licence - where several things that work
+      # everywhere else do not.
+      - name: Which bash is being tested
+        run: |
+          /bin/bash --version | head -1
+          bash --version | head -1
+
       - name: Run the installer
-        run: INSTALL_DIR="$RUNNER_TEMP/bin" bash scripts/install.sh
+        run: INSTALL_DIR="$RUNNER_TEMP/bin" /bin/bash scripts/install.sh
 
       - name: Run what it installed
         run: |
@@ -233,7 +242,7 @@ jobs:
       - name: Install where the one-liner puts it
         run: |
           set -euo pipefail
-          bash scripts/install.sh
+          /bin/bash scripts/install.sh
           command -v nan
           nan --version
 
@@ -247,12 +256,22 @@ jobs:
           GITHUB_TOKEN: ""
         run: |
           set -uo pipefail
-          out="$(REPO=helmcode/this-repo-does-not-exist bash scripts/install.sh 2>&1)" || true
+          out="$(REPO=helmcode/this-repo-does-not-exist /bin/bash scripts/install.sh 2>&1)" || true
           echo "$out"
           grep -q "could not work out the latest version" <<<"$out" || {
             echo "::error::the lookup failed without explaining itself" >&2
             exit 1
           }
+          # And it has to have failed for the reason it says. This step passed
+          # for a whole release while the script was dying on `auth[@]: unbound
+          # variable` two lines earlier - the bug produced the very message
+          # being grepped for, so the assertion was satisfied by the failure it
+          # existed to tell apart. A shell error in the output is never the
+          # expected path, whatever text follows it.
+          if grep -qiE "unbound variable|command not found|syntax error|bad substitution" <<<"$out"; then
+            echo "::error::the script hit a shell error, and the message that followed was not about the real cause" >&2
+            exit 1
+          fi
 
       # And the branch nobody had ever taken: a destination the user cannot
       # write to, where install_bin falls back to sudo. On a runner both
@@ -266,7 +285,7 @@ jobs:
           sudo chmod 755 /opt/nan-sudo-test
           sudo chown root /opt/nan-sudo-test
 
-          INSTALL_DIR=/opt/nan-sudo-test/bin bash scripts/install.sh 2>&1 | tee out.txt
+          INSTALL_DIR=/opt/nan-sudo-test/bin /bin/bash scripts/install.sh 2>&1 | tee out.txt
 
           # It has to have actually taken that branch, not quietly succeeded.
           grep -q "retrying with sudo" out.txt || {
