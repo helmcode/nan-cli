@@ -928,3 +928,62 @@ func TestGeminiFlashPromoHasNotExpired(t *testing.T) {
 		"understating Google ever since. Update the row and move geminiFlashPromoEnds "+
 		"or drop it if the row no longer needs one.", geminiFlashPromoEnds.Format("2006-01-02"))
 }
+
+// The footer box was drawn at the width of its own text, 70 columns plus a
+// border and the indent, whatever terminal it was in. Anything narrower than
+// about 74 got a box running off the right-hand side - which is where this tab
+// is read on half a laptop screen.
+func TestCostsFitsTheTerminalItIsDrawnIn(t *testing.T) {
+	usage := map[string]any{
+		"last24h": map[string]any{"byModel": []any{
+			map[string]any{"model": "gemma4", "inputTokens": 1_000_000.0, "outputTokens": 500_000.0},
+		}},
+	}
+	for _, w := range []int{40, 50, 60, 72, 80, 120} {
+		for _, line := range strings.Split(renderCosts(usage, newLayout(w, 40)), "\n") {
+			if got := lipgloss.Width(line); got > w {
+				t.Errorf("at %d columns a line measures %d: %q", w, got, line)
+			}
+		}
+	}
+}
+
+// Ten rows with a blank line between each is not a table any more, it is two
+// screens of alternating text and gap. The blank lines that are left group the
+// rows by provider, which is the only thing they were ever doing well.
+func TestCostsRowsAreNotDoubleSpaced(t *testing.T) {
+	usage := map[string]any{
+		"last24h": map[string]any{"byModel": []any{
+			map[string]any{"model": "gemma4", "inputTokens": 1_000_000.0, "outputTokens": 500_000.0},
+		}},
+	}
+	out := renderCosts(usage, newLayout(100, 40))
+	lines := strings.Split(out, "\n")
+
+	// Find each priced row, then check the one after it is only blank when the
+	// provider changes.
+	index := map[string]int{}
+	for i, line := range lines {
+		for _, p := range pricingTable {
+			if strings.Contains(line, p.model) {
+				index[p.model] = i
+			}
+		}
+	}
+	for i := 0; i < len(pricingTable)-1; i++ {
+		this, next := pricingTable[i], pricingTable[i+1]
+		at, ok := index[this.model]
+		if !ok {
+			t.Errorf("%s is priced but never rendered", this.model)
+			continue
+		}
+		gap := strings.TrimSpace(lines[at+1]) == ""
+		if want := this.provider != next.provider; gap != want {
+			if want {
+				t.Errorf("no blank line between %s and %s, which are different providers", this.provider, next.provider)
+			} else {
+				t.Errorf("a blank line inside %s's rows, after %s", this.provider, this.model)
+			}
+		}
+	}
+}

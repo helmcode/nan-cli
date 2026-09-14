@@ -845,24 +845,32 @@ type providerPricing struct {
 
 // Per 1M tokens, read off each vendor's own pricing page on 2026-09-14.
 //
-// Five of the six rows this replaced were wrong, and all five were wrong in
-// the same direction: the output price too low. GPT-5.5 was published at $20
-// against a real $30, Gemini 3.1 Pro at $8 against $12, Gemini 2.5 Flash at
-// $0.35/$1.05 against $0.30/$2.50, and "GPT-5.4 Mini" was not a model anyone
-// sells. Sonnet 4.6 was priced correctly and had become a legacy model, with
-// Sonnet 5 both newer and cheaper.
+// Ten rows rather than the six this started as, and the reason is the spread
+// rather than the count. The tab multiplies a member's NaN token usage by each
+// of these, so a table that carried only mid-range models answered only the
+// mid-range question. From Luna at $0.20 in to Astra and Fable at $10, a
+// reader can find the row that matches what they would actually have reached
+// for instead of taking ours as the comparison.
 //
-// A tab whose whole claim is "this is what you would have paid elsewhere"
+// The six this replaced were five-sixths wrong, and all five in the same
+// direction - the output price too low. GPT-5.5 was published at $20 against a
+// real $30, Gemini 3.1 Pro at $8 against $12, Gemini 2.5 Flash at $0.35/$1.05
+// against $0.30/$2.50, and "GPT-5.4 Mini" was not a model anyone sells. A tab
+// whose whole claim is "this is what you would have paid elsewhere"
 // understating every competitor is the one direction it must not be wrong in.
 //
-// Two of these carry a condition the table cannot express, so they are taken
-// at their lowest published rate and the comparison stays conservative:
-// Gemini 3.1 Pro costs $4/$18 above a 200k-token prompt, and Gemini 3.8 Flash
-// is on a promotional rate that doubles on 2027-01-01. TestGeminiFlashPromo
+// Two rows carry a condition the table cannot express, so each is taken at its
+// lowest published rate and the comparison stays conservative: Gemini 3.1 Pro
+// costs $4/$18 above a 200k-token prompt, and Gemini 3.8 Flash is on a
+// promotional rate that doubles on 2027-01-01. TestGeminiFlashPromoHasNotExpired
 // fails on that date so the number is changed rather than forgotten.
 var pricingTable = []providerPricing{
+	{"Claude Fable 5.1", "Anthropic", 10.00, 50.00},
+	{"Claude Opus 5", "Anthropic", 5.00, 25.00},
 	{"Claude Sonnet 5", "Anthropic", 2.00, 10.00},
 	{"Claude Haiku 4.5", "Anthropic", 1.00, 5.00},
+	{"GPT-6 Astra", "OpenAI", 10.00, 50.00},
+	{"GPT-5.6 Sol", "OpenAI", 4.00, 20.00},
 	{"GPT-5.6 Terra", "OpenAI", 2.00, 12.00},
 	{"GPT-5.6 Luna", "OpenAI", 0.20, 1.20},
 	{"Gemini 3.1 Pro", "Google", 2.00, 12.00},
@@ -945,15 +953,25 @@ func renderCosts(usage map[string]any, l layout) string {
 		call        string // "$876.11"
 	}
 
+	// Below this the provider word is dropped: it is the widest part of the
+	// label and the least load-bearing, because each provider already has its
+	// own colour and its own block of rows. Keeping it is what ran the table
+	// off the side of a split pane.
+	showProvider := l.w >= 72
+
 	rows := make([]row, len(pricingTable))
 	for i, p := range pricingTable {
 		pColor, ok := providerColor[p.provider]
 		if !ok {
 			pColor = cGray
 		}
-		plain := p.model + "  " + p.provider
-		styled := lipgloss.NewStyle().Foreground(cWhite).Bold(true).Render(p.model) +
-			"  " + lipgloss.NewStyle().Foreground(pColor).Render(p.provider)
+		plain := p.model
+		styled := lipgloss.NewStyle().Foreground(pColor).Bold(true).Render(p.model)
+		if showProvider {
+			plain = p.model + "  " + p.provider
+			styled = lipgloss.NewStyle().Foreground(cWhite).Bold(true).Render(p.model) +
+				"  " + lipgloss.NewStyle().Foreground(pColor).Render(p.provider)
+		}
 		rows[i] = row{
 			plainLabel:  plain,
 			styledLabel: styled,
@@ -1010,9 +1028,19 @@ func renderCosts(usage map[string]any, l layout) string {
 
 	// Header
 	b.WriteString(l.indent + titleStyle.Render("COST COMPARISON") + "\n")
-	subtitle := "Estimated cost of your usage on other providers."
-	if l.w >= 72 {
-		subtitle = "Estimated cost based on your actual input/output tokens on other providers."
+	// Measured rather than guessed: the long line is 75 columns and was
+	// switched on from 72 up, so the width that turned it on was also the
+	// width it ran off. Longest first, and the first one that fits wins.
+	subtitle := ""
+	for _, candidate := range []string{
+		"Estimated cost based on your actual input/output tokens on other providers.",
+		"Estimated cost of your usage on other providers.",
+		"Estimated cost elsewhere.",
+	} {
+		subtitle = candidate
+		if lipgloss.Width(candidate)+lipgloss.Width(l.indent) <= l.w {
+			break
+		}
 	}
 	b.WriteString(l.indent + subStyle.Render(subtitle) + "\n\n")
 
@@ -1032,8 +1060,17 @@ func renderCosts(usage map[string]any, l layout) string {
 	b.WriteString(l.indent + lipgloss.NewStyle().Foreground(cDimGray).
 		Render(strings.Repeat("─", divW)) + "\n\n")
 
-	// Data rows — pad label using plain-text length, then right-align costs
-	for _, r := range rows {
+	// Data rows — pad label using plain-text length, then right-align costs.
+	//
+	// One line each, with a blank line only where the provider changes. This
+	// used to put a blank line between every row, which read fine over six and
+	// stopped being a table at ten: two screens of alternating text and gap,
+	// impossible to run an eye down. The gaps that are left do some work -
+	// they group the rows by who charges them.
+	for i, r := range rows {
+		if i > 0 && pricingTable[i].provider != pricingTable[i-1].provider {
+			b.WriteString("\n")
+		}
 		labelPad := nameW - len(r.plainLabel)
 		if labelPad < 0 {
 			labelPad = 0
@@ -1046,21 +1083,32 @@ func renderCosts(usage map[string]any, l layout) string {
 		} else {
 			line += "  " + totalStyle.Render(rpad(r.c30, c30W))
 		}
-		b.WriteString(l.indent + line + "\n\n")
+		b.WriteString(l.indent + line + "\n")
 	}
+	b.WriteString("\n")
 
 	// Footer — measure plain text width first to avoid border miscalculation
 	const notePlain = "NaN — Your usage is included in your membership. No per-token charges."
 	nanStyle := lipgloss.NewStyle().Foreground(cCyan).Bold(true)
 	note := nanStyle.Render("NaN") +
 		lipgloss.NewStyle().Foreground(cGray).Render(" — Your usage is included in your membership. No per-token charges.")
+	// Not len(): the em dash is one column and three bytes, so counting bytes
+	// drew the box two columns wider than its own text. And not the text width
+	// alone either: at 70 columns of content plus a border and the indent, the
+	// box ran off the side of any terminal narrower than about 74, which is
+	// where this tab gets read on half a laptop screen. The text wraps instead.
+	noteW := lipgloss.Width(notePlain)
+	if fits := l.w - lipgloss.Width(l.indent) - 4; noteW > fits {
+		noteW = fits
+	}
+	if noteW < 8 {
+		noteW = 8
+	}
 	noteStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(cBlueDim).
 		Padding(0, 1).
-		// Not len(): the em dash is one column and three bytes, so counting
-		// bytes drew the box two columns wider than its own text.
-		Width(lipgloss.Width(notePlain))
+		Width(noteW)
 	b.WriteString(indentBlock(noteStyle.Render(note), l.indent) + "\n")
 
 	return b.String()
