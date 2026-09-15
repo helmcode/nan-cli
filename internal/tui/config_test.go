@@ -48,6 +48,35 @@ func readJSON(t *testing.T, path string) map[string]any {
 	return out
 }
 
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return ""
+	}
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	return string(data)
+}
+
+// A file this CLI put a key into is the member's and nobody else's on the
+// machine. Windows does not carry the mode bits - the file inherits the ACL of
+// the profile directory it sits in - so there is nothing to assert there.
+func assertNotWorldReadable(t *testing.T, path string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode&0o077 != 0 {
+		t.Errorf("%s is mode %04o, readable by more than the member", filepath.Base(path), mode)
+	}
+}
+
 func TestOpencodeConfigPublishesEveryModelWithItsWindow(t *testing.T) {
 	path := tempConfig(t, "opencode.json")
 	if err := writeOpencodeConfig(path, testKey); err != nil {
@@ -686,8 +715,63 @@ func recordHermes(t *testing.T) *[][]string {
 		calls = append(calls, args)
 		return nil
 	}
-	t.Cleanup(func() { runHermesConfig = original })
+
+	// And `config get`, which the writer uses to confirm Hermes resolved the
+	// reference. The fake resolves it the same way Hermes does - out of the
+	// .env this CLI just wrote - so the check is exercised rather than
+	// stubbed past.
+	originalRead := readHermesConfig
+	readHermesConfig = func(home string, args ...string) (string, error) {
+		for _, line := range strings.Split(readFile(t, hermesEnvPath(home)), "\n") {
+			if name, value, ok := strings.Cut(line, "="); ok && strings.TrimSpace(name) == hermesKeyVar {
+				return value, nil
+			}
+		}
+		return "", nil
+	}
+
+	t.Cleanup(func() {
+		runHermesConfig = original
+		readHermesConfig = originalRead
+	})
 	return &calls
+}
+
+// The reference is only worth writing if Hermes turns it back into the key.
+// Nothing in this CLI controls that, so the writer asks - and says so plainly
+// rather than leaving a member with a 401 that names nothing.
+func TestHermesIsRefusedWhenItDoesNotResolveTheReference(t *testing.T) {
+	recordHermes(t)
+	original := readHermesConfig
+	readHermesConfig = func(home string, args ...string) (string, error) {
+		return hermesKeyRef, nil // an unexpanded literal, as an older build would
+	}
+	t.Cleanup(func() { readHermesConfig = original })
+
+	err := writeHermesConfig(t.TempDir(), testKey)
+	if err == nil {
+		t.Fatal("a Hermes that never resolved the key was reported as configured")
+	}
+	if strings.Contains(err.Error(), testKey) {
+		t.Errorf("the error carries the key: %v", err)
+	}
+}
+
+// And a Hermes that cannot answer the question at all is not the same as one
+// that answered wrongly: an older build without `config get` says nothing
+// either way, and failing the step over a question we could not ask would be
+// its own bug.
+func TestHermesThatCannotAnswerIsNotTreatedAsBroken(t *testing.T) {
+	recordHermes(t)
+	original := readHermesConfig
+	readHermesConfig = func(home string, args ...string) (string, error) {
+		return "", errors.New("unknown command: get")
+	}
+	t.Cleanup(func() { readHermesConfig = original })
+
+	if err := writeHermesConfig(t.TempDir(), testKey); err != nil {
+		t.Errorf("an unanswerable check failed the whole step: %v", err)
+	}
 }
 
 func TestHermesIsConfiguredThroughItsOwnConfigCommand(t *testing.T) {
@@ -701,8 +785,9 @@ func TestHermesIsConfiguredThroughItsOwnConfigCommand(t *testing.T) {
 		// endpoint. Its aliases (ollama, vllm, llamacpp) all map to this one.
 		"model.provider": "custom",
 		"model.base_url": "https://api.nan.builders/v1",
-		"model.api_key":  testKey,
-		"model.default":  catalog.Coding,
+		// The reference, not the secret. The test below is the why.
+		"model.api_key": hermesKeyRef,
+		"model.default": catalog.Coding,
 	}
 	got := map[string]string{}
 	for _, c := range *calls {
@@ -716,6 +801,72 @@ func TestHermesIsConfiguredThroughItsOwnConfigCommand(t *testing.T) {
 		if got[key] != value {
 			t.Errorf("%s = %q, want %q", key, got[key], value)
 		}
+	}
+}
+
+// The one tool here that is configured by running something, and therefore the
+// one place a key could leave this process as an argument. It must not.
+//
+// An argument is public on the machine for as long as the process lives: `ps`
+// hands the whole line to anything running as the member, and on Linux
+// /proc/<pid>/cmdline to other accounts as well. So the key goes into Hermes'
+// own .env, the config points at it with ${NAN_API_KEY}, and nothing readable
+// from outside this process ever holds the secret itself.
+func TestHermesNeverReceivesTheKeyAsAnArgument(t *testing.T) {
+	calls := recordHermes(t)
+	home := t.TempDir()
+	if err := writeHermesConfig(home, testKey); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, c := range *calls {
+		for _, arg := range c {
+			if strings.Contains(arg, testKey) {
+				t.Fatalf("the key was handed to hermes as an argument: %v", c)
+			}
+		}
+	}
+
+	env := readFile(t, hermesEnvPath(home))
+	if !strings.Contains(env, hermesKeyVar+"="+testKey) {
+		t.Errorf(".env does not carry the key:\n%s", env)
+	}
+	assertNotWorldReadable(t, hermesEnvPath(home))
+}
+
+// The .env is Hermes', not ours: other providers' keys live in it, with the
+// member's own notes around them.
+func TestHermesEnvKeepsEverythingElseInTheFile(t *testing.T) {
+	recordHermes(t)
+	home := t.TempDir()
+	envPath := hermesEnvPath(home)
+	existing := "# their notes\nOPENROUTER_API_KEY=theirs\n" + hermesKeyVar + "=an-older-one\n"
+	if err := os.WriteFile(envPath, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeHermesConfig(home, testKey); err != nil {
+		t.Fatal(err)
+	}
+	after := readFile(t, envPath)
+	for _, want := range []string{"# their notes", "OPENROUTER_API_KEY=theirs", hermesKeyVar + "=" + testKey} {
+		if !strings.Contains(after, want) {
+			t.Errorf("after writing, .env has no %q:\n%s", want, after)
+		}
+	}
+	if strings.Contains(after, "an-older-one") {
+		t.Errorf("the key it replaced is still in .env:\n%s", after)
+	}
+
+	if err := removeHermesConfig(home); err != nil {
+		t.Fatal(err)
+	}
+	after = readFile(t, envPath)
+	if strings.Contains(after, testKey) {
+		t.Errorf("removal left the key in .env:\n%s", after)
+	}
+	if !strings.Contains(after, "OPENROUTER_API_KEY=theirs") {
+		t.Errorf("removal took somebody else's key with it:\n%s", after)
 	}
 }
 
@@ -739,8 +890,18 @@ func TestHermesIsNotSentAModelCatalogue(t *testing.T) {
 
 func TestHermesRemovalTakesOnlyWhatWeWrote(t *testing.T) {
 	calls := recordHermes(t)
-	if err := removeHermesConfig(t.TempDir()); err != nil {
+	home := t.TempDir()
+	// A config that is ours. Without one the removal has nothing to unset and
+	// skips the four calls this is here to check, rather than spawning Hermes
+	// four times over a config it never touched.
+	if err := os.WriteFile(hermesConfigPath(home), []byte("model:\n  base_url: https://api.nan.builders/v1\n"), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	if err := removeHermesConfig(home); err != nil {
+		t.Fatal(err)
+	}
+	if len(*calls) == 0 {
+		t.Fatal("removal unset nothing at all")
 	}
 	for _, c := range *calls {
 		if c[0] != "unset" {
@@ -801,10 +962,19 @@ func TestHermesConfigAgainstTheRealBinary(t *testing.T) {
 		t.Fatalf("hermes wrote no config: %v", err)
 	}
 	written := string(data)
-	for _, want := range []string{"provider: custom", "base_url: https://api.nan.builders/v1", "default: " + catalog.Coding, testKey} {
+	for _, want := range []string{"provider: custom", "base_url: https://api.nan.builders/v1", "default: " + catalog.Coding, hermesKeyRef} {
 		if !strings.Contains(written, want) {
 			t.Errorf("config.yaml has no %q:\n%s", want, written)
 		}
+	}
+	// Hermes expands ${VAR} in a config value against its own .env, which is
+	// the whole reason the key can stay out of the command line. If a release
+	// of Hermes ever stops doing that, this is where it surfaces.
+	if strings.Contains(written, testKey) {
+		t.Errorf("config.yaml carries the key itself:\n%s", written)
+	}
+	if env := readFile(t, hermesEnvPath(home)); !strings.Contains(env, testKey) {
+		t.Errorf(".env does not carry the key:\n%s", env)
 	}
 
 	if err := removeHermesConfig(home); err != nil {
@@ -813,6 +983,9 @@ func TestHermesConfigAgainstTheRealBinary(t *testing.T) {
 	data, _ = os.ReadFile(filepath.Join(home, "config.yaml"))
 	if strings.Contains(string(data), "api.nan.builders") {
 		t.Errorf("removal left the cluster behind:\n%s", data)
+	}
+	if env := readFile(t, hermesEnvPath(home)); strings.Contains(env, testKey) {
+		t.Errorf("removal left the key in .env:\n%s", env)
 	}
 }
 
@@ -854,18 +1027,33 @@ func TestSetupSaysWhenTheAccountHasNoKeyAtAll(t *testing.T) {
 	}
 }
 
-// Once there is a key in the field the hint is noise, and the key itself is
-// never printed.
+// Once there is a key in the field, the hint about where to go and fetch one
+// is noise - and the key itself is never printed, here or anywhere.
 func TestSetupHidesTheHintAndTheKeyOnceOneIsSet(t *testing.T) {
 	m := setupModel(t, &session.Session{APIKey: testKey})
 	m.keyStatus = &api.KeyStatus{Exists: true, Alias: "an-alias"}
 
 	out := m.renderSetup(newLayout(80, 24))
-	if strings.Contains(out, "an-alias") || strings.Contains(out, "cloud.nan.builders") {
-		t.Error("the hint is still shown after a key was set")
+	if strings.Contains(out, "an-alias") || strings.Contains(out, "copy it from") {
+		t.Error("the hint about fetching a key is still shown after one was set")
 	}
 	if strings.Contains(out, testKey) {
 		t.Error("the API key is printed on screen")
+	}
+}
+
+// What to do about a key that has been seen by somebody. This CLI cannot
+// revoke one - the platform issues and retires them - so the least it can do
+// is say where, rather than leaving a member to guess whether replacing it is
+// even possible.
+func TestSetupSaysHowToReplaceAKeyThatLeaked(t *testing.T) {
+	m := setupModel(t, &session.Session{APIKey: testKey})
+
+	out := m.renderSetup(newLayout(80, 24))
+	for _, want := range []string{"replace it at cloud.nan.builders", "press c"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the tab does not say %q", want)
+		}
 	}
 }
 

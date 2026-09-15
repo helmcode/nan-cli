@@ -3,18 +3,21 @@ package cmd
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	"github.com/nxssie/nan-cli/internal/auth"
 	"github.com/nxssie/nan-cli/internal/session"
+	"github.com/nxssie/nan-cli/internal/tui"
 	"github.com/spf13/cobra"
 )
 
 var (
-	tokenFlag string
-	emailFlag string
-	linkFlag  string
+	tokenFlag     string
+	emailFlag     string
+	linkFlag      string
+	keepToolsFlag bool
 )
 
 var authCmd = &cobra.Command{
@@ -39,8 +42,9 @@ func init() {
 	authCmd.AddCommand(loginCmd)
 	authCmd.AddCommand(logoutCmd)
 	loginCmd.Flags().StringVar(&emailFlag, "email", "", "Email to send the sign-in link to")
-	loginCmd.Flags().StringVar(&linkFlag, "link", "", "Finish the login with the link from the email")
-	loginCmd.Flags().StringVar(&tokenFlag, "token", "", "Save a nan_session token directly, skipping the email")
+	loginCmd.Flags().StringVar(&linkFlag, "link", "", `Finish the login with the link from the email ("-" reads it from stdin, keeping the token out of your shell history)`)
+	loginCmd.Flags().StringVar(&tokenFlag, "token", "", `Save a nan_session token directly, skipping the email ("-" reads it from stdin, keeping it out of your shell history)`)
+	logoutCmd.Flags().BoolVar(&keepToolsFlag, "keep-tools", false, "Leave the API key in the tools this CLI configured")
 }
 
 // The platform signs in by emailed link. It used to be Discord OAuth, and this
@@ -49,14 +53,22 @@ func init() {
 // and the command then asked for a cookie that no longer existed.
 func runLogin(cmd *cobra.Command, args []string) error {
 	if tokenFlag != "" {
-		return saveToken(tokenFlag)
+		token, err := flagValue(tokenFlag)
+		if err != nil {
+			return err
+		}
+		return saveToken(token)
 	}
 
 	// `--link` picks the flow up at its second half, for a shell that cannot
 	// answer a prompt: a script, a CI step, or a terminal that runs one command
 	// at a time.
 	if linkFlag != "" {
-		token, err := auth.TokenFromLink(strings.TrimSpace(linkFlag))
+		pasted, err := flagValue(linkFlag)
+		if err != nil {
+			return err
+		}
+		token, err := auth.TokenFromLink(pasted)
 		if err != nil {
 			return err
 		}
@@ -131,11 +143,52 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	return saveToken(sessionToken)
 }
 
+// A flag whose value is a credential, with "-" meaning stdin.
+//
+// Both of these take a secret, and a secret spelled out on a command line is
+// not one for long: the shell writes it to ~/.bash_history or ~/.zsh_history,
+// and while the command runs `ps` shows the whole line to anything running as
+// the member - on Linux /proc/<pid>/cmdline to other accounts as well. A CI
+// step or a script can pipe it in instead:
+//
+//	echo "$NAN_LINK" | nan auth login --link -
+func flagValue(value string) (string, error) {
+	if value != "-" {
+		return strings.TrimSpace(value), nil
+	}
+	read, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return "", fmt.Errorf("could not read it from stdin: %w", err)
+	}
+	value = strings.TrimSpace(string(read))
+	if value == "" {
+		return "", fmt.Errorf("nothing arrived on stdin")
+	}
+	return value, nil
+}
+
 func runLogout(cmd *cobra.Command, args []string) error {
 	if err := session.Delete(); err != nil {
 		return err
 	}
 	fmt.Println("Logged out.")
+
+	// Deleting session.json is only half of what logging out means here. The
+	// API key was copied into every tool `nan` configured, and it goes on
+	// working from those files: a member who logs out on a machine they are
+	// giving back would have been logged out of everything except the cluster
+	// their key bills.
+	if keepToolsFlag {
+		fmt.Println("Your API key is still in the tools — run it again without --keep-tools to take it out.")
+		return nil
+	}
+	removed, failed := tui.RemoveNanFromTools()
+	if len(removed) > 0 {
+		fmt.Println("Removed your API key from " + strings.Join(removed, ", ") + ".")
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("your API key is still in %s", strings.Join(failed, ", "))
+	}
 	return nil
 }
 

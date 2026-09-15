@@ -15,20 +15,31 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 const (
 	loginRequestURL = "https://cloud-api.nan.builders/api/auth/login/request"
 	loginVerifyURL  = "https://cloud-api.nan.builders/api/auth/login/verify"
 	sessionCookie   = "nan_session"
+	// The domain the platform sends its sign-in links from. Subdomains count:
+	// the link lands on the web app, the API lives next door.
+	linkDomain = "nan.builders"
 )
+
+// A timeout, because http.DefaultClient has none: a connection that is
+// accepted and then never answered - a captive portal, a hotel network, a
+// firewall that drops instead of refusing - hangs the panel on a spinner with
+// no way out but ctrl-c.
+const requestTimeout = 30 * time.Second
 
 func RequestSignInLink(email string) error {
 	body, err := json.Marshal(map[string]string{"email": email})
 	if err != nil {
 		return err
 	}
-	resp, err := http.Post(loginRequestURL, "application/json", bytes.NewReader(body))
+	client := &http.Client{Timeout: requestTimeout}
+	resp, err := client.Post(loginRequestURL, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("could not reach nan.builders: %w", err)
 	}
@@ -55,9 +66,19 @@ func TokenFromLink(pasted string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("that does not parse as a link: %w", err)
 		}
+		// Ours, or nothing. The token in a link from somewhere else is not one
+		// this exchange can spend, and a member who has been sent a link that
+		// only looks like ours is better told that here than after we have
+		// posted whatever was in it and read back an error about it.
+		if !isLinkHost(u.Hostname()) {
+			return "", fmt.Errorf("that link points at %s, not %s", u.Hostname(), linkDomain)
+		}
 		token := u.Query().Get("token")
 		if token == "" {
-			return "", fmt.Errorf("that link carries no token: %s", pasted)
+			// The host and not the link: a link with no `token` in its query
+			// can still be carrying one somewhere this does not read, and the
+			// message is rendered in the panel and copied into issues.
+			return "", fmt.Errorf("that %s link carries no token", u.Hostname())
 		}
 		return token, nil
 	}
@@ -67,12 +88,18 @@ func TokenFromLink(pasted string) (string, error) {
 	return pasted, nil
 }
 
+func isLinkHost(host string) bool {
+	host = strings.ToLower(host)
+	return host == linkDomain || strings.HasSuffix(host, "."+linkDomain)
+}
+
 // The browser flow ends on a page that POSTs the token and gets the session
 // cookie back. This does the same POST and keeps the cookie instead of
 // following the redirect, which is the whole reason the old flow had to send
 // people into DevTools.
 func ExchangeToken(token string) (string, error) {
 	client := &http.Client{
+		Timeout: requestTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
