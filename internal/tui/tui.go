@@ -249,6 +249,12 @@ func newModel(client *api.Client, sess *session.Session) model {
 	ti := textinput.New()
 	ti.Placeholder = "paste your NaN API key here"
 	ti.CharLimit = 512
+	// A key typed in the clear is a key in the scrollback, and from there in
+	// whatever the member was screen-sharing or recording at the time. The
+	// saved one is already shown as bullets a few lines down the same tab;
+	// there was no reason for the field that takes it to be the exception.
+	ti.EchoMode = textinput.EchoPassword
+	ti.EchoCharacter = '•'
 	ti.PromptStyle = lipgloss.NewStyle().Foreground(cCyan)
 	ti.TextStyle = lipgloss.NewStyle().Foreground(cText)
 	ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(cDimGray)
@@ -333,6 +339,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.loginMsg = "error: " + msg.err.Error()
 			m.loginStage = loginAskEmail
+			m.loginInput.EchoMode = textinput.EchoNormal
 			return m, m.loginInput.Focus()
 		}
 		m.wizard = wizardLink
@@ -342,6 +349,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loginInput.SetValue("")
 		m.loginInput.Placeholder = "https://nan.builders/...?token=..."
 		m.loginInput.Prompt = "Paste the link: "
+		// The link carries the token in its query, so from here the field is
+		// holding a credential and stops echoing one.
+		m.loginInput.EchoMode = textinput.EchoPassword
+		m.loginInput.EchoCharacter = '•'
 		return m, m.loginInput.Focus()
 
 	case signedInMsg:
@@ -563,7 +574,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if !m.confirmSignOut {
 				m.confirmSignOut = true
-				m.setupMsg = "press o again to sign out, any other key to keep the session"
+				m.setupMsg = "press o again to sign out — it also takes your key back out of the tools; any other key to keep the session"
 				m.active = tabIndex(tabSetup)
 				break
 			}
@@ -575,11 +586,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Everything the session was holding goes with it: the key lives in
 			// the same file, and the tabs are full of answers that were true
 			// for somebody else.
+			//
+			// And the key does not only live there. Every tool configured from
+			// this panel got a copy, where deleting session.json leaves it
+			// working - so a member who signs out because they are handing the
+			// machine over would have been signed out of everything except the
+			// cluster their key bills.
+			removed, failed := RemoveNanFromTools()
 			m.sess = &session.Session{}
 			m.client = api.New("")
 			m.cache = make(map[tabID]any)
 			m.keyStatus, m.keyAsked, m.keyCheck = nil, false, ""
-			m.configured, m.setupMsg = nil, "signed out"
+			m.configured, m.setupMsg = nil, signOutMessage(removed, failed)
 			m.err = nil
 			return m, m.resumeSetup()
 
@@ -678,6 +696,9 @@ func (m *model) startLogin() tea.Cmd {
 	m.loginInput.SetValue("")
 	m.loginInput.Placeholder = "you@example.com"
 	m.loginInput.Prompt = "Email: "
+	// An email address is not a secret and hiding it only makes it harder to
+	// see a typo in the thing the link is about to be sent to.
+	m.loginInput.EchoMode = textinput.EchoNormal
 	return m.loginInput.Focus()
 }
 
@@ -1834,6 +1855,15 @@ func configureTools(apiKey string, enabledTools map[string]bool) (string, []stri
 			case "Hermes":
 				err = writeHermesConfig(filepath.Dir(t.configPath), apiKey)
 			}
+			if err == nil {
+				// Every writer above can decide it has nothing to change - a
+				// tool already pointing at the cluster is left alone - and
+				// that file is exactly the one that has been sitting there
+				// with a key in it since before this CLI started tightening
+				// the mode on its way past. So the mode is checked whether or
+				// not anything was written.
+				err = tightenKeyFiles(t)
+			}
 			if err != nil {
 				failed = append(failed, toolFailure{t.name, err.Error()})
 			} else {
@@ -1841,19 +1871,7 @@ func configureTools(apiKey string, enabledTools map[string]bool) (string, []stri
 				written = append(written, t.name)
 			}
 		} else if t.configured {
-			var err error
-			switch t.name {
-			case "Factory AI":
-				err = removeFactoryConfig(t.configPath)
-			case "OpenCode":
-				err = removeOpencodeConfig(t.configPath)
-			case "Pi":
-				err = removePiConfig(t.configPath)
-			case "Codex":
-				err = removeCodexConfig(t.configPath)
-			case "Hermes":
-				err = removeHermesConfig(filepath.Dir(t.configPath))
-			}
+			err := removeFromTool(t)
 			if err != nil {
 				failed = append(failed, toolFailure{t.name, err.Error()})
 			} else {
@@ -1882,18 +1900,204 @@ func configureTools(apiKey string, enabledTools map[string]bool) (string, []stri
 	return strings.Join(parts, "  ·  "), written, failed
 }
 
+// The files that end up holding the key, per tool. Hermes is the odd one: its
+// config.yaml carries the reference and its .env carries the secret.
+func keyFilesFor(t toolInfo) []string {
+	if t.name == "Hermes" {
+		return []string{hermesEnvPath(filepath.Dir(t.configPath))}
+	}
+	return []string{t.configPath}
+}
+
+// A config written before this CLI wrote through a temp file kept whatever
+// mode the tool gave it, which for most of them is 0644. Rewriting it is not
+// always on the table - the writers stop early where there is nothing to
+// change - so the mode is put right on its own.
+func tightenKeyFiles(t toolInfo) error {
+	if runtime.GOOS == "windows" {
+		// Not the mechanism there: the file inherits the ACL of the profile
+		// directory it sits in.
+		return nil
+	}
+	for _, path := range keyFilesFor(t) {
+		info, err := os.Stat(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode().Perm()&0o077 == 0 {
+			continue
+		}
+		if err := os.Chmod(path, 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func removeFromTool(t toolInfo) error {
+	switch t.name {
+	case "Factory AI":
+		return removeFactoryConfig(t.configPath)
+	case "OpenCode":
+		return removeOpencodeConfig(t.configPath)
+	case "Pi":
+		return removePiConfig(t.configPath)
+	case "Codex":
+		return removeCodexConfig(t.configPath)
+	case "Hermes":
+		return removeHermesConfig(filepath.Dir(t.configPath))
+	}
+	return nil
+}
+
+// RemoveNanFromTools takes the key back out of every tool this CLI wrote it
+// into, and says which ones it managed and which it could not.
+//
+// Exported because signing out happens in two places - `o` in the panel and
+// `nan auth logout` - and deleting session.json is only half of what a member
+// means by it. The key was copied into as many as five files that have nothing
+// to do with the session any more, and it goes on working from there: a
+// machine handed back, a laptop sold, a shared account left behind.
+func RemoveNanFromTools() (removed []string, failed []string) {
+	for _, t := range detectTools() {
+		// Installed is the only gate. `configured` is read off the tool's own
+		// config file, and the case that matters most here is the one where
+		// that file is not the whole story: a run that wrote Hermes' .env and
+		// then failed before its config.yaml left a key on disk that this
+		// would have walked straight past. Every remover below is a no-op
+		// where there is nothing of ours to take out.
+		if !t.installed {
+			continue
+		}
+		if err := removeFromTool(t); err != nil {
+			failed = append(failed, t.name+" ("+err.Error()+")")
+			continue
+		}
+		if t.configured {
+			removed = append(removed, t.name)
+		}
+	}
+	return removed, failed
+}
+
+// What to say afterwards. Signing out and leaving the key behind in four other
+// files is worth a sentence either way.
+func signOutMessage(removed, failed []string) string {
+	if len(failed) > 0 {
+		return "error: signed out, but the key is still in " + strings.Join(failed, ", ")
+	}
+	if len(removed) > 0 {
+		return "signed out  ·  key removed from " + strings.Join(removed, ", ")
+	}
+	return "signed out"
+}
+
 func factoryCustomID(displayName string, index int) string {
 	return fmt.Sprintf("custom:%s-%d", strings.ReplaceAll(displayName, " ", "-"), index)
 }
 
-func writeFactoryConfig(cfgPath, apiKey string) error {
-	// Use map to preserve unknown top-level fields (logoAnimation, etc.)
+// ── writing a file that carries a key ────────────────────────────────────────
+
+// writeConfigFile writes a tool's config the way a file holding an API key has
+// to be written, which is not what os.WriteFile does on its own.
+//
+// Its mode argument applies only where the file is CREATED, and the usual case
+// here is the opposite one: ~/.codex/config.toml and the rest already exist,
+// written by the tool itself, commonly 0644. The key went into them and the
+// 0o600 in the call did nothing whatsoever - the file kept the mode it had,
+// readable by every account on the machine.
+//
+// And a plain write truncates first: interrupted halfway it leaves a member's
+// config - every provider in it, not only ours - cut in two. So the bytes go
+// to a temp file in the same directory, which is created 0600, and that file
+// is renamed over the destination. The rename happens once or not at all, and
+// it carries the temp file's mode with it, which is where the 0600 sticks.
+func writeConfigFile(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	// Managed dotfiles are symlinks into a repo. Renaming over the link would
+	// replace it with a regular file and quietly detach the config from the
+	// thing that manages it, so the write follows the link first.
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".nan-*.tmp")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer os.Remove(name) // does nothing once the rename has taken it
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	// On Windows the mode bits are not the mechanism - the file inherits the
+	// ACL of the profile directory it sits in - so a filesystem that will not
+	// take the chmod is no reason to refuse to write the config at all.
+	if err := tmp.Chmod(0o600); err != nil && runtime.GOOS != "windows" {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(name, path); err != nil {
+		// Windows will not replace a file another process is holding open,
+		// where the plain write this replaced would have gone through. The
+		// mode bits are not the mechanism there in any case, so falling back
+		// to that write leaves nothing worse than what came before it. On
+		// every other platform a rename that failed is a failure.
+		if runtime.GOOS == "windows" {
+			return os.WriteFile(path, data, 0o600)
+		}
+		return err
+	}
+	return nil
+}
+
+// readJSONConfig reads a tool's config, and refuses to guess at one it cannot
+// parse.
+//
+// These files are shared: opencode.json and Pi's models.json hold every
+// provider a member has, other vendors' API keys included. The readers here
+// used to drop the unmarshal error on the floor, which meant a file this CLI
+// could not parse - a stray comma, a half-finished hand edit, a schema the
+// tool has since moved on to - was read as nothing and then written again from
+// scratch, taking every other provider in it along with it. Not being able to
+// read the file is precisely the case where it must not be touched.
+func readJSONConfig(path string) (map[string]any, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return map[string]any{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(string(data)) == "" {
+		return map[string]any{}, nil
+	}
 	var cfg map[string]any
-	if data, err := os.ReadFile(cfgPath); err == nil {
-		_ = json.Unmarshal(data, &cfg)
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("%s does not parse as JSON, so it was left exactly as it is: %w",
+			filepath.Base(path), err)
 	}
 	if cfg == nil {
 		cfg = map[string]any{}
+	}
+	return cfg, nil
+}
+
+func writeFactoryConfig(cfgPath, apiKey string) error {
+	// A map, so unknown top-level fields (logoAnimation, etc.) survive.
+	cfg, err := readJSONConfig(cfgPath)
+	if err != nil {
+		return err
 	}
 
 	// Extract existing customModels
@@ -1955,23 +2159,17 @@ func writeFactoryConfig(cfgPath, apiKey string) error {
 		}
 	}
 
-	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(cfgPath, data, 0o600)
+	return writeConfigFile(cfgPath, data)
 }
 
 func writeOpencodeConfig(cfgPath, apiKey string) error {
-	var cfg map[string]any
-	if data, err := os.ReadFile(cfgPath); err == nil {
-		_ = json.Unmarshal(data, &cfg)
-	}
-	if cfg == nil {
-		cfg = map[string]any{}
+	cfg, err := readJSONConfig(cfgPath)
+	if err != nil {
+		return err
 	}
 
 	providers, _ := cfg["provider"].(map[string]any)
@@ -2036,7 +2234,7 @@ func writeOpencodeConfig(cfgPath, apiKey string) error {
 				if err != nil {
 					return err
 				}
-				return os.WriteFile(cfgPath, data, 0o600)
+				return writeConfigFile(cfgPath, data)
 			}
 		}
 	}
@@ -2055,14 +2253,11 @@ func writeOpencodeConfig(cfgPath, apiKey string) error {
 	}
 	cfg["provider"] = providers
 
-	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(cfgPath, data, 0o600)
+	return writeConfigFile(cfgPath, data)
 }
 
 // Pi takes a provider two ways: a models.json, which is data, or an extension
@@ -2075,12 +2270,9 @@ func writeOpencodeConfig(cfgPath, apiKey string) error {
 func writePiConfig(cfgPath, apiKey string) error {
 	// Unlike the extension file, models.json is shared: other providers live in
 	// it and none of them are ours to touch.
-	var cfg map[string]any
-	if data, err := os.ReadFile(cfgPath); err == nil {
-		_ = json.Unmarshal(data, &cfg)
-	}
-	if cfg == nil {
-		cfg = map[string]any{}
+	cfg, err := readJSONConfig(cfgPath)
+	if err != nil {
+		return err
 	}
 
 	providers, _ := cfg["providers"].(map[string]any)
@@ -2110,14 +2302,11 @@ func writePiConfig(cfgPath, apiKey string) error {
 	}
 	cfg["providers"] = providers
 
-	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(cfgPath, data, 0o600); err != nil {
+	if err := writeConfigFile(cfgPath, data); err != nil {
 		return err
 	}
 	return writePiDefaults(piSettingsPath(cfgPath))
@@ -2128,12 +2317,9 @@ func writePiConfig(cfgPath, apiKey string) error {
 // optional" for a reason: with models.json alone Pi goes on calling its
 // factory provider, and what the member sees is a 401 that names neither file.
 func writePiDefaults(settingsPath string) error {
-	var settings map[string]any
-	if data, err := os.ReadFile(settingsPath); err == nil {
-		_ = json.Unmarshal(data, &settings)
-	}
-	if settings == nil {
-		settings = map[string]any{}
+	settings, err := readJSONConfig(settingsPath)
+	if err != nil {
+		return err
 	}
 
 	// A member who already picked a default picked it, and ours is one more
@@ -2145,14 +2331,11 @@ func writePiDefaults(settingsPath string) error {
 	settings["defaultProvider"] = "nan"
 	settings["defaultModel"] = catalog.Coding
 
-	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o700); err != nil {
-		return err
-	}
 	out, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(settingsPath, out, 0o600)
+	return writeConfigFile(settingsPath, out)
 }
 
 // settings.json sits next to models.json in Pi's agent directory.
@@ -2208,7 +2391,7 @@ func removePiConfig(cfgPath string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(cfgPath, out, 0o600)
+	return writeConfigFile(cfgPath, out)
 }
 
 // Only the default we wrote, and only while it still points at us: anything
@@ -2236,7 +2419,7 @@ func removePiDefaults(settingsPath string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(settingsPath, out, 0o600)
+	return writeConfigFile(settingsPath, out)
 }
 
 func writeCodexConfig(cfgPath, apiKey string) error {
@@ -2262,10 +2445,7 @@ base_url = "https://api.nan.builders/v1"
 experimental_bearer_token = %q
 wire_api = "chat"
 `, codexModel.ID, codexModel.Context, apiKey)
-		if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
-			return err
-		}
-		return os.WriteFile(cfgPath, []byte(content), 0o600)
+		return writeConfigFile(cfgPath, []byte(content))
 	}
 
 	// Existing config: only append the provider section; preserve user's model/provider choices.
@@ -2280,10 +2460,7 @@ experimental_bearer_token = %q
 wire_api = "chat"
 `, codexModel.Context, apiKey)
 	content := strings.TrimRight(string(data), "\n") + "\n" + section
-	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(cfgPath, []byte(content), 0o600)
+	return writeConfigFile(cfgPath, []byte(content))
 }
 
 // ── Hermes ───────────────────────────────────────────────────────────────────
@@ -2310,9 +2487,39 @@ var runHermesConfig = func(home string, args ...string) error {
 	cmd.Env = append(os.Environ(), "HERMES_HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("hermes config %s: %s", strings.Join(args, " "), strings.TrimSpace(string(out)))
+		return hermesConfigError(args, string(out))
 	}
 	return nil
+}
+
+// The verb and the key it was called with, and never the value.
+//
+// This used to join every argument into the message, and the message is
+// rendered in the panel: one `set` that Hermes refused printed the member's
+// API key onto their screen, into their scrollback, and into the issue they
+// then pasted all of it into. Nothing past the key belongs in an error.
+func hermesConfigError(args []string, out string) error {
+	said := args
+	if len(said) > 2 {
+		said = said[:2]
+	}
+	return fmt.Errorf("hermes config %s: %s", strings.Join(said, " "), strings.TrimSpace(out))
+}
+
+// Reading a value back, for the one thing that has to be confirmed rather than
+// assumed. Swapped in tests alongside the writer above.
+var readHermesConfig = func(home string, args ...string) (string, error) {
+	cmd := exec.Command("hermes", append([]string{"config"}, args...)...)
+	cmd.Env = append(os.Environ(), "HERMES_HOME="+home)
+	out, err := cmd.Output()
+	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return "", hermesConfigError(args, string(exit.Stderr))
+		}
+		return "", hermesConfigError(args, err.Error())
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // The resolution Hermes itself uses: HERMES_HOME, then the platform default.
@@ -2335,11 +2542,41 @@ func hermesConfigPath(home string) string {
 	return filepath.Join(home, "config.yaml")
 }
 
+// Hermes keeps its secrets in a .env beside its config - it has a `hermes
+// config env-path` for exactly this - and expands ${VAR} in any config value
+// against it when it loads. So the config gets the placeholder and the .env
+// gets the key.
+const (
+	hermesEnvFile = ".env"
+	hermesKeyVar  = "NAN_API_KEY"
+	hermesKeyRef  = "${" + hermesKeyVar + "}"
+	hermesKeyNote = "# Written by nan-cli. config.yaml points at it as " + hermesKeyRef + "."
+)
+
+func hermesEnvPath(home string) string {
+	return filepath.Join(home, hermesEnvFile)
+}
+
 func writeHermesConfig(home, apiKey string) error {
+	// The key goes into Hermes' .env, and the config points at it. Not because
+	// the config is a worse place to keep it - same machine, same member, same
+	// 0600 - but because of the way it would have to get there.
+	//
+	// Every value here is written by running `hermes config set <key> <value>`,
+	// and an argument is not private: on Linux /proc/<pid>/cmdline is readable
+	// by other accounts on the box, and `ps` hands it to anything running as
+	// the member. A key passed that way is exposed for as long as the process
+	// lives, to readers this CLI never meant to hand it to, and there is no
+	// taking it back afterwards. The placeholder is not a secret and can go
+	// through argv; the key is written straight to disk and appears in no
+	// argument list at all.
+	if err := writeHermesEnvKey(hermesEnvPath(home), apiKey); err != nil {
+		return err
+	}
 	settings := [][2]string{
 		{"model.provider", "custom"},
 		{"model.base_url", "https://api.nan.builders/v1"},
-		{"model.api_key", apiKey},
+		{"model.api_key", hermesKeyRef},
 		{"model.default", catalog.Coding},
 	}
 	for _, s := range settings {
@@ -2347,23 +2584,125 @@ func writeHermesConfig(home, apiKey string) error {
 			return err
 		}
 	}
+	return confirmHermesResolvesTheKey(home, apiKey)
+}
+
+// Everything above rests on Hermes expanding ${VAR} in a config value against
+// its own .env, which it does today and which nothing here controls. Asking it
+// what it ended up with is the only way to know it happened: a build that
+// stopped expanding would leave the literal ${NAN_API_KEY} in place as the
+// key, and what a member would see is a 401 from the cluster naming nothing in
+// particular.
+//
+// The answer is the key itself, so it is compared and dropped on the spot. It
+// does not go into a message, a log or an error.
+func confirmHermesResolvesTheKey(home, apiKey string) error {
+	resolved, err := readHermesConfig(home, "get", "model.api_key")
+	if err != nil {
+		// No answer is not a wrong answer. An older Hermes without this
+		// subcommand, or one that could not be run twice, says nothing either
+		// way about what it will do with the config - and failing the whole
+		// step over a question we could not ask would be its own bug.
+		return nil
+	}
+	if resolved != apiKey {
+		return fmt.Errorf("Hermes did not resolve %s from its .env, so it has no usable key - "+
+			"nan.builders/docs/hermes has the manual steps", hermesKeyRef)
+	}
 	return nil
+}
+
+// One variable set in the .env, and the rest of the file - a long commented
+// document with the member's other providers in it - left as it was.
+func writeHermesEnvKey(envPath, apiKey string) error {
+	var lines []string
+	if data, err := os.ReadFile(envPath); err == nil {
+		if body := strings.TrimRight(string(data), "\n"); body != "" {
+			lines = strings.Split(body, "\n")
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	entry := hermesKeyVar + "=" + apiKey
+	replaced := false
+	for i, line := range lines {
+		if isHermesKeyLine(line) {
+			lines[i] = entry
+			replaced = true
+		}
+	}
+	if !replaced {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, hermesKeyNote, entry)
+	}
+	return writeConfigFile(envPath, []byte(strings.Join(lines, "\n")+"\n"))
+}
+
+// The assignment, and not a commented-out example of the same name: blanking
+// one of those would leave the real one further down the file still winning.
+func isHermesKeyLine(line string) bool {
+	name, _, ok := strings.Cut(line, "=")
+	return ok && strings.TrimSpace(name) == hermesKeyVar
 }
 
 // The same four keys and nothing else: a member's channels, skills and
 // persona live in this file too.
 func removeHermesConfig(home string) error {
-	for _, key := range []string{"model.api_key", "model.base_url", "model.default", "model.provider"} {
-		if err := runHermesConfig(home, "unset", key); err != nil {
-			return err
+	// Four processes, so only where there is something to unset. The .env
+	// below is checked either way: it is written before the first of these
+	// calls, so a run that failed part-way through leaves the key there and
+	// nothing in config.yaml to say so.
+	if cfg, err := os.ReadFile(hermesConfigPath(home)); err == nil && strings.Contains(string(cfg), "api.nan.builders") {
+		for _, key := range []string{"model.api_key", "model.base_url", "model.default", "model.provider"} {
+			if err := runHermesConfig(home, "unset", key); err != nil {
+				return err
+			}
 		}
 	}
-	return nil
+	// And the key the config was pointing at. Unsetting model.api_key drops
+	// the reference, which leaves the secret itself sitting in the .env.
+	return removeHermesEnvKey(hermesEnvPath(home))
+}
+
+func removeHermesEnvKey(envPath string) error {
+	data, err := os.ReadFile(envPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	var kept []string
+	dropped := false
+	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		if isHermesKeyLine(line) || line == hermesKeyNote {
+			dropped = true
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if !dropped {
+		return nil
+	}
+	// A .env that held nothing but our two lines was ours to begin with.
+	if len(kept) == 0 {
+		return os.Remove(envPath)
+	}
+	return writeConfigFile(envPath, []byte(strings.Join(kept, "\n")+"\n"))
 }
 
 func removeCodexConfig(cfgPath string) error {
 	data, err := os.ReadFile(cfgPath)
 	if err != nil {
+		return nil
+	}
+	// Nothing of ours in it, so nothing to rewrite: this is called on every
+	// sign-out, against a config.toml that may never have been ours at all.
+	if !strings.Contains(string(data), "[model_providers.nan]") {
 		return nil
 	}
 	lines := strings.Split(string(data), "\n")
@@ -2389,7 +2728,7 @@ func removeCodexConfig(cfgPath string) error {
 	if result == "\n" {
 		return os.Remove(cfgPath)
 	}
-	return os.WriteFile(cfgPath, []byte(result), 0o600)
+	return writeConfigFile(cfgPath, []byte(result))
 }
 
 func removeFactoryConfig(cfgPath string) error {
@@ -2440,7 +2779,7 @@ func removeFactoryConfig(cfgPath string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(cfgPath, out, 0o600)
+	return writeConfigFile(cfgPath, out)
 }
 
 func removeOpencodeConfig(cfgPath string) error {
@@ -2465,7 +2804,7 @@ func removeOpencodeConfig(cfgPath string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(cfgPath, out, 0o600)
+	return writeConfigFile(cfgPath, out)
 }
 
 // The sign-in questions, drawn where the tab content would be.
@@ -2706,6 +3045,14 @@ func (m model) renderSetup(l layout) string {
 		b.WriteString(l.indent + labelStyle.Render("Key:") +
 			accentStyle.Render(strings.Repeat("•", 24)) +
 			"  " + dimStyle.Render("e to edit") + "\n")
+		// The one thing a member needs and had nowhere to read: what to do if
+		// this key has been somewhere it should not have been. Nothing in this
+		// CLI can revoke it - the platform issues and retires keys - so the
+		// most useful thing the tab can do is name the steps and where the
+		// first one happens.
+		b.WriteString(l.indent + dimStyle.Render(
+			"if anyone has seen it: replace it at cloud.nan.builders, "+
+				"paste the new one here (e), then press c") + "\n")
 	} else {
 		b.WriteString(l.indent + warnStyle.Render("No API key set") +
 			"  " + dimStyle.Render("e to set") + "\n")

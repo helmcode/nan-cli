@@ -5,9 +5,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
 const BaseURL = "https://cloud-api.nan.builders/api"
+
+// A client with no timeout waits forever on a connection that is accepted and
+// then never answered, which in the panel is a spinner that never stops.
+const requestTimeout = 30 * time.Second
 
 type Client struct {
 	token string
@@ -18,7 +23,7 @@ type Client struct {
 }
 
 func New(token string) *Client {
-	return &Client{token: token, http: &http.Client{}, baseURL: BaseURL}
+	return &Client{token: token, http: &http.Client{Timeout: requestTimeout}, baseURL: BaseURL}
 }
 
 // Token is what this client sends. The panel builds a client once, at start,
@@ -94,7 +99,7 @@ func ListModels(apiKey string) ([]string, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	resp, err := (&http.Client{}).Do(req)
+	resp, err := (&http.Client{Timeout: requestTimeout}).Do(req)
 	if err != nil {
 		return nil, err
 	}

@@ -188,6 +188,31 @@ jobs:
           }
           Write-Host "installer parses, web requests basic-parsed, no unguarded exit, arch survives without .NET, no preference leaks"
 
+  # Four vulnerabilities in the standard library this repo compiled against
+  # went unnoticed until somebody ran this by hand. Nothing here was looking,
+  # so nothing was going to say so - not on the next release either.
+  #
+  # govulncheck reports only what the code actually reaches, which is why it
+  # can be a failing check rather than a list to triage: a finding here is a
+  # path from this CLI to the bug, and the fix is usually a toolchain or a
+  # dependency bump.
+  vulnerabilities:
+    name: Known vulnerabilities
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # A fixed version rather than @latest: a check that can fail the build
+      # should not change under it on the morning somebody tags that module.
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
   # The other half of the same gap: scripts/install.sh is the way in for every
   # member on macOS and Linux, and nothing had ever run it end to end. It was
   # syntax-checked and its failure path exercised by hand; the path that

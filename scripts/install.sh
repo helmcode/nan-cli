@@ -98,8 +98,13 @@ verify_checksum() {
   elif command -v shasum &>/dev/null; then
     actual="$(shasum -a 256 "$file" | cut -d' ' -f1)"
   else
-    warn "no sha256 tool found, skipping checksum verification"
-    return 0
+    # Not a warning. The checksum is the only thing standing between this
+    # script and a binary that is not the one the release published, so
+    # carrying on without it installs exactly what the check exists to catch.
+    err "no sha256 tool found (sha256sum or shasum), so the download cannot be verified"
+    err "install one of them, or take the release from"
+    err "  https://github.com/$REPO/releases"
+    exit 1
   fi
   if [ "$actual" != "$expected" ]; then
     err "checksum mismatch"
@@ -107,6 +112,63 @@ verify_checksum() {
     err "  got:      $actual"
     exit 1
   fi
+}
+
+# The checksum above says the download arrived whole. It does not say who
+# built it: the release that serves the archive serves checksums.txt too, so a
+# release someone else published matches its own numbers perfectly.
+#
+# The build provenance is the part that answers that, and `gh` is what reads
+# it. Not everyone has gh, and refusing to install without it would only teach
+# people to skip the step - so this asks where it can, and is careful about the
+# difference between "this binary is not what it claims to be" and "I could not
+# reach GitHub to find out".
+verify_provenance() {
+  local file="$1" out
+
+  if ! command -v gh &>/dev/null; then
+    info "gh is not installed, so the build provenance was not checked"
+    info "  to check it yourself later: gh attestation verify <file> --repo $REPO"
+    return 0
+  fi
+
+  if out="$(gh attestation verify "$file" --repo "$REPO" 2>&1)"; then
+    log "provenance verified: built by $REPO on GitHub Actions"
+    return 0
+  fi
+
+  # Nothing recorded against these bytes, which is a 404 from the attestations
+  # API. Two different things look identical from out here: a release from
+  # before this repo signed anything, and an archive that is not the one it
+  # signed - because a replaced archive has a digest nothing was ever signed
+  # for. So this is a notice by default and not a guarantee, and it is fatal
+  # for anyone who sets REQUIRE_PROVENANCE, which every release from now on
+  # can satisfy.
+  case "$out" in
+    *"HTTP 404"*|*"no attestations found"*)
+      if [ -n "${REQUIRE_PROVENANCE:-}" ]; then
+        err "no build provenance is recorded for this archive"
+        err "nothing was installed, because REQUIRE_PROVENANCE is set"
+        exit 1
+      fi
+      warn "no build provenance is recorded for this archive"
+      warn "releases published before this repo started signing carry none"
+      warn "  REQUIRE_PROVENANCE=1 refuses to install those"
+      return 0
+      ;;
+  esac
+
+  # Something was recorded and it did not match, or gh could not ask. Asking
+  # the API something trivial tells those apart: if it answers, gh works, and
+  # the refusal above was about this archive.
+  if gh api rate_limit >/dev/null 2>&1; then
+    err "the build provenance of this archive does not check out"
+    err "it is not what $REPO published, whatever its checksum says"
+    err "nothing was installed"
+    exit 1
+  fi
+  warn "could not reach GitHub to check the build provenance"
+  warn "the checksum did match, so this is most likely the network"
 }
 
 install_bin() {
@@ -159,6 +221,9 @@ main() {
   info "verifying checksum..."
   expected_checksum="$(curl -fsSL "$checksums_url" | grep "$archive" | cut -d' ' -f1)"
   verify_checksum "$tmpdir/$archive" "$expected_checksum"
+
+  info "checking who built it..."
+  verify_provenance "$tmpdir/$archive"
 
   tar xz -C "$tmpdir" -f "$tmpdir/$archive"
 

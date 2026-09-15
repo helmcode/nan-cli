@@ -21,13 +21,31 @@ irm https://nan.builders/install.ps1 | iex
 ```
 
 Same work: latest release, the `.zip` for your architecture, checksum verified,
-`nan.exe` into `%LOCALAPPDATA%\Programs
-an` and that directory added to your
+`nan.exe` into `%LOCALAPPDATA%\Programs\nan` and that directory added to your
 user `PATH`. Override with `-InstallDir`:
 
 ```powershell
-& ([scriptblock]::Create((irm https://nan.builders/install.ps1))) -InstallDir "C:	ools"
+& ([scriptblock]::Create((irm https://nan.builders/install.ps1))) -InstallDir "C:\tools"
 ```
+
+## Verifying a download
+
+Both installers check the archive against `checksums.txt` from the same
+release. That catches a download that arrived damaged; it cannot catch a
+release that was published by somebody else, because whoever replaces an
+archive can replace the checksum beside it.
+
+Every release is signed with [build provenance](https://docs.github.com/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds),
+which is not something a release you did not build can carry. If you have the
+[GitHub CLI](https://cli.github.com), the installers check it for you, and you
+can ask about any archive yourself:
+
+```bash
+gh attestation verify nan-cli_v0.1.19_linux_amd64.tar.gz --repo helmcode/nan-cli
+```
+
+It answers with the workflow, the repository and the commit the binary was
+built from.
 
 ## Usage
 
@@ -70,7 +88,9 @@ inside each tool later.
 
 ## Build from source
 
-Requires Go 1.26+ ([mise](https://mise.jdx.dev/) recommended):
+Requires Go 1.26.8+ ([mise](https://mise.jdx.dev/) recommended) — the version
+in `go.mod`, which is where the standard library carries the current security
+fixes:
 
 ```bash
 git clone https://github.com/helmcode/nan-cli
