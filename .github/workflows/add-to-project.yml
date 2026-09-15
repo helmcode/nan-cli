@@ -6,17 +6,11 @@ on:
   pull_request:
     types: [opened, reopened]
 
-# Nothing here reads this repository - the action works against the project
-# board with a PAT of its own - so the job's own token needs nothing at all.
-permissions: {}
-
 jobs:
   add-to-project:
     runs-on: ubuntu-latest
     steps:
-      # Pinned to a commit: this is a third-party action and the one step in
-      # this repo that is handed a personal access token.
-      - uses: actions/add-to-project@244f685bbc3b7adfa8466e08b698b5577571133e # v1.0.2
+      - uses: actions/add-to-project@v1.0.2
         with:
           project-url: https://github.com/orgs/helmcode/projects/6
           github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}

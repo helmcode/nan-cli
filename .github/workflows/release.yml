@@ -39,18 +39,13 @@ permissions:
   id-token: write
   attestations: write
 
-# The actions below are pinned to the commit each tag pointed at when this was
-# written, with the tag in the comment. A tag is a moving label: whoever can
-# push one can change what `@v4` runs, and what it runs here has a token and a
-# checkout of this repo. A commit hash cannot be moved.
-
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
@@ -160,7 +155,7 @@ jobs:
       # and get back the workflow, the repository and the commit - none of
       # which a release someone else published can produce.
       - name: Attest what was built
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             dist/*.tar.gz

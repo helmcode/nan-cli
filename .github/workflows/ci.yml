@@ -13,17 +13,6 @@ on:
   push:
     branches: [main]
 
-# Read-only, explicitly. Without a block here the token takes the repository's
-# default, which on an older repo is write across the board - far more than a
-# job that vets, tests and throws the binaries away has any use for.
-permissions:
-  contents: read
-
-# The actions below are pinned to the commit each tag pointed at when this was
-# written, with the tag in the comment. A tag is a moving label: whoever can
-# push one can change what `@v4` runs, and what it runs here has a token and a
-# checkout of this repo. A commit hash cannot be moved.
-
 jobs:
   test:
     # Everything here ran on ubuntu only, so darwin was a platform we shipped
@@ -38,9 +27,9 @@ jobs:
         os: [ubuntu-latest, macos-latest]
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
@@ -212,15 +201,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
 
-      # Pinned, like the actions above and for the same reason: @latest is
-      # whatever that module says it is on the morning the job runs.
+      # A fixed version rather than @latest: a check that can fail the build
+      # should not change under it on the morning somebody tags that module.
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
@@ -247,7 +236,7 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@v4
 
       # INSTALL_DIR inside the runner's temp, so there is no sudo prompt and
       # nothing to clean up. The default path is /usr/local/bin and that is
