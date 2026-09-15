@@ -32,30 +32,59 @@ on:
 
 permissions:
   contents: write
+  # For the attestation below. The runner asks GitHub's OIDC provider for a
+  # token that says which workflow, in which repository, at which commit is
+  # running, and that token is what signs the archives - there is no key here
+  # to keep, rotate or lose.
+  id-token: write
+  attestations: write
+
+# The actions below are pinned to the commit each tag pointed at when this was
+# written, with the tag in the comment. A tag is a moving label: whoever can
+# push one can change what `@v4` runs, and what it runs here has a token and a
+# checkout of this repo. A commit hash cannot be moved.
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache: true
 
+      # Through the environment, and checked before it goes anywhere near a
+      # shell. A workflow_dispatch input pasted straight into a `run:` block is
+      # substituted before bash ever sees it, so whatever was typed into the
+      # box becomes part of the script - and every step below puts this value
+      # on a command line. Only something shaped like one of our tags gets
+      # past here.
       - name: Resolve the tag
         id: tag
-        run: echo "value=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-$REF_NAME}"
+          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+([-][A-Za-z0-9.]+)?$'; then
+            echo "not a version tag: $tag" >&2
+            exit 1
+          fi
+          echo "value=$tag" >> "$GITHUB_OUTPUT"
 
       # The version shown by `nan --version` is a constant in the source
       # (internal/tui.Version). A tag that disagrees with it ships a binary
       # that lies about which build it is, and the first person to report a
       # bug reports the wrong version.
       - name: Check the tag matches internal/tui.Version
+        env:
+          TAG: ${{ steps.tag.outputs.value }}
         run: |
           declared="$(grep -oP 'const Version = "\K[^"]+' internal/tui/tui.go)"
-          tag="${{ steps.tag.outputs.value }}"
+          tag="$TAG"
           if [ "v$declared" != "$tag" ]; then
             echo "tag $tag does not match internal/tui.Version ($declared)" >&2
             echo "bump the constant or retag" >&2
@@ -95,30 +124,54 @@ jobs:
       # Installing what we are about to publish, the same way a member would,
       # so a broken artifact fails here instead of on their machine.
       - name: Smoke test the linux/amd64 archive
+        env:
+          TAG: ${{ steps.tag.outputs.value }}
         run: |
           set -euo pipefail
-          tar -xzf "dist/nan-cli_${{ steps.tag.outputs.value }}_linux_amd64.tar.gz" -C /tmp
+          tar -xzf "dist/nan-cli_${TAG}_linux_amd64.tar.gz" -C /tmp
           /tmp/nan --version
           /tmp/nan --help > /dev/null
 
       # The Windows binaries cannot be run here, but an archive that unpacks
       # to nothing, or to a name Windows will not execute, can still be caught.
       - name: Check the Windows archives carry an .exe
+        env:
+          TAG: ${{ steps.tag.outputs.value }}
         run: |
           set -euo pipefail
           for arch in amd64 arm64; do
-            zip="dist/nan-cli_${{ steps.tag.outputs.value }}_windows_${arch}.zip"
+            zip="dist/nan-cli_${TAG}_windows_${arch}.zip"
             unzip -l "$zip" | grep -q "nan.exe" || {
               echo "$zip does not contain nan.exe" >&2
               exit 1
             }
           done
 
+      # checksums.txt proves the bytes arrived whole. It proves nothing about
+      # where they came from: whoever can replace an archive on a release can
+      # replace the checksum sitting next to it, and the installer would verify
+      # the download against the attacker's own number and call it good.
+      #
+      # This signs the archives themselves. GitHub keeps the attestation, so
+      # anyone can ask what built a binary they already have:
+      #
+      #   gh attestation verify nan-cli_v1.2.3_linux_amd64.tar.gz --repo helmcode/nan-cli
+      #
+      # and get back the workflow, the repository and the commit - none of
+      # which a release someone else published can produce.
+      - name: Attest what was built
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.value }}
         run: |
-          gh release create "${{ steps.tag.outputs.value }}" \
-            --title "${{ steps.tag.outputs.value }}" \
+          gh release create "$TAG" \
+            --title "$TAG" \
             --generate-notes \
             dist/*.tar.gz dist/*.zip dist/checksums.txt

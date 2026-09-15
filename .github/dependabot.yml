@@ -1,0 +1,36 @@
+version: 2
+
+# Pinning the actions to commit hashes traded one problem for another. A tag is
+# a moving label and a hash is not, which is the point - but a hash also does
+# not move when the action fixes something, and a pin nobody maintains is just
+# an old version with a good reason attached.
+#
+# Dependabot reads the `# v4` in the comment beside each pin, so it raises the
+# same pull request it would have raised for a tag, against a repo that has
+# stopped trusting tags.
+#
+# One thing it will not do: the `go` directive in go.mod. The standard library
+# patches - which is where the last four findings were - arrive by bumping that
+# by hand. The govulncheck job in CI is what says when.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+      include: scope
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      # One pull request rather than six: these move together and the TUI is
+      # the only thing that uses any of them.
+      charmbracelet:
+        patterns:
+          - "github.com/charmbracelet/*"

@@ -133,6 +133,71 @@ function Assert-Checksum($file, $expected) {
   }
 }
 
+# The checksum says the download arrived whole. It does not say who built it:
+# the release that serves the archive serves checksums.txt too, so a release
+# somebody else published matches its own numbers perfectly. The build
+# provenance answers that, and `gh` is what reads it.
+#
+# Where gh is not installed this says so and carries on - refusing to install
+# without a tool most people do not have would only teach everyone to skip the
+# step. Where gh IS installed and refuses, the difference between a bad archive
+# and an unreachable GitHub is the whole question, so it asks the API something
+# trivial to tell them apart.
+function Assert-Provenance($file) {
+  if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+    Write-Step "gh is not installed, so the build provenance was not checked"
+    Write-Step "  to check it yourself later: gh attestation verify <file> --repo $Repo"
+    return
+  }
+
+  # stderr to a file rather than merged with 2>&1: in Windows PowerShell 5.1
+  # merging a native command's stderr wraps every line in an ErrorRecord, which
+  # under ErrorActionPreference Stop throws on output that is not an error.
+  $log = [System.IO.Path]::GetTempFileName()
+  try {
+    & gh attestation verify $file --repo $Repo > $null 2> $log
+    $code = $LASTEXITCODE
+    $said = Get-Content -Raw -Path $log -ErrorAction SilentlyContinue
+  } finally {
+    Remove-Item $log -Force -ErrorAction SilentlyContinue
+  }
+
+  if ($code -eq 0) {
+    Write-Done "provenance verified: built by $Repo on GitHub Actions"
+    return
+  }
+
+  # Nothing recorded against these bytes, which is a 404 from the attestations
+  # API. A release from before this repo signed anything looks exactly like an
+  # archive that is not the one it signed, because a replaced archive has a
+  # digest nothing was ever signed for. So this is a notice and not a
+  # guarantee, and NAN_REQUIRE_PROVENANCE makes it refuse.
+  if ($said -match 'HTTP 404' -or $said -match 'no attestations found') {
+    if ($env:NAN_REQUIRE_PROVENANCE) {
+      throw @"
+no build provenance is recorded for this archive
+nothing was installed, because NAN_REQUIRE_PROVENANCE is set
+"@
+    }
+    Write-Warn "no build provenance is recorded for this archive"
+    Write-Warn "releases published before this repo started signing carry none"
+    Write-Warn "  set NAN_REQUIRE_PROVENANCE=1 to refuse those"
+    return
+  }
+
+  # Something was recorded and it did not match, or gh could not ask at all.
+  & gh api rate_limit > $null 2> $null
+  if ($LASTEXITCODE -eq 0) {
+    throw @"
+the build provenance of this archive does not check out
+it is not what $Repo published, whatever its checksum says
+nothing was installed
+"@
+  }
+  Write-Warn "could not reach GitHub to check the build provenance"
+  Write-Warn "the checksum did match, so this is most likely the network"
+}
+
 function Add-ToUserPath($dir) {
   # The user PATH, not the machine one: no elevation, and it survives reboots,
   # which setting it only in this process would not.
@@ -198,6 +263,9 @@ function Install-NanCli {
       }
     }
     Assert-Checksum (Join-Path $tmp $archive) $expected
+
+    Write-Step 'checking who built it...'
+    Assert-Provenance (Join-Path $tmp $archive)
 
     Expand-Archive -Path (Join-Path $tmp $archive) -DestinationPath $tmp -Force
     $binary = Join-Path $tmp 'nan.exe'
