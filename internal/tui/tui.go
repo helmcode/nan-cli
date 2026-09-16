@@ -2999,41 +2999,6 @@ func (m model) wrapped(l layout, msg string) string {
 		Render(style.Render(msg)), l.indent)
 }
 
-func (m model) renderLogin(l layout) string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(cWhite)
-	dim := lipgloss.NewStyle().Foreground(cGray)
-	errStyle := lipgloss.NewStyle().Foreground(cRed)
-	ok := lipgloss.NewStyle().Foreground(cCyan)
-
-	var b strings.Builder
-	b.WriteString(l.indent + title.Render("Sign in") + "\n\n")
-
-	step := "Step 1 of 2 — where should the link go?"
-	if m.loginStage == loginAskLink {
-		step = "Step 2 of 2 — the link from the email"
-	}
-	b.WriteString(l.indent + dim.Render(step) + "\n\n")
-
-	b.WriteString(l.indent + m.loginInput.View() + "\n")
-
-	if m.loginMsg != "" {
-		style := ok
-		if strings.HasPrefix(m.loginMsg, "error") {
-			style = errStyle
-		}
-		// A sign-in link is longer than any terminal, so this wraps rather
-		// than running off the side and taking the rest of the line with it.
-		wrapped := lipgloss.NewStyle().Width(l.w - lipgloss.Width(l.indent) - 1).
-			Render(style.Render(m.loginMsg))
-		b.WriteString("\n" + indentBlock(wrapped, l.indent) + "\n")
-	}
-
-	if m.loginStage == loginAskLink {
-		b.WriteString("\n" + l.indent + dim.Render("Nothing arrived? esc, then s to start again.") + "\n")
-	}
-	return b.String()
-}
-
 // How to actually use each tool once its config is written. The panel said
 // "4 added" and stopped there, which answers what it did and not the question
 // a member is left holding: and now what. These are the steps each tool page
