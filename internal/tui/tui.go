@@ -345,7 +345,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.wizard = wizardLink
 		m.loginStage = loginAskLink
 		m.loginMsg = "a link is on its way to " + m.loginEmail +
-			" — copy it out of the email without opening it, the link works once"
+			" — copy it out of the email without opening it, the link works once" +
+			" and expires " + auth.LinkValidity + " after it is sent"
 		m.loginInput.SetValue("")
 		m.loginInput.Placeholder = "https://nan.builders/...?token=..."
 		m.loginInput.Prompt = "Paste the link: "

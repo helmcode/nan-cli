@@ -1451,7 +1451,7 @@ func TestSigningInHappensInsideThePanel(t *testing.T) {
 		t.Fatal("an accepted request does not move on to the link")
 	}
 	out = m.View()
-	for _, want := range []string{"Let's confirm it with the magic link", "Paste the link"} {
+	for _, want := range []string{"Let's confirm it with the magic link", "Paste the link", "15 minutes"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the second step does not ask for the link:\n%s", out)
 		}
