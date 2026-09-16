@@ -273,7 +273,7 @@ func TestPiConfigIsRecognisedAsConfigured(t *testing.T) {
 	}
 }
 
-func TestCodexConfigSpeaksTheStreamingEndpoint(t *testing.T) {
+func TestCodexConfigSpeaksAWireProtocolCodexStillLoads(t *testing.T) {
 	path := tempConfig(t, "config.toml")
 	if err := writeCodexConfig(path, testKey); err != nil {
 		t.Fatal(err)
@@ -284,10 +284,11 @@ func TestCodexConfigSpeaksTheStreamingEndpoint(t *testing.T) {
 	}
 	content := string(data)
 
-	// /responses answers in one terminal event on this cluster, so with
-	// wire_api = "responses" the whole reply lands at once at the end.
-	if !strings.Contains(content, `wire_api = "chat"`) {
-		t.Error(`wire_api is not "chat", so Codex will not stream`)
+	// Codex 0.154 exits on wire_api = "chat" before its TUI is up, and the
+	// cluster's /responses endpoint streams deltas now, which is the only
+	// thing "chat" was ever here for.
+	if !strings.Contains(content, `wire_api = "responses"`) {
+		t.Error(`wire_api is not "responses", so Codex will refuse to start`)
 	}
 	model, _ := catalog.Get(catalog.Coding)
 	if !strings.Contains(content, `model = "`+model.ID+`"`) {
@@ -295,6 +296,99 @@ func TestCodexConfigSpeaksTheStreamingEndpoint(t *testing.T) {
 	}
 	if strings.Contains(content, "model_context_window = 131072") {
 		t.Error("still declaring a window no model on the cluster has")
+	}
+}
+
+// The member updates the CLI because Codex stopped opening, so the repair has
+// to reach a config that is already ours: they cannot be asked to disconnect
+// and reconnect a tool that will not start.
+func TestCodexConfigRepairsTheWireAPIWeWroteBefore(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	existing := `model = "glm5.3-flash"
+model_provider = "nan"
+
+[model_providers.openai]
+name = "OpenAI"
+wire_api = "chat"
+
+[model_providers.nan]
+name = "NaN"
+base_url = "https://api.nan.builders/v1"
+experimental_bearer_token = "nan-old"
+wire_api = "chat"
+`
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	content := string(data)
+
+	if strings.Count(content, "[model_providers.nan]") != 1 {
+		t.Error("the provider was appended a second time instead of repaired")
+	}
+	if !strings.Contains(content, `experimental_bearer_token = "nan-old"`) {
+		t.Error("a repair that should touch one line rewrote the member's key")
+	}
+	// Another provider's wire_api is that provider's business.
+	openai := content[strings.Index(content, "[model_providers.openai]"):strings.Index(content, "[model_providers.nan]")]
+	if !strings.Contains(openai, `wire_api = "chat"`) {
+		t.Error("a wire_api outside our own section was rewritten")
+	}
+	nan := content[strings.Index(content, "[model_providers.nan]"):]
+	if !strings.Contains(nan, `wire_api = "responses"`) {
+		t.Errorf("our section still does not speak a protocol Codex loads:\n%s", nan)
+	}
+}
+
+// A config already on "responses" is a config with nothing to do to it.
+func TestCodexConfigLeavesARepairedFileAlone(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	existing := `[model_providers.nan]
+base_url = "https://api.nan.builders/v1"
+wire_api = "responses"
+`
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != existing {
+		t.Errorf("the file was rewritten with nothing to change:\n%s", data)
+	}
+}
+
+// Appended at the end of a file that ends in a table, a root key stops being
+// a root key: it becomes a key of that table, where Codex never looks for it.
+func TestCodexContextWindowLandsInTheRootTable(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	existing := `model = "gpt-5"
+
+[projects."/home/member/repo"]
+trust_level = "trusted"
+`
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	content := string(data)
+
+	window := strings.Index(content, "model_context_window")
+	if window < 0 {
+		t.Fatal("no model_context_window was written at all")
+	}
+	if header := strings.Index(content, "[projects."); window > header {
+		t.Errorf("model_context_window is inside a table, not the root:\n%s", content)
+	}
+	if !strings.Contains(content, `trust_level = "trusted"`) {
+		t.Error("the member's own project entry was lost")
 	}
 }
 

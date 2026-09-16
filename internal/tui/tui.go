@@ -2425,12 +2425,18 @@ func removePiDefaults(settingsPath string) error {
 func writeCodexConfig(cfgPath, apiKey string) error {
 	data, _ := os.ReadFile(cfgPath)
 	if strings.Contains(string(data), "api.nan.builders") {
+		// Already pointing at the cluster, so there is nothing to add - but
+		// the section may be one we wrote back when it said wire_api =
+		// "chat", and Codex 0.154 will not load a config with that value at
+		// all: it prints the error and exits before the TUI is up. A member
+		// whose Codex does not open is the last member who can be asked to
+		// disconnect and reconnect it, so the repair happens here.
+		if repaired, changed := codexWireAPIRepaired(data); changed {
+			return writeConfigFile(cfgPath, repaired)
+		}
 		return nil
 	}
 
-	// wire_api = "chat", not "responses": the cluster's /responses endpoint
-	// emits a single terminal event, so with "responses" the whole answer
-	// appears at once at the end instead of streaming.
 	codexModel, _ := catalog.Get(catalog.Coding)
 
 	// If no existing config, write a complete starter config.
@@ -2443,24 +2449,104 @@ model_context_window = %d
 name = "NaN"
 base_url = "https://api.nan.builders/v1"
 experimental_bearer_token = %q
-wire_api = "chat"
+wire_api = "responses"
 `, codexModel.ID, codexModel.Context, apiKey)
 		return writeConfigFile(cfgPath, []byte(content))
 	}
 
 	// Existing config: only append the provider section; preserve user's model/provider choices.
-	// model_context_window suppresses the "metadata not found" warning for nan models.
 	section := fmt.Sprintf(`
-model_context_window = %d
-
 [model_providers.nan]
 name = "NaN"
 base_url = "https://api.nan.builders/v1"
 experimental_bearer_token = %q
-wire_api = "chat"
-`, codexModel.Context, apiKey)
+wire_api = "responses"
+`, apiKey)
 	content := strings.TrimRight(string(data), "\n") + "\n" + section
-	return writeConfigFile(cfgPath, []byte(content))
+	return writeConfigFile(cfgPath, []byte(withCodexContextWindow(content, codexModel.Context)))
+}
+
+// Codex has no metadata for a model on this cluster, so without
+// model_context_window it compacts against a window it guessed. (It prints
+// the "metadata not found" warning either way - that fires before it reads
+// the override.)
+//
+// The key is a root key, so it belongs above the first table header.
+// Appended at the end of the file the way the section around it is, it lands
+// inside whatever table came last - for a member with [projects.*] entries it
+// became a key of the last project they trusted, and Codex never looked
+// there.
+func withCodexContextWindow(content string, window int) string {
+	declared := fmt.Sprintf("model_context_window = %d", window)
+	lines := strings.Split(content, "\n")
+	for i, raw := range lines {
+		trimmed := strings.TrimSpace(raw)
+		// Everything above the first table header is the root table, so this
+		// only ever reads the member's root keys.
+		if strings.HasPrefix(trimmed, "[") {
+			head := strings.TrimRight(strings.Join(lines[:i], "\n"), "\n")
+			tail := strings.Join(lines[i:], "\n")
+			if head == "" {
+				return declared + "\n\n" + tail
+			}
+			return head + "\n" + declared + "\n\n" + tail
+		}
+		if key, _, ok := strings.Cut(trimmed, "="); ok && strings.TrimSpace(key) == "model_context_window" {
+			return content // the member declared one of their own; it stands
+		}
+	}
+	return strings.TrimRight(content, "\n") + "\n" + declared + "\n"
+}
+
+// Brings our own [model_providers.nan] section up to the only wire protocol
+// Codex still speaks, and touches nothing else in the file - not another
+// provider's wire_api, not the member's own keys, not a byte of the layout.
+//
+// The section used to say wire_api = "chat" on purpose: the cluster's
+// /responses endpoint answered in one terminal event, so "responses" meant
+// the whole reply arriving at once at the end instead of streaming. The
+// endpoint streams deltas now, and Codex 0.154 dropped "chat" entirely, so
+// the reason for the old value is gone twice over.
+//
+// Done by hand rather than through a TOML library because a round trip
+// through one reflows the whole document - a member's comments, their
+// spacing, their quoting - to satisfy a change of one word on one line.
+func codexWireAPIRepaired(data []byte) ([]byte, bool) {
+	lines := strings.Split(string(data), "\n")
+	inNaN, changed := false, false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") {
+			inNaN = isCodexNaNProviderHeader(trimmed)
+			continue
+		}
+		if !inNaN {
+			continue
+		}
+		key, value, ok := strings.Cut(trimmed, "=")
+		if !ok || strings.TrimSpace(key) != "wire_api" {
+			continue
+		}
+		if strings.Trim(strings.TrimSpace(value), `"'`) != "chat" {
+			continue
+		}
+		indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+		lines[i] = indent + `wire_api = "responses"`
+		changed = true
+	}
+	if !changed {
+		return data, false
+	}
+	return []byte(strings.Join(lines, "\n")), true
+}
+
+// [model_providers.nan], and the quoted spelling of it that TOML also allows.
+func isCodexNaNProviderHeader(line string) bool {
+	name := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "["), "]"))
+	if !strings.HasPrefix(name, "model_providers.") {
+		return false
+	}
+	return strings.Trim(strings.TrimPrefix(name, "model_providers."), `"'`) == "nan"
 }
 
 // ── Hermes ───────────────────────────────────────────────────────────────────
