@@ -118,7 +118,7 @@ function Get-LatestVersion {
 could not work out the latest version from the GitHub API
 it rate limits unauthenticated requests, so this is usually temporary
 wait a few minutes, or pick a version yourself:
-    & ([scriptblock]::Create((irm https://nan.builders/install.ps1))) -Version v0.1.19
+    & ([scriptblock]::Create((irm https://nan.builders/install.ps1))) -Version v0.1.20
 the releases are at https://github.com/$Repo/releases
 "@
 }
