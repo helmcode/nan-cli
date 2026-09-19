@@ -410,6 +410,115 @@ func TestCodexConfigDoesNotTouchAnExistingChoice(t *testing.T) {
 	}
 }
 
+// The file this repairs is the one a member actually turns up with: the
+// provider section is ours and already fine, and Codex still will not open -
+// not the CLI, not the desktop app, which shows "failed to read
+// configuration layers: duplicate key" in a dialog and quits. Two runs of an
+// older setup put two model_context_window lines at the end of the file,
+// which is both a duplicate key and, after a [projects.*] header, not a root
+// key at all. Repairing only the wire_api left that member exactly as stuck.
+func TestCodexConfigOpensAFileItLeftUnloadable(t *testing.T) {
+	codexModel, _ := catalog.Get(catalog.Coding)
+	path := tempConfig(t, "config.toml")
+	existing := fmt.Sprintf(`model = "gpt-5"
+
+[projects."/home/member/repo"]
+trust_level = "trusted"
+
+model_context_window = %d
+
+model_context_window = %d
+
+[model_providers.nan]
+name = "NaN"
+base_url = "https://api.nan.builders/v1"
+wire_api = "chat"
+`, codexModel.Context, codexModel.Context)
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	content := string(data)
+
+	if n := strings.Count(content, "model_context_window"); n != 1 {
+		t.Errorf("%d model_context_window keys, so Codex still refuses the file:\n%s", n, content)
+	}
+	window, header := strings.Index(content, "model_context_window"), strings.Index(content, "[projects.")
+	if window > header {
+		t.Errorf("the surviving window is inside a table, where Codex does not read it:\n%s", content)
+	}
+	if !strings.Contains(content, `wire_api = "responses"`) {
+		t.Error("the wire_api repair stopped happening once the pruning was added")
+	}
+	if !strings.Contains(content, `trust_level = "trusted"`) {
+		t.Error("the member's own project entry was lost")
+	}
+}
+
+// A window the member set themselves is a window they meant, whatever it
+// says. Ours is recognisable by its value, and only inside a table - in the
+// root it is indistinguishable from theirs, so there the first one stands.
+func TestCodexConfigKeepsAWindowTheMemberDeclared(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	existing := `model = "gpt-5"
+model_context_window = 200000
+
+[model_providers.nan]
+base_url = "https://api.nan.builders/v1"
+wire_api = "responses"
+`
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != existing {
+		t.Errorf("a file with nothing wrong with it was rewritten:\n%s", data)
+	}
+}
+
+// Disconnecting takes the section out. The window went in beside it and has
+// no meaning without it, and leaving two of them behind would hand back a
+// file Codex does not open with nothing in it left to blame.
+func TestCodexRemovalTakesTheWindowItWrote(t *testing.T) {
+	codexModel, _ := catalog.Get(catalog.Coding)
+	path := tempConfig(t, "config.toml")
+	existing := fmt.Sprintf(`model = "gpt-5"
+
+[projects."/home/member/repo"]
+trust_level = "trusted"
+
+model_context_window = %d
+
+[model_providers.nan]
+base_url = "https://api.nan.builders/v1"
+wire_api = "responses"
+`, codexModel.Context)
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCodexConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	content := string(data)
+
+	if strings.Contains(content, "model_context_window") {
+		t.Errorf("the window we wrote outlived the section it belonged to:\n%s", content)
+	}
+	if strings.Contains(content, "api.nan.builders") {
+		t.Error("the provider section survived a disconnect")
+	}
+	if !strings.Contains(content, `trust_level = "trusted"`) {
+		t.Error("the member's own project entry was lost")
+	}
+}
+
 func TestFactoryConfigMarksWhatCannotSeeImages(t *testing.T) {
 	path := tempConfig(t, "settings.json")
 	if err := writeFactoryConfig(path, testKey); err != nil {

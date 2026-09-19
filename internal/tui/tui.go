@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -2424,6 +2425,8 @@ func removePiDefaults(settingsPath string) error {
 
 func writeCodexConfig(cfgPath, apiKey string) error {
 	data, _ := os.ReadFile(cfgPath)
+	codexModel, _ := catalog.Get(catalog.Coding)
+
 	if strings.Contains(string(data), "api.nan.builders") {
 		// Already pointing at the cluster, so there is nothing to add - but
 		// the section may be one we wrote back when it said wire_api =
@@ -2431,13 +2434,24 @@ func writeCodexConfig(cfgPath, apiKey string) error {
 		// all: it prints the error and exits before the TUI is up. A member
 		// whose Codex does not open is the last member who can be asked to
 		// disconnect and reconnect it, so the repair happens here.
-		if repaired, changed := codexWireAPIRepaired(data); changed {
-			return writeConfigFile(cfgPath, repaired)
+		//
+		// The same member is also the one most likely to be carrying a
+		// model_context_window we appended once per run, back when it went to
+		// the end of the file. Two of them is a duplicate key, and Codex
+		// refuses the whole file for it - the desktop app too, which opens on
+		// an error dialog and nothing else. Repairing the wire_api alone left
+		// that member exactly as stuck as before, so the pruning runs first
+		// and puts the key back where it is read from.
+		repaired, pruned := codexContextWindowsPruned(data, codexModel.Context)
+		if pruned {
+			repaired = []byte(withCodexContextWindow(string(repaired), codexModel.Context))
 		}
-		return nil
+		rewired, changed := codexWireAPIRepaired(repaired)
+		if !pruned && !changed {
+			return nil
+		}
+		return writeConfigFile(cfgPath, rewired)
 	}
-
-	codexModel, _ := catalog.Get(catalog.Coding)
 
 	// If no existing config, write a complete starter config.
 	if len(data) == 0 {
@@ -2496,6 +2510,70 @@ func withCodexContextWindow(content string, window int) string {
 		}
 	}
 	return strings.TrimRight(content, "\n") + "\n" + declared + "\n"
+}
+
+// Takes out every model_context_window this CLI is responsible for putting
+// somewhere it does not belong, and leaves at most one standing.
+//
+// Two of them anywhere in the file is a duplicate key, and Codex does not
+// load a config with one: `codex` exits on the error and the desktop app
+// opens an error dialog instead of a window. That is how a member ends up
+// unable to use Codex at all, for a key that only ever existed to stop it
+// compacting against a guessed window.
+//
+// Inside a table the key is not a root key at all - it reads as a key of
+// whatever table came last, usually the last [projects.*] the member
+// trusted - so one carrying our own value there is ours, appended by a
+// version that wrote it at the end of the file, and it goes. A value that is
+// not ours is left where it is even there: it is not ours to judge. In the
+// root table the first one stands and any repeat after it is the duplicate.
+//
+// Done line by line for the same reason the wire_api repair is: a round trip
+// through a TOML library reflows a document the member also edits by hand.
+func codexContextWindowsPruned(data []byte, window int) ([]byte, bool) {
+	ours := strconv.Itoa(window)
+	lines := strings.Split(string(data), "\n")
+	out := make([]string, 0, len(lines))
+	inTable, keptRoot, pruned := false, false, false
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") {
+			inTable = true
+			out = append(out, line)
+			continue
+		}
+		key, value, ok := strings.Cut(trimmed, "=")
+		if !ok || strings.TrimSpace(key) != "model_context_window" {
+			out = append(out, line)
+			continue
+		}
+		drop := false
+		switch {
+		case inTable:
+			drop = strings.TrimSpace(value) == ours
+		case keptRoot:
+			drop = true
+		default:
+			keptRoot = true
+		}
+		if !drop {
+			out = append(out, line)
+			continue
+		}
+		pruned = true
+		// The line was written with a blank line on either side of it. Left
+		// alone both survive it and the file gains a gap where a key used to
+		// be, which is a diff the member did not ask for on a file they read.
+		if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" &&
+			i+1 < len(lines) && strings.TrimSpace(lines[i+1]) == "" {
+			i++
+		}
+	}
+	if !pruned {
+		return data, false
+	}
+	return []byte(strings.Join(out, "\n")), true
 }
 
 // Brings our own [model_providers.nan] section up to the only wire protocol
@@ -2811,7 +2889,16 @@ func removeCodexConfig(cfgPath string) error {
 		out = append(out, line)
 	}
 	result := strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n"
-	if result == "\n" {
+	// The section is gone, and so is the reason for the model_context_window
+	// that went in beside it. Left behind it is a key the member never wrote,
+	// naming a window no model of theirs has - and if there are two of them
+	// it is a file their Codex does not open, now with nothing left in it to
+	// say who did that or which tool to disconnect to undo it.
+	codexModel, _ := catalog.Get(catalog.Coding)
+	if pruned, changed := codexContextWindowsPruned([]byte(result), codexModel.Context); changed {
+		result = string(pruned)
+	}
+	if strings.TrimSpace(result) == "" {
 		return os.Remove(cfgPath)
 	}
 	return writeConfigFile(cfgPath, []byte(result))
