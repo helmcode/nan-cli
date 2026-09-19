@@ -519,6 +519,99 @@ wire_api = "responses"
 	}
 }
 
+// `codex --model <id>` moves the model and leaves model_context_window
+// behind, so a 262,144-token model runs with whatever window config.toml
+// declares. A file per model is the only place Codex 0.155 lets that window
+// travel with the model it belongs to.
+func TestCodexProfilesGiveEveryModelItsOwnWindow(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Dir(path)
+
+	for _, m := range catalog.ChatModels() {
+		profile := filepath.Join(home, codexProfileName(m.ID)+".config.toml")
+		data, err := os.ReadFile(profile)
+		if err != nil {
+			t.Errorf("%s has no profile, so it is only reachable with the wrong window: %v", m.ID, err)
+			continue
+		}
+		body := string(data)
+		if !strings.Contains(body, fmt.Sprintf("model = %q", m.ID)) {
+			t.Errorf("%s: the profile does not select the model it is named after:\n%s", m.ID, body)
+		}
+		if !strings.Contains(body, fmt.Sprintf("model_context_window = %d", m.Context)) {
+			t.Errorf("%s: window is not the one the cluster serves:\n%s", m.ID, body)
+		}
+		if !strings.Contains(body, `model_provider = "nan"`) {
+			t.Errorf("%s: the profile would run against whatever provider is default:\n%s", m.ID, body)
+		}
+	}
+}
+
+// Codex refuses a --profile with a dot in it ("pass a plain name such as
+// `work`"), which is every id on the cluster that carries a version number.
+func TestCodexProfileNamesAreNamesCodexAccepts(t *testing.T) {
+	for _, m := range catalog.ChatModels() {
+		name := codexProfileName(m.ID)
+		if strings.Contains(name, ".") {
+			t.Errorf("%s -> %s: Codex rejects this outright", m.ID, name)
+		}
+		if !strings.HasPrefix(name, "nan-") {
+			t.Errorf("%s -> %s: without the prefix it is not ours to remove again", m.ID, name)
+		}
+	}
+	if got := codexProfileName("glm5.3-flash"); got != "nan-glm53-flash" {
+		t.Errorf("codexProfileName(glm5.3-flash) = %s", got)
+	}
+}
+
+// The provider section carries the key. A copy of it in eight more files is
+// eight more files to rotate, and eight more to leak.
+func TestCodexProfilesCarryNoKey(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Dir(path)
+	for _, m := range catalog.ChatModels() {
+		data, err := os.ReadFile(filepath.Join(home, codexProfileName(m.ID)+".config.toml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), testKey) {
+			t.Errorf("%s: the profile has the API key in it", m.ID)
+		}
+	}
+}
+
+func TestCodexRemovalTakesTheProfilesAndNothingElse(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Dir(path)
+	// A profile of the member's own, sitting in the same directory.
+	theirs := filepath.Join(home, "work.config.toml")
+	if err := os.WriteFile(theirs, []byte("model = \"gpt-5\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := removeCodexConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range catalog.ChatModels() {
+		profile := filepath.Join(home, codexProfileName(m.ID)+".config.toml")
+		if _, err := os.Stat(profile); !os.IsNotExist(err) {
+			t.Errorf("%s: the profile outlived the disconnect", m.ID)
+		}
+	}
+	if _, err := os.Stat(theirs); err != nil {
+		t.Errorf("a profile the member wrote was deleted: %v", err)
+	}
+}
+
 func TestFactoryConfigMarksWhatCannotSeeImages(t *testing.T) {
 	path := tempConfig(t, "settings.json")
 	if err := writeFactoryConfig(path, testKey); err != nil {

@@ -2447,10 +2447,12 @@ func writeCodexConfig(cfgPath, apiKey string) error {
 			repaired = []byte(withCodexContextWindow(string(repaired), codexModel.Context))
 		}
 		rewired, changed := codexWireAPIRepaired(repaired)
-		if !pruned && !changed {
-			return nil
+		if pruned || changed {
+			if err := writeConfigFile(cfgPath, rewired); err != nil {
+				return err
+			}
 		}
-		return writeConfigFile(cfgPath, rewired)
+		return writeCodexProfiles(filepath.Dir(cfgPath))
 	}
 
 	// If no existing config, write a complete starter config.
@@ -2465,7 +2467,10 @@ base_url = "https://api.nan.builders/v1"
 experimental_bearer_token = %q
 wire_api = "responses"
 `, codexModel.ID, codexModel.Context, apiKey)
-		return writeConfigFile(cfgPath, []byte(content))
+		if err := writeConfigFile(cfgPath, []byte(content)); err != nil {
+			return err
+		}
+		return writeCodexProfiles(filepath.Dir(cfgPath))
 	}
 
 	// Existing config: only append the provider section; preserve user's model/provider choices.
@@ -2477,7 +2482,64 @@ experimental_bearer_token = %q
 wire_api = "responses"
 `, apiKey)
 	content := strings.TrimRight(string(data), "\n") + "\n" + section
-	return writeConfigFile(cfgPath, []byte(withCodexContextWindow(content, codexModel.Context)))
+	if err := writeConfigFile(cfgPath, []byte(withCodexContextWindow(content, codexModel.Context))); err != nil {
+		return err
+	}
+	return writeCodexProfiles(filepath.Dir(cfgPath))
+}
+
+// One file per chat model, so every model on the cluster is a flag away with
+// the window it is actually served at.
+//
+// `codex --model <id>` switches the model and nothing else, and the
+// model_context_window in config.toml stays where it was: point it at a
+// 262,144-token model with a million-token window declared and Codex compacts
+// against a window that is not there. Codex 0.155 layers
+// $CODEX_HOME/<name>.config.toml over the base config for `--profile <name>`,
+// which is the one place a per-model window can live without a second copy of
+// the member's provider, MCP servers and permissions.
+//
+// No API key goes in them: the provider section in config.toml is what
+// carries it, and a key in eight files is a key to rotate in eight files.
+func writeCodexProfiles(codexHome string) error {
+	for _, m := range catalog.ChatModels() {
+		body := fmt.Sprintf(`# Written by the NaN CLI. Disconnecting Codex removes it.
+model = %q
+model_provider = "nan"
+model_context_window = %d
+`, m.ID, m.Context)
+		path := filepath.Join(codexHome, codexProfileName(m.ID)+".config.toml")
+		if err := writeConfigFile(path, []byte(body)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Codex takes "a plain name" for --profile and rejects a dot in it outright,
+// so the ids that carry a version number cannot be used as they are spelled:
+// glm5.3-flash is refused, glm53-flash is not. The nan- prefix is what makes
+// the file ours to delete later, and what keeps it clear of a profile the
+// member wrote themselves.
+func codexProfileName(id string) string {
+	return "nan-" + strings.ReplaceAll(id, ".", "")
+}
+
+// Takes back only the files this CLI wrote, by the prefix it wrote them under.
+func removeCodexProfiles(codexHome string) error {
+	entries, err := os.ReadDir(codexHome)
+	if err != nil {
+		return nil
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !e.IsDir() && strings.HasPrefix(name, "nan-") && strings.HasSuffix(name, ".config.toml") {
+			if err := os.Remove(filepath.Join(codexHome, name)); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // Codex has no metadata for a model on this cluster, so without
@@ -2897,6 +2959,9 @@ func removeCodexConfig(cfgPath string) error {
 	codexModel, _ := catalog.Get(catalog.Coding)
 	if pruned, changed := codexContextWindowsPruned([]byte(result), codexModel.Context); changed {
 		result = string(pruned)
+	}
+	if err := removeCodexProfiles(filepath.Dir(cfgPath)); err != nil {
+		return err
 	}
 	if strings.TrimSpace(result) == "" {
 		return os.Remove(cfgPath)
