@@ -1765,6 +1765,12 @@ func TestHomeDropsTheGuideWhenSetupIsDone(t *testing.T) {
 // green and wrong at the same time.
 func TestSigningInHappensInsideThePanel(t *testing.T) {
 	m := setupModel(t, &session.Session{})
+	// Said out loud, because View wraps to it and truncates to it. Left to
+	// the zero value this asserted against whatever the default happened to
+	// be: at 60 columns the renderer breaks the sentence as "expires 15 /
+	// minutes" and at 80x20 the truncation eats it, so the test failed for a
+	// screen that was right.
+	m.lay = newLayout(90, 30)
 
 	if m.loginStage != loginOff {
 		t.Fatal("the panel opens mid-login")
@@ -1790,8 +1796,13 @@ func TestSigningInHappensInsideThePanel(t *testing.T) {
 		t.Fatal("an accepted request does not move on to the link")
 	}
 	out = m.View()
+	// Against the screen with its line breaks collapsed: whether "15 minutes"
+	// survives as two words on one line is the renderer's business and
+	// changes with one more word in the message. What this is here to catch
+	// is the sentence going missing.
+	flat := strings.Join(strings.Fields(out), " ")
 	for _, want := range []string{"Let's confirm it with the magic link", "Paste the link", "15 minutes"} {
-		if !strings.Contains(out, want) {
+		if !strings.Contains(flat, want) {
 			t.Errorf("the second step does not ask for the link:\n%s", out)
 		}
 	}
