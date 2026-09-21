@@ -24,11 +24,21 @@ on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:
+  # How .github/workflows/tag.yml publishes: it creates the tag and then calls
+  # this directly, because a tag it pushed with the repository's own token will
+  # not set off the trigger above.
+  workflow_call:
     inputs:
       tag:
         description: 'Tag to build and publish (e.g. v0.1.1)'
         required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and publish (e.g. v0.1.1)'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -44,6 +54,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Build the tag, not the branch. When a tag push starts this the two
+          # are the same commit, but when tag.yml calls it main has already
+          # moved on in principle, and an archive attested as this tag has to
+          # be the commit the tag names. Empty for a tag push, where the ref
+          # that triggered the run is the tag itself.
+          ref: ${{ inputs.tag }}
 
       - uses: actions/setup-go@v5
         with:
@@ -59,7 +76,7 @@ jobs:
       - name: Resolve the tag
         id: tag
         env:
-          INPUT_TAG: ${{ github.event.inputs.tag }}
+          INPUT_TAG: ${{ inputs.tag }}
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail

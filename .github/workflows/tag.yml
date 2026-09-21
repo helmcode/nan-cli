@@ -1,0 +1,92 @@
+name: tag
+
+# Publishing a release was the one step nobody automated, and it showed: #26
+# bumped internal/tui.Version to 0.1.20 on the 17th, and four days later
+# /releases/latest still answered v0.1.19. Everything downstream was fine - the
+# release workflow works, the installer works - but they only run once someone
+# remembers to push a tag, and the fixes sat in main where nobody could install
+# them.
+#
+# So the bump becomes the act of publishing. Merge a commit that changes the
+# constant and the tag follows; merge anything else and this does nothing.
+#
+# This waits for CI rather than running on the push itself. The archives here
+# get attested with the repository's own identity and then curl'd onto other
+# people's machines, and vet, the tests on ubuntu and macos, the vulnerability
+# scan and the installer check are what stand between a bad merge and that.
+# Branch protection already asks for them; this refuses to publish a commit
+# that did not get them.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  tag:
+    # CI also runs on pull requests. Those carry the PR's head branch, so the
+    # filter above drops them, but a fork whose branch is called main would
+    # slip through - hence the event check too.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.value }}
+      created: ${{ steps.tag.outputs.created }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The commit CI passed on, not whatever main has drifted to since.
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Tag the commit if internal/tui.Version is new
+        id: tag
+        env:
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          declared="$(grep -oP 'const Version = "\K[^"]+' internal/tui/tui.go)"
+          tag="v$declared"
+          # The same shape the release workflow insists on. A constant that is
+          # not a version we can tag is a mistake in the source, and finding
+          # out here beats finding out from a tag named v0.1.20-wip.
+          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+([-][A-Za-z0-9.]+)?$'; then
+            echo "internal/tui.Version is not something we can tag: $declared" >&2
+            exit 1
+          fi
+          echo "value=$tag" >> "$GITHUB_OUTPUT"
+
+          # Every merge to main reaches this, and almost none of them bump the
+          # version. An existing tag is the ordinary case, not a failure.
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "$tag is already published - nothing to do"
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$tag" "$SHA" -m "$tag"
+          git push origin "refs/tags/$tag"
+          echo "created=true" >> "$GITHUB_OUTPUT"
+
+  # Calling the release workflow instead of letting the tag push trigger it.
+  # A tag pushed with the repository's GITHUB_TOKEN deliberately does not start
+  # another workflow run - that is GitHub stopping workflows from looping - so
+  # a tag created above would sit there with no release behind it, which is the
+  # exact failure this is meant to end.
+  release:
+    needs: tag
+    if: needs.tag.outputs.created == 'true'
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.tag.outputs.tag }}

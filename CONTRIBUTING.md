@@ -125,3 +125,24 @@ BREAKING CHANGE: nan auth login no longer reads browser cookies automatically.
 1. Fork the repo and create a branch from `main`.
 2. Make your changes and verify the TUI builds and runs: `go build -o nan . && ./nan`.
 3. Open a pull request — the title should follow the same Conventional Commits format as your commits.
+
+## Releases
+
+Releases publish themselves from the version constant. There is no separate
+tagging step to remember:
+
+1. Bump `Version` in `internal/tui/tui.go` in a `chore: <version>` commit.
+2. Merge it to `main`.
+3. Once CI passes on `main`, `.github/workflows/tag.yml` creates the matching
+   `v<version>` tag and the release workflow builds, signs and publishes the
+   archives for every platform.
+
+The tag always matches the constant, in both directions: the tag is derived
+from it, and the release workflow refuses to build a tag that disagrees with
+it. `scripts/install.sh` asks GitHub for the latest release, so whatever this
+publishes is what `curl -fsSL https://nan.builders/install | bash` serves
+minutes later.
+
+Merges that do not change the constant tag nothing — the version you bump to
+is the release you get. To rebuild a release that failed halfway, run the
+release workflow by hand from the Actions tab with an existing tag.
