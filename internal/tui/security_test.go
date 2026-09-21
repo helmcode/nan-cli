@@ -34,9 +34,24 @@ func TestWritingAKeyTightensAConfigThatWasWideOpen(t *testing.T) {
 		t.Fatalf("tools failed on a clean run: %v", failed)
 	}
 	for name, path := range toolPaths(home) {
-		if !strings.Contains(readFile(t, path), testKey) {
-			t.Errorf("%s was not configured at all", name)
-			continue
+		content := readFile(t, path)
+		if name == "Codex" {
+			// The one exception: Codex's config carries a reference to
+			// `nan key print` instead of the key, and that reference is what
+			// says it was configured at all.
+			if strings.Contains(content, testKey) {
+				t.Errorf("%s carries the literal key", name)
+				continue
+			}
+			if !strings.Contains(content, `args = ["key", "print"]`) {
+				t.Errorf("%s was not configured with the key command reference", name)
+				continue
+			}
+		} else {
+			if !strings.Contains(content, testKey) {
+				t.Errorf("%s was not configured at all", name)
+				continue
+			}
 		}
 		assertNotWorldReadable(t, path)
 	}
@@ -72,7 +87,14 @@ func TestConfiguringTightensAToolThatNeedsNothingWritten(t *testing.T) {
 		t.Fatalf("tools failed on the second run: %v", failed)
 	}
 	for name, path := range paths {
-		if !strings.Contains(readFile(t, path), testKey) {
+		content := readFile(t, path)
+		if name == "Codex" {
+			// The key was never in this file; the command reference is what
+			// has to survive the second run untouched.
+			if !strings.Contains(content, `args = ["key", "print"]`) {
+				t.Errorf("%s lost its key command reference on the second run", name)
+			}
+		} else if !strings.Contains(content, testKey) {
 			t.Errorf("%s lost its key on the second run", name)
 		}
 		assertNotWorldReadable(t, path)
@@ -143,6 +165,15 @@ func TestSigningOutTakesTheKeyOutOfTheTools(t *testing.T) {
 	for name, path := range toolPaths(home) {
 		if strings.Contains(readFile(t, path), testKey) {
 			t.Errorf("%s still carries the key after signing out", name)
+		}
+	}
+	// Codex's config never held the key, but the command reference is ours
+	// all the same: after signing out it must not survive, or Codex keeps
+	// resolving a key that no longer exists.
+	codexContent := readFile(t, toolPaths(home)["Codex"])
+	for _, ours := range []string{"[model_providers.nan]", "[model_providers.nan.auth]", `["model_providers.nan"]`} {
+		if strings.Contains(codexContent, ours) {
+			t.Errorf("Codex still carries %s after signing out", ours)
 		}
 	}
 	if strings.Contains(readFile(t, hermesEnvPath(filepath.Join(home, "hermes"))), testKey) {
