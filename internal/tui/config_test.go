@@ -232,6 +232,39 @@ func TestPiConfigWritesOnlyTheModalitiesPiAccepts(t *testing.T) {
 	}
 }
 
+// Pi joins Codex as a tool that never carries the literal key: models.json is
+// a file members paste into issues and dotfiles, so the provider points at
+// `nan key print` instead.
+func TestPiConfigWritesACommandReferenceNotTheKey(t *testing.T) {
+	restoreNanExecutable(t, "/usr/local/bin/nan")
+
+	path := tempConfig(t, "models.json")
+	if err := writePiConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+
+	// piModels only returns the model list, so the raw provider object is what
+	// carries the reference.
+	providers := readJSON(t, path)["providers"].(map[string]any)
+	nan := providers["nan"].(map[string]any)
+	if got := nan["apiKey"]; got != "!/usr/local/bin/nan key print" {
+		t.Errorf("apiKey = %v, want the key command reference", got)
+	}
+	data := readFile(t, path)
+	if strings.Contains(data, testKey) {
+		t.Error("models.json carries the literal key")
+	}
+}
+
+// The escapes are Pi's, not a shell's: `$$` reads as a literal `$` and `$!`
+// as a literal `!`, so `$` has to be doubled before `!` gets its `$` prefix.
+func TestPiKeyReferenceEscapesDollarAndBang(t *testing.T) {
+	got := piKeyReference("/opt/nan$bin/nan!")
+	if want := "!/opt/nan$$bin/nan$! key print"; got != want {
+		t.Errorf("piKeyReference = %q, want %q", got, want)
+	}
+}
+
 func TestPiConfigLeavesOtherProvidersAlone(t *testing.T) {
 	path := tempConfig(t, "models.json")
 	existing := `{"providers":{"openai":{"baseUrl":"https://api.openai.com/v1","models":[]}}}`
@@ -420,11 +453,11 @@ func TestCodexConfigDoesNotTouchAnExistingChoice(t *testing.T) {
 
 // Under `go test` os.Executable() is the test binary, so the tests that
 // assert on the written command swap it for a path with a known shape.
-func restoreCodexAuthCommand(t *testing.T, path string) {
+func restoreNanExecutable(t *testing.T, path string) {
 	t.Helper()
-	original := codexAuthCommand
-	codexAuthCommand = func() string { return path }
-	t.Cleanup(func() { codexAuthCommand = original })
+	original := nanExecutable
+	nanExecutable = func() string { return path }
+	t.Cleanup(func() { nanExecutable = original })
 }
 
 // The key an older version of this CLI wrote here sat in a file members paste
@@ -433,7 +466,7 @@ func restoreCodexAuthCommand(t *testing.T, path string) {
 // exists - reached on the same early return the wire repair is.
 func TestCodexConfigMigratesThePlaintextKeyToTheKeyCommand(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	restoreCodexAuthCommand(t, "/usr/local/bin/nan")
+	restoreNanExecutable(t, "/usr/local/bin/nan")
 	existing := `model = "glm5.3-flash"
 
 [model_providers.old]
@@ -496,7 +529,7 @@ trust_level = "trusted"
 // of them.
 func TestCodexMigrationIsLineSurgeryNotARoundTrip(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	restoreCodexAuthCommand(t, "/usr/local/bin/nan")
+	restoreNanExecutable(t, "/usr/local/bin/nan")
 	existing := `# my notes, kept however I wrote them
 
 model = "gpt-5"   # trailing comment
@@ -534,7 +567,7 @@ args = ["key", "print"]
 // replaced with whatever this run of the CLI happens to resolve to.
 func TestCodexConfigAlreadyUsingTheKeyCommandIsNotRewritten(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	restoreCodexAuthCommand(t, "/elsewhere/nan")
+	restoreNanExecutable(t, "/elsewhere/nan")
 	existing := `model = "gpt-5"
 
 [model_providers.nan]
@@ -561,7 +594,7 @@ args = ["key", "print"]
 // this writer may put the literal key into the file any more - the starter
 // config and the append included.
 func TestCodexConfigWritesACommandReferenceNotTheKey(t *testing.T) {
-	restoreCodexAuthCommand(t, "/usr/local/bin/nan")
+	restoreNanExecutable(t, "/usr/local/bin/nan")
 
 	path := tempConfig(t, "config.toml")
 	if err := writeCodexConfig(path, testKey); err != nil {
@@ -1098,10 +1131,14 @@ func TestConfigureToolsWritesEveryEnabledTool(t *testing.T) {
 			t.Errorf("%s: written without the NaN base URL", name)
 		}
 		if !strings.Contains(string(data), testKey) {
-			// Codex is the one exception: its config carries a reference to
-			// `nan key print` instead of the key itself.
-			if name == "Codex" {
-				if !strings.Contains(string(data), `args = ["key", "print"]`) {
+			// Codex and Pi are the exceptions: their configs carry a reference
+			// to `nan key print` instead of the key itself.
+			if name == "Codex" || name == "Pi" {
+				want := `args = ["key", "print"]`
+				if name == "Pi" {
+					want = `key print`
+				}
+				if !strings.Contains(string(data), want) {
 					t.Errorf("%s: written without the key command reference", name)
 				}
 			} else {

@@ -35,15 +35,19 @@ func TestWritingAKeyTightensAConfigThatWasWideOpen(t *testing.T) {
 	}
 	for name, path := range toolPaths(home) {
 		content := readFile(t, path)
-		if name == "Codex" {
-			// The one exception: Codex's config carries a reference to
+		if name == "Codex" || name == "Pi" {
+			// The two exceptions: their configs carry a reference to
 			// `nan key print` instead of the key, and that reference is what
-			// says it was configured at all.
+			// says they were configured at all.
 			if strings.Contains(content, testKey) {
 				t.Errorf("%s carries the literal key", name)
 				continue
 			}
-			if !strings.Contains(content, `args = ["key", "print"]`) {
+			want := `args = ["key", "print"]`
+			if name == "Pi" {
+				want = `key print`
+			}
+			if !strings.Contains(content, want) {
 				t.Errorf("%s was not configured with the key command reference", name)
 				continue
 			}
@@ -88,10 +92,17 @@ func TestConfiguringTightensAToolThatNeedsNothingWritten(t *testing.T) {
 	}
 	for name, path := range paths {
 		content := readFile(t, path)
-		if name == "Codex" {
-			// The key was never in this file; the command reference is what
+		if name == "Codex" || name == "Pi" {
+			// The key was never in these files; the command reference is what
 			// has to survive the second run untouched.
-			if !strings.Contains(content, `args = ["key", "print"]`) {
+			if strings.Contains(content, testKey) {
+				t.Errorf("%s carries the literal key after the second run", name)
+			}
+			want := `args = ["key", "print"]`
+			if name == "Pi" {
+				want = `key print`
+			}
+			if !strings.Contains(content, want) {
 				t.Errorf("%s lost its key command reference on the second run", name)
 			}
 		} else if !strings.Contains(content, testKey) {

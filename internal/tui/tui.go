@@ -2297,7 +2297,7 @@ func writePiConfig(cfgPath, apiKey string) error {
 	providers["nan"] = map[string]any{
 		"name":    "NaN",
 		"baseUrl": "https://api.nan.builders/v1",
-		"apiKey":  apiKey,
+		"apiKey":  piKeyReference(nanExecutable()),
 		"api":     "openai-completions",
 		"compat":  map[string]any{"supportsDeveloperRole": true},
 		"models":  models,
@@ -2312,6 +2312,18 @@ func writePiConfig(cfgPath, apiKey string) error {
 		return err
 	}
 	return writePiDefaults(piSettingsPath(cfgPath))
+}
+
+// Like Codex, Pi gets a reference to `nan key print` instead of the key
+// itself: models.json is a file members paste into issues and dotfiles.
+// The `!` prefix tells Pi to run the value as a command.
+func piKeyReference(exe string) string {
+	// The order is not interchangeable: `$$` reads as a literal `$` and `$!`
+	// as a literal `!`, so every `$` has to become `$$` before the second pass
+	// inserts any new `$`, or the two escapes eat each other.
+	escaped := strings.ReplaceAll(exe, "$", "$$")
+	escaped = strings.ReplaceAll(escaped, "!", "$!")
+	return "!" + escaped + " key print"
 }
 
 // Pi reads the provider it calls from a second file, and until this existed
@@ -2483,7 +2495,7 @@ wire_api = "responses"
 [model_providers.nan.auth]
 command = %q
 args = ["key", "print"]
-`, codexModel.ID, codexModel.Context, codexAuthCommand())
+`, codexModel.ID, codexModel.Context, nanExecutable())
 		if err := writeConfigFile(cfgPath, []byte(content)); err != nil {
 			return err
 		}
@@ -2500,7 +2512,7 @@ wire_api = "responses"
 [model_providers.nan.auth]
 command = %q
 args = ["key", "print"]
-`, codexAuthCommand())
+`, nanExecutable())
 	content := strings.TrimRight(string(data), "\n") + "\n" + section
 	if err := writeConfigFile(cfgPath, []byte(withCodexContextWindow(content, codexModel.Context))); err != nil {
 		return err
@@ -2562,15 +2574,15 @@ func removeCodexProfiles(codexHome string) error {
 	return nil
 }
 
-// What Codex executes for the bearer token: this binary with `nan key print`.
-// It runs with exec, never a shell, so command is the bare absolute path to
-// the executable and every argument goes over in args - a shell string here
-// fails to start on every version measured, from 0.120.0 up, and a broken
-// auth command looks exactly like an auth outage.
+// What the tools execute for the bearer token: this binary with
+// `nan key print`. It runs with exec, never a shell, so command is the bare
+// absolute path to the executable and every argument goes over in args - a
+// shell string here fails to start on every version measured, from 0.120.0
+// up, and a broken auth command looks exactly like an auth outage.
 //
 // Swapped in tests, because under `go test` os.Executable() is the test
 // binary, not nan.
-var codexAuthCommand = func() string {
+var nanExecutable = func() string {
 	if exe, err := os.Executable(); err == nil {
 		return exe
 	}
@@ -2814,7 +2826,7 @@ func codexBearerTokenMigrated(data []byte) ([]byte, bool) {
 		}
 		auth = append(auth,
 			"[model_providers.nan.auth]",
-			fmt.Sprintf("command = %q", codexAuthCommand()),
+			fmt.Sprintf("command = %q", nanExecutable()),
 			`args = ["key", "print"]`,
 		)
 		if insertAt < len(lines) {
