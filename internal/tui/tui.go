@@ -346,7 +346,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.wizard = wizardLink
 		m.loginStage = loginAskLink
 		m.loginMsg = "a link is on its way to " + m.loginEmail +
-			" — copy it out of the email without opening it, the link works once"
+			" — copy it out of the email without opening it, the link works once" +
+			" and expires " + auth.LinkValidity + " after it is sent"
 		m.loginInput.SetValue("")
 		m.loginInput.Placeholder = "https://nan.builders/...?token=..."
 		m.loginInput.Prompt = "Paste the link: "
@@ -3212,41 +3213,6 @@ func (m model) wrapped(l layout, msg string) string {
 	return indentBlock(lipgloss.NewStyle().
 		Width(l.w-lipgloss.Width(l.indent)-1).
 		Render(style.Render(msg)), l.indent)
-}
-
-func (m model) renderLogin(l layout) string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(cWhite)
-	dim := lipgloss.NewStyle().Foreground(cGray)
-	errStyle := lipgloss.NewStyle().Foreground(cRed)
-	ok := lipgloss.NewStyle().Foreground(cCyan)
-
-	var b strings.Builder
-	b.WriteString(l.indent + title.Render("Sign in") + "\n\n")
-
-	step := "Step 1 of 2 — where should the link go?"
-	if m.loginStage == loginAskLink {
-		step = "Step 2 of 2 — the link from the email"
-	}
-	b.WriteString(l.indent + dim.Render(step) + "\n\n")
-
-	b.WriteString(l.indent + m.loginInput.View() + "\n")
-
-	if m.loginMsg != "" {
-		style := ok
-		if strings.HasPrefix(m.loginMsg, "error") {
-			style = errStyle
-		}
-		// A sign-in link is longer than any terminal, so this wraps rather
-		// than running off the side and taking the rest of the line with it.
-		wrapped := lipgloss.NewStyle().Width(l.w - lipgloss.Width(l.indent) - 1).
-			Render(style.Render(m.loginMsg))
-		b.WriteString("\n" + indentBlock(wrapped, l.indent) + "\n")
-	}
-
-	if m.loginStage == loginAskLink {
-		b.WriteString("\n" + l.indent + dim.Render("Nothing arrived? esc, then s to start again.") + "\n")
-	}
-	return b.String()
 }
 
 // How to actually use each tool once its config is written. The panel said

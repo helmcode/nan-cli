@@ -11,6 +11,7 @@ package auth
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -25,6 +26,13 @@ const (
 	// The domain the platform sends its sign-in links from. Subdomains count:
 	// the link lands on the web app, the API lives next door.
 	linkDomain = "nan.builders"
+
+	// How long a sign-in link works for, in the platform's own words on its
+	// login page: "It expires in 15 minutes and can only be used once." This
+	// flow spends long enough waiting for a member to fetch a link out of an
+	// inbox that the number is worth saying: an email that turns up late turns
+	// up dead, and the paste prompt cannot tell anybody that.
+	LinkValidity = "15 minutes"
 )
 
 // A timeout, because http.DefaultClient has none: a connection that is
@@ -121,8 +129,27 @@ func ExchangeToken(token string) (string, error) {
 	// with the reason in the query, which is more useful than the status code.
 	if location, err := resp.Location(); err == nil {
 		if reason := location.Query().Get("reason"); reason != "" {
-			return "", fmt.Errorf("the link did not work: %s", strings.ReplaceAll(reason, "_", " "))
+			return "", errors.New(linkReasonMessage(reason))
 		}
 	}
 	return "", fmt.Errorf("no session came back (HTTP %d)", resp.StatusCode)
+}
+
+// The platform's reasons, in the query of the page it redirects a refused link
+// to. Two of them have something the member can do about it, and both were
+// arriving here as a slug with the underscores taken out: `invalid_link` covers
+// a link that expired and a link somebody else already spent, and named
+// neither, which left the person this happens to - the one whose email turned
+// up late - with nothing to do but paste the same dead link again.
+var linkReasons = map[string]string{
+	"invalid_link": "that link expired or was already used — a link works once and " +
+		"expires " + LinkValidity + " after it is sent, so ask for another one",
+	"missing_token": "that link is incomplete — copy the whole link out of the most recent email",
+}
+
+func linkReasonMessage(reason string) string {
+	if message, ok := linkReasons[reason]; ok {
+		return message
+	}
+	return "the link did not work: " + strings.ReplaceAll(reason, "_", " ")
 }

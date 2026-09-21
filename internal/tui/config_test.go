@@ -1758,6 +1758,11 @@ func TestHomeDropsTheGuideWhenSetupIsDone(t *testing.T) {
 // prompts on stdin, start the panel again. Reported twice from a real machine,
 // stuck at different steps of it. The panel owns the keyboard already, so it
 // asks the same two questions itself.
+//
+// It asks View, and not a renderer of its own, because the login screen this
+// replaced stopped being drawn when the wizard arrived: the test went on
+// passing against a function nothing called, which is the one way a test can be
+// green and wrong at the same time.
 func TestSigningInHappensInsideThePanel(t *testing.T) {
 	m := setupModel(t, &session.Session{})
 
@@ -1769,19 +1774,26 @@ func TestSigningInHappensInsideThePanel(t *testing.T) {
 		t.Fatal("s does not start the sign-in")
 	}
 
-	out := m.renderLogin(newLayout(90, 24))
-	for _, want := range []string{"Sign in", "Step 1 of 2", "Email"} {
+	out := m.View()
+	for _, want := range []string{"Let's get you logged in", "Email"} {
 		if !strings.Contains(out, want) {
-			t.Errorf("the first step does not show %q", want)
+			t.Errorf("the first step does not show %q:\n%s", want, out)
 		}
 	}
 
-	// Second question, once the link is on its way.
-	m.loginStage = loginAskLink
-	m.loginInput.Prompt = "Paste the link: "
-	out = m.renderLogin(newLayout(90, 24))
-	if !strings.Contains(out, "Step 2 of 2") || !strings.Contains(out, "Paste the link") {
-		t.Errorf("the second step does not ask for the link:\n%s", out)
+	// Second question, once the link is on its way, driven through the message
+	// the flow actually sends rather than by setting the stage by hand: that is
+	// what makes this fail when the two halves drift apart.
+	mod, _ := m.Update(linkSentMsg{})
+	m = mod.(model)
+	if m.loginStage != loginAskLink {
+		t.Fatal("an accepted request does not move on to the link")
+	}
+	out = m.View()
+	for _, want := range []string{"Let's confirm it with the magic link", "Paste the link", "15 minutes"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the second step does not ask for the link:\n%s", out)
+		}
 	}
 }
 

@@ -69,3 +69,27 @@ func TestLinkErrorsDoNotEchoTheLink(t *testing.T) {
 		}
 	}
 }
+
+// A link that expired and a link somebody already spent arrive here as the same
+// slug, and the member on the other end of it is the one whose email turned up
+// late. The answer has to name the clock and what to do about it, or the only
+// thing left to try is pasting the same dead link again. A reason from a newer
+// platform than this build still gets said, rather than swallowed.
+func TestRefusedLinkSaysWhatToDoAboutIt(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		reason string
+		want   string
+	}{
+		{"expired or already spent", "invalid_link", "15 minutes"},
+		{"incomplete", "missing_token", "most recent email"},
+		{"a reason this build does not know", "a_reason_from_tomorrow", "a reason from tomorrow"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := linkReasonMessage(c.reason)
+			if !strings.Contains(got, c.want) {
+				t.Errorf("linkReasonMessage(%q) = %q, want it to mention %q", c.reason, got, c.want)
+			}
+		})
+	}
+}

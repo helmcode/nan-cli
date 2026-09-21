@@ -115,6 +115,8 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 	fmt.Println("Copy the link out of the email. Don't open it in your browser first:")
 	fmt.Println("the link works once, and the browser would spend it.")
+	fmt.Printf("It also expires %s after it is sent — an email that turns up late\n", auth.LinkValidity)
+	fmt.Println("turns up dead, so if it has not arrived, run this command again.")
 	fmt.Println()
 
 	fmt.Print("Paste the link: ")
