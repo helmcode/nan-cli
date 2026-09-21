@@ -232,6 +232,39 @@ func TestPiConfigWritesOnlyTheModalitiesPiAccepts(t *testing.T) {
 	}
 }
 
+// Pi joins Codex as a tool that never carries the literal key: models.json is
+// a file members paste into issues and dotfiles, so the provider points at
+// `nan key print` instead.
+func TestPiConfigWritesACommandReferenceNotTheKey(t *testing.T) {
+	restoreNanExecutable(t, "/usr/local/bin/nan")
+
+	path := tempConfig(t, "models.json")
+	if err := writePiConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+
+	// piModels only returns the model list, so the raw provider object is what
+	// carries the reference.
+	providers := readJSON(t, path)["providers"].(map[string]any)
+	nan := providers["nan"].(map[string]any)
+	if got := nan["apiKey"]; got != "!/usr/local/bin/nan key print" {
+		t.Errorf("apiKey = %v, want the key command reference", got)
+	}
+	data := readFile(t, path)
+	if strings.Contains(data, testKey) {
+		t.Error("models.json carries the literal key")
+	}
+}
+
+// The escapes are Pi's, not a shell's: `$$` reads as a literal `$` and `$!`
+// as a literal `!`, so `$` has to be doubled before `!` gets its `$` prefix.
+func TestPiKeyReferenceEscapesDollarAndBang(t *testing.T) {
+	got := piKeyReference("/opt/nan$bin/nan!")
+	if want := "!/opt/nan$$bin/nan$! key print"; got != want {
+		t.Errorf("piKeyReference = %q, want %q", got, want)
+	}
+}
+
 func TestPiConfigLeavesOtherProvidersAlone(t *testing.T) {
 	path := tempConfig(t, "models.json")
 	existing := `{"providers":{"openai":{"baseUrl":"https://api.openai.com/v1","models":[]}}}`
@@ -329,8 +362,13 @@ wire_api = "chat"
 	if strings.Count(content, "[model_providers.nan]") != 1 {
 		t.Error("the provider was appended a second time instead of repaired")
 	}
-	if !strings.Contains(content, `experimental_bearer_token = "nan-old"`) {
-		t.Error("a repair that should touch one line rewrote the member's key")
+	// The same write also takes the plaintext key an older version of this
+	// CLI put here, and leaves the command reference in its place.
+	if strings.Contains(content, "experimental_bearer_token") {
+		t.Error("the repair left the plaintext key in the file")
+	}
+	if !strings.Contains(content, `[model_providers.nan.auth]`) || !strings.Contains(content, `args = ["key", "print"]`) {
+		t.Errorf("the repair did not write the key command reference:\n%s", content)
 	}
 	// Another provider's wire_api is that provider's business.
 	openai := content[strings.Index(content, "[model_providers.openai]"):strings.Index(content, "[model_providers.nan]")]
@@ -407,6 +445,183 @@ func TestCodexConfigDoesNotTouchAnExistingChoice(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "[model_providers.nan]") {
 		t.Error("the NaN provider was not appended")
+	}
+	if !strings.Contains(string(data), `args = ["key", "print"]`) {
+		t.Errorf("the appended section does not reference nan key print:\n%s", data)
+	}
+}
+
+// Under `go test` os.Executable() is the test binary, so the tests that
+// assert on the written command swap it for a path with a known shape.
+func restoreNanExecutable(t *testing.T, path string) {
+	t.Helper()
+	original := nanExecutable
+	nanExecutable = func() string { return path }
+	t.Cleanup(func() { nanExecutable = original })
+}
+
+// The key an older version of this CLI wrote here sat in a file members paste
+// into issues and, for dotfiles, in a repository. The migration takes it out
+// and points the section at `nan key print` instead, in the file that already
+// exists - reached on the same early return the wire repair is.
+func TestCodexConfigMigratesThePlaintextKeyToTheKeyCommand(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	restoreNanExecutable(t, "/usr/local/bin/nan")
+	existing := `model = "glm5.3-flash"
+
+[model_providers.old]
+name = "Old"
+
+[model_providers.nan]
+name = "NaN"
+base_url = "https://api.nan.builders/v1"
+experimental_bearer_token = "nan-old"
+wire_api = "responses"
+
+[projects."/home/member/repo"]
+trust_level = "trusted"
+`
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	content := readFile(t, path)
+
+	if strings.Contains(content, "experimental_bearer_token") || strings.Contains(content, "nan-old") {
+		t.Errorf("the plaintext key survived the migration:\n%s", content)
+	}
+	if strings.Contains(content, testKey) {
+		t.Error("the migration wrote a literal key of its own")
+	}
+
+	// Codex runs the command with exec, never a shell: command is the bare
+	// absolute path to the binary and every argument goes over in args.
+	if !strings.Contains(content, `[model_providers.nan.auth]`) {
+		t.Fatalf("no auth sub-table was written:\n%s", content)
+	}
+	if !strings.Contains(content, `command = "/usr/local/bin/nan"`) {
+		t.Errorf("command is not the bare absolute path to nan:\n%s", content)
+	}
+	if !strings.Contains(content, `args = ["key", "print"]`) {
+		t.Errorf("the arguments did not go into args:\n%s", content)
+	}
+
+	// [model_providers.nan.auth] is a sub-table: every key after it belongs
+	// to it, the way model_context_window once became a key of the last
+	// [projects.*] entry. The member's own keys must come out of the
+	// migration where they went in.
+	if !strings.Contains(content, `trust_level = "trusted"`) {
+		t.Error("the member's project entry was lost")
+	}
+	if auth := strings.Index(content, "[model_providers.nan.auth]"); strings.Index(content, "trust_level") < auth {
+		t.Errorf("the auth sub-table swallowed the member's keys:\n%s", content)
+	}
+	if strings.Count(content, "[model_providers.nan]") != 1 {
+		t.Error("the provider was appended a second time instead of migrated")
+	}
+}
+
+// A config a member also edits by hand is rewritten one line at a time, never
+// reflowed: the comments, the spacing and the quoting around the one line
+// that changed are theirs, and a round trip through a TOML library takes all
+// of them.
+func TestCodexMigrationIsLineSurgeryNotARoundTrip(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	restoreNanExecutable(t, "/usr/local/bin/nan")
+	existing := `# my notes, kept however I wrote them
+
+model = "gpt-5"   # trailing comment
+[model_providers.nan]
+name = "NaN"  
+base_url = "https://api.nan.builders/v1"
+experimental_bearer_token = "nan-old"
+wire_api = "responses"
+`
+	want := `# my notes, kept however I wrote them
+
+model = "gpt-5"   # trailing comment
+[model_providers.nan]
+name = "NaN"  
+base_url = "https://api.nan.builders/v1"
+wire_api = "responses"
+
+[model_providers.nan.auth]
+command = "/usr/local/bin/nan"
+args = ["key", "print"]
+`
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, path); got != want {
+		t.Errorf("the file was reflowed, not operated on:\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// A config already carrying the reference has nothing to migrate, and a
+// second run must not rewrite it: the command path it holds may not be
+// replaced with whatever this run of the CLI happens to resolve to.
+func TestCodexConfigAlreadyUsingTheKeyCommandIsNotRewritten(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	restoreNanExecutable(t, "/elsewhere/nan")
+	existing := `model = "gpt-5"
+
+[model_providers.nan]
+name = "NaN"
+base_url = "https://api.nan.builders/v1"
+wire_api = "responses"
+
+[model_providers.nan.auth]
+command = "/usr/local/bin/nan"
+args = ["key", "print"]
+`
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, path); got != existing {
+		t.Errorf("a config already using auth was rewritten:\n got: %q\nwant: %q", got, existing)
+	}
+}
+
+// The key reads out of session.json at request time now, so no path through
+// this writer may put the literal key into the file any more - the starter
+// config and the append included.
+func TestCodexConfigWritesACommandReferenceNotTheKey(t *testing.T) {
+	restoreNanExecutable(t, "/usr/local/bin/nan")
+
+	path := tempConfig(t, "config.toml")
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	starter := readFile(t, path)
+	if strings.Contains(starter, testKey) {
+		t.Errorf("the starter config carries the literal key:\n%s", starter)
+	}
+	if !strings.Contains(starter, `[model_providers.nan.auth]`) ||
+		!strings.Contains(starter, `command = "/usr/local/bin/nan"`) ||
+		!strings.Contains(starter, `args = ["key", "print"]`) {
+		t.Errorf("the starter config does not reference nan key print:\n%s", starter)
+	}
+	if strings.Contains(starter, "experimental_bearer_token") {
+		t.Errorf("the starter config still writes the old bearer token:\n%s", starter)
+	}
+
+	appended := tempConfig(t, "config.toml")
+	if err := os.WriteFile(appended, []byte("model = \"gpt-5\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexConfig(appended, testKey); err != nil {
+		t.Fatal(err)
+	}
+	if content := readFile(t, appended); strings.Contains(content, testKey) {
+		t.Errorf("the appended section carries the literal key:\n%s", content)
 	}
 }
 
@@ -916,7 +1131,19 @@ func TestConfigureToolsWritesEveryEnabledTool(t *testing.T) {
 			t.Errorf("%s: written without the NaN base URL", name)
 		}
 		if !strings.Contains(string(data), testKey) {
-			t.Errorf("%s: written without the API key", name)
+			// Codex and Pi are the exceptions: their configs carry a reference
+			// to `nan key print` instead of the key itself.
+			if name == "Codex" || name == "Pi" {
+				want := `args = ["key", "print"]`
+				if name == "Pi" {
+					want = `key print`
+				}
+				if !strings.Contains(string(data), want) {
+					t.Errorf("%s: written without the key command reference", name)
+				}
+			} else {
+				t.Errorf("%s: written without the API key", name)
+			}
 		}
 		if !isNaNConfigured(name, p) {
 			t.Errorf("%s: the Setup tab will not show it as configured", name)

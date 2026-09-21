@@ -2297,7 +2297,7 @@ func writePiConfig(cfgPath, apiKey string) error {
 	providers["nan"] = map[string]any{
 		"name":    "NaN",
 		"baseUrl": "https://api.nan.builders/v1",
-		"apiKey":  apiKey,
+		"apiKey":  piKeyReference(nanExecutable()),
 		"api":     "openai-completions",
 		"compat":  map[string]any{"supportsDeveloperRole": true},
 		"models":  models,
@@ -2312,6 +2312,18 @@ func writePiConfig(cfgPath, apiKey string) error {
 		return err
 	}
 	return writePiDefaults(piSettingsPath(cfgPath))
+}
+
+// Like Codex, Pi gets a reference to `nan key print` instead of the key
+// itself: models.json is a file members paste into issues and dotfiles.
+// The `!` prefix tells Pi to run the value as a command.
+func piKeyReference(exe string) string {
+	// The order is not interchangeable: `$$` reads as a literal `$` and `$!`
+	// as a literal `!`, so every `$` has to become `$$` before the second pass
+	// inserts any new `$`, or the two escapes eat each other.
+	escaped := strings.ReplaceAll(exe, "$", "$$")
+	escaped = strings.ReplaceAll(escaped, "!", "$!")
+	return "!" + escaped + " key print"
 }
 
 // Pi reads the provider it calls from a second file, and until this existed
@@ -2424,7 +2436,11 @@ func removePiDefaults(settingsPath string) error {
 	return writeConfigFile(settingsPath, out)
 }
 
-func writeCodexConfig(cfgPath, apiKey string) error {
+// The API key no longer enters Codex's config at all: the auth sub-table
+// points at `nan key print`, which reads it out of session.json at request
+// time. The key parameter stays so every writer in the dispatch keeps one
+// shape.
+func writeCodexConfig(cfgPath string, _ string) error {
 	data, _ := os.ReadFile(cfgPath)
 	codexModel, _ := catalog.Get(catalog.Coding)
 
@@ -2443,11 +2459,20 @@ func writeCodexConfig(cfgPath, apiKey string) error {
 		// an error dialog and nothing else. Repairing the wire_api alone left
 		// that member exactly as stuck as before, so the pruning runs first
 		// and puts the key back where it is read from.
+		//
+		// The same file may still hold the plaintext key an older version of
+		// this CLI wrote into it - a file members paste into issues, and for
+		// dotfiles a target of this very repository - and a member who never
+		// re-runs setup keeps it for as long as this early return passes over
+		// it, so the migration happens here too.
 		repaired, pruned := codexContextWindowsPruned(data, codexModel.Context)
 		if pruned {
 			repaired = []byte(withCodexContextWindow(string(repaired), codexModel.Context))
 		}
 		rewired, changed := codexWireAPIRepaired(repaired)
+		if migrated, migratedNow := codexBearerTokenMigrated(rewired); migratedNow {
+			rewired, changed = migrated, true
+		}
 		if pruned || changed {
 			if err := writeConfigFile(cfgPath, rewired); err != nil {
 				return err
@@ -2465,9 +2490,12 @@ model_context_window = %d
 [model_providers.nan]
 name = "NaN"
 base_url = "https://api.nan.builders/v1"
-experimental_bearer_token = %q
 wire_api = "responses"
-`, codexModel.ID, codexModel.Context, apiKey)
+
+[model_providers.nan.auth]
+command = %q
+args = ["key", "print"]
+`, codexModel.ID, codexModel.Context, nanExecutable())
 		if err := writeConfigFile(cfgPath, []byte(content)); err != nil {
 			return err
 		}
@@ -2479,9 +2507,12 @@ wire_api = "responses"
 [model_providers.nan]
 name = "NaN"
 base_url = "https://api.nan.builders/v1"
-experimental_bearer_token = %q
 wire_api = "responses"
-`, apiKey)
+
+[model_providers.nan.auth]
+command = %q
+args = ["key", "print"]
+`, nanExecutable())
 	content := strings.TrimRight(string(data), "\n") + "\n" + section
 	if err := writeConfigFile(cfgPath, []byte(withCodexContextWindow(content, codexModel.Context))); err != nil {
 		return err
@@ -2541,6 +2572,21 @@ func removeCodexProfiles(codexHome string) error {
 		}
 	}
 	return nil
+}
+
+// What the tools execute for the bearer token: this binary with
+// `nan key print`. It runs with exec, never a shell, so command is the bare
+// absolute path to the executable and every argument goes over in args - a
+// shell string here fails to start on every version measured, from 0.120.0
+// up, and a broken auth command looks exactly like an auth outage.
+//
+// Swapped in tests, because under `go test` os.Executable() is the test
+// binary, not nan.
+var nanExecutable = func() string {
+	if exe, err := os.Executable(); err == nil {
+		return exe
+	}
+	return "nan"
 }
 
 // Codex has no metadata for a model on this cluster, so without
@@ -2728,6 +2774,91 @@ func codexWireAPIRepaired(data []byte) ([]byte, bool) {
 	return []byte(strings.Join(lines, "\n")), true
 }
 
+// Deletes the plaintext experimental_bearer_token an older version of this
+// CLI wrote into [model_providers.nan], and puts the auth sub-table in its
+// place. Codex forbids combining auth with that key, so the line goes rather
+// than the reference being added next to it.
+//
+// By hand, for the same reason codexWireAPIRepaired is: a round trip through
+// a TOML library reflows the member's comments, their spacing, their
+// quoting, to satisfy a change of one line in one section.
+//
+// The sub-table goes in after the last key of our section and before the
+// next header. Every key written after a sub-table header belongs to it -
+// the same failure class that put model_context_window inside [projects.*],
+// where Codex never looked - so nothing of ours may follow it.
+func codexBearerTokenMigrated(data []byte) ([]byte, bool) {
+	lines := strings.Split(string(data), "\n")
+	inNan, hasAuth, found, insertAt := false, false, false, -1
+	var bearer []int
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") {
+			if found && insertAt < 0 && !hasAuth {
+				insertAt = i
+			}
+			if isCodexNaNAuthHeader(trimmed) {
+				hasAuth = true
+			}
+			inNan = isCodexNaNProviderHeader(trimmed)
+			continue
+		}
+		if !inNan {
+			continue
+		}
+		if key, _, ok := strings.Cut(trimmed, "="); ok && strings.TrimSpace(key) == "experimental_bearer_token" {
+			bearer = append(bearer, i)
+			found = true
+		}
+	}
+	if len(bearer) == 0 {
+		return data, false
+	}
+
+	auth := []string(nil)
+	if !hasAuth {
+		if insertAt < 0 {
+			insertAt = len(lines)
+		}
+		auth = []string{}
+		if insertAt > 0 && strings.TrimSpace(lines[insertAt-1]) != "" {
+			auth = append(auth, "")
+		}
+		auth = append(auth,
+			"[model_providers.nan.auth]",
+			fmt.Sprintf("command = %q", nanExecutable()),
+			`args = ["key", "print"]`,
+		)
+		if insertAt < len(lines) {
+			auth = append(auth, "")
+		}
+	}
+
+	dropped := map[int]bool{}
+	for _, i := range bearer {
+		dropped[i] = true
+	}
+	out := make([]string, 0, len(lines)-len(bearer)+len(auth))
+	for i, line := range lines {
+		if i == insertAt {
+			out = append(out, auth...)
+		}
+		if !dropped[i] {
+			out = append(out, line)
+		}
+	}
+	if insertAt == len(lines) {
+		out = append(out, auth...)
+	}
+	// The trailing empty element that carried the final newline is only
+	// still last when the auth block went in mid-file; keep the file
+	// newline-terminated either way.
+	if last := len(out) - 1; last >= 0 && out[last] != "" {
+		out = append(out, "")
+	}
+	return []byte(strings.Join(out, "\n")), true
+}
+
 // [model_providers.nan], and the quoted spelling of it that TOML also allows.
 func isCodexNaNProviderHeader(line string) bool {
 	name := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "["), "]"))
@@ -2735,6 +2866,28 @@ func isCodexNaNProviderHeader(line string) bool {
 		return false
 	}
 	return strings.Trim(strings.TrimPrefix(name, "model_providers."), `"'`) == "nan"
+}
+
+// [model_providers.nan.auth], our sub-table, and the quoted spelling of it.
+func isCodexNaNAuthHeader(line string) bool {
+	name := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "["), "]"))
+	return strings.Trim(name, `"'`) == "model_providers.nan.auth"
+}
+
+// Whether any of the sections nan-cli owns is in the file: the provider
+// table, or the auth sub-table a config can be left holding on its own if the
+// member deleted the section around it by hand.
+func codexHasNaNSection(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "[") {
+			continue
+		}
+		if isCodexNaNProviderHeader(trimmed) || isCodexNaNAuthHeader(trimmed) {
+			return true
+		}
+	}
+	return false
 }
 
 // ── Hermes ───────────────────────────────────────────────────────────────────
@@ -2979,7 +3132,7 @@ func removeCodexConfig(cfgPath string) error {
 	//
 	// The error waits until the end. A profile that will not delete - open in
 	// an editor, locked by a running Codex - is a cosmetic failure, and
-	// returning it here would leave experimental_bearer_token sitting in
+	// returning it here would leave our provider section sitting in
 	// config.toml after the member asked us to take it out.
 	profileErr := removeCodexProfiles(filepath.Dir(cfgPath))
 
@@ -2989,7 +3142,7 @@ func removeCodexConfig(cfgPath string) error {
 	}
 	// Nothing of ours in it, so nothing to rewrite: this is called on every
 	// sign-out, against a config.toml that may never have been ours at all.
-	if !strings.Contains(string(data), "[model_providers.nan]") {
+	if !codexHasNaNSection(string(data)) {
 		return profileErr
 	}
 	lines := strings.Split(string(data), "\n")
@@ -2997,17 +3150,18 @@ func removeCodexConfig(cfgPath string) error {
 	inNanSection := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "[model_providers.nan]" {
-			inNanSection = true
-			continue
-		}
-		if inNanSection {
-			// End of the nan section when a new section header appears.
-			if strings.HasPrefix(trimmed, "[") {
-				inNanSection = false
-			} else {
+		if strings.HasPrefix(trimmed, "[") {
+			// End of one of our sections when a new section header appears.
+			// The quoted spelling is the one TOML also allows, and the auth
+			// sub-table is ours too: it points at `nan key print`, and a
+			// sign-out that left it behind would leave Codex resolving a key
+			// that no longer exists.
+			inNanSection = isCodexNaNProviderHeader(trimmed) || isCodexNaNAuthHeader(trimmed)
+			if inNanSection {
 				continue
 			}
+		} else if inNanSection {
+			continue
 		}
 		out = append(out, line)
 	}
