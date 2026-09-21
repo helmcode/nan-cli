@@ -2574,6 +2574,15 @@ func withCodexContextWindow(content string, window int) string {
 	return strings.TrimRight(content, "\n") + "\n" + declared + "\n"
 }
 
+// [projects."/home/member/repo"] and the [projects] table above it. This is
+// the only shape the appending bug could put a key into: it wrote at the end
+// of the file, and what sits at the end of a config.toml is the last project
+// the member trusted.
+func isCodexProjectsHeader(trimmed string) bool {
+	inner := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]"))
+	return inner == "projects" || strings.HasPrefix(inner, "projects.")
+}
+
 // Takes out every model_context_window this CLI is responsible for putting
 // somewhere it does not belong, and leaves at most one standing.
 //
@@ -2584,24 +2593,55 @@ func withCodexContextWindow(content string, window int) string {
 // compacting against a guessed window.
 //
 // Inside a table the key is not a root key at all - it reads as a key of
-// whatever table came last, usually the last [projects.*] the member
-// trusted - so one carrying our own value there is ours, appended by a
-// version that wrote it at the end of the file, and it goes. A value that is
-// not ours is left where it is even there: it is not ours to judge. In the
-// root table the first one stands and any repeat after it is the duplicate.
+// whatever table came last, and the table it landed in was a [projects.*]
+// the member trusted, because that is what a config.toml ends with. One
+// carrying our own value under a [projects.*] header is ours, appended by a
+// version that wrote it at the end of the file, and it goes.
+//
+// Under any other header it stays, whatever its value. The member's own
+// tables are somewhere our appending bug could never reach, and [profiles.*]
+// is now a place a window belongs: this CLI writes one per model, and the
+// value it writes there is the same number the coding model declares. Judging
+// those by value alone took a window the member had set on a profile of their
+// own and moved it to the root, quietly changing what that profile does.
+//
+// In the root table the first one stands and any repeat after it is the
+// duplicate - unless we are taking our own work back out, where the first one
+// goes too if it reads as ours. See codexContextWindowsCleared.
 //
 // Done line by line for the same reason the wire_api repair is: a round trip
 // through a TOML library reflows a document the member also edits by hand.
 func codexContextWindowsPruned(data []byte, window int) ([]byte, bool) {
+	return codexContextWindowsSwept(data, window, true)
+}
+
+// The disconnect half. Everything above still holds, and the root table stops
+// being off limits: the key we put there went in beside the provider section
+// and means nothing without it, so leaving it behind hands back a file
+// declaring a window for a model the member no longer has.
+//
+// Ours is the one whose value is the window we write. A root key that says
+// anything else is the member's - withCodexContextWindow steps aside for it
+// on the way in, and this steps around it on the way out. The one case both
+// halves get wrong is a member who wrote our exact number themselves before
+// we ever ran: connecting leaves their key alone and disconnecting takes it
+// for ours. Telling those apart needs a mark on the line, which the keys
+// already out there do not carry.
+func codexContextWindowsCleared(data []byte, window int) ([]byte, bool) {
+	return codexContextWindowsSwept(data, window, false)
+}
+
+func codexContextWindowsSwept(data []byte, window int, keepRoot bool) ([]byte, bool) {
 	ours := strconv.Itoa(window)
 	lines := strings.Split(string(data), "\n")
 	out := make([]string, 0, len(lines))
-	inTable, keptRoot, pruned := false, false, false
+	inTable, inProjects, keptRoot, pruned := false, false, false, false
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "[") {
 			inTable = true
+			inProjects = isCodexProjectsHeader(trimmed)
 			out = append(out, line)
 			continue
 		}
@@ -2610,10 +2650,17 @@ func codexContextWindowsPruned(data []byte, window int) ([]byte, bool) {
 			out = append(out, line)
 			continue
 		}
+		mine := strings.TrimSpace(value) == ours
 		drop := false
 		switch {
+		case inProjects:
+			drop = mine
+		// Under any other header it is the member's, and the root cases
+		// below are not about it.
 		case inTable:
-			drop = strings.TrimSpace(value) == ours
+			drop = false
+		case !keepRoot && mine:
+			drop = true
 		case keptRoot:
 			drop = true
 		default:
@@ -2922,14 +2969,27 @@ func removeHermesEnvKey(envPath string) error {
 }
 
 func removeCodexConfig(cfgPath string) error {
+	// Before either way out below, because the profile files are ours whatever
+	// state config.toml is in. A member who edited our provider section out by
+	// hand, or deleted the file, used to keep all seven of them - each one
+	// naming model_provider = "nan", which by then resolves to nothing, so
+	// `codex -p nan-qwen36` fails and no tool on the machine admits to having
+	// put them there.
+	//
+	// The error waits until the end. A profile that will not delete - open in
+	// an editor, locked by a running Codex - is a cosmetic failure, and
+	// returning it here would leave experimental_bearer_token sitting in
+	// config.toml after the member asked us to take it out.
+	profileErr := removeCodexProfiles(filepath.Dir(cfgPath))
+
 	data, err := os.ReadFile(cfgPath)
 	if err != nil {
-		return nil
+		return profileErr
 	}
 	// Nothing of ours in it, so nothing to rewrite: this is called on every
 	// sign-out, against a config.toml that may never have been ours at all.
 	if !strings.Contains(string(data), "[model_providers.nan]") {
-		return nil
+		return profileErr
 	}
 	lines := strings.Split(string(data), "\n")
 	var out []string
@@ -2957,16 +3017,19 @@ func removeCodexConfig(cfgPath string) error {
 	// it is a file their Codex does not open, now with nothing left in it to
 	// say who did that or which tool to disconnect to undo it.
 	codexModel, _ := catalog.Get(catalog.Coding)
-	if pruned, changed := codexContextWindowsPruned([]byte(result), codexModel.Context); changed {
-		result = string(pruned)
-	}
-	if err := removeCodexProfiles(filepath.Dir(cfgPath)); err != nil {
-		return err
+	if cleared, changed := codexContextWindowsCleared([]byte(result), codexModel.Context); changed {
+		result = string(cleared)
 	}
 	if strings.TrimSpace(result) == "" {
-		return os.Remove(cfgPath)
+		if err := os.Remove(cfgPath); err != nil {
+			return err
+		}
+		return profileErr
 	}
-	return writeConfigFile(cfgPath, []byte(result))
+	if err := writeConfigFile(cfgPath, []byte(result)); err != nil {
+		return err
+	}
+	return profileErr
 }
 
 func removeFactoryConfig(cfgPath string) error {

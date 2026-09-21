@@ -612,6 +612,143 @@ func TestCodexRemovalTakesTheProfilesAndNothingElse(t *testing.T) {
 	}
 }
 
+// The window this CLI writes goes in the root table, above the first header.
+// Every test for the removal used the shape the old appending bug left - a
+// key inside a [projects.*] - so the one the CLI actually writes today went
+// out the far side of a disconnect untouched, and the member kept a window
+// for a model they no longer have.
+func TestCodexRemovalTakesTheWindowFromTheRootTable(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCodexConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return // nothing of the member's was in it, so there is no file left
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "model_context_window") {
+		t.Errorf("the window we wrote in the root outlived the disconnect:\n%s", data)
+	}
+}
+
+// A window the member set in the root stays there. Disconnecting takes our
+// own work back out, not theirs.
+func TestCodexRemovalKeepsARootWindowTheMemberDeclared(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	existing := `model = "gpt-5"
+model_context_window = 200000
+
+[model_providers.nan]
+base_url = "https://api.nan.builders/v1"
+wire_api = "responses"
+`
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCodexConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), "model_context_window = 200000") {
+		t.Errorf("the member's own window was taken with ours:\n%s", data)
+	}
+}
+
+// The profile files are ours whatever state config.toml is in. A member who
+// edited the provider section out by hand kept all seven, each one naming a
+// provider that no longer resolves.
+func TestCodexRemovalTakesTheProfilesWithNoSectionLeft(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Dir(path)
+	// What is left after they delete our section themselves.
+	if err := os.WriteFile(path, []byte("model = \"gpt-5\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCodexConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range catalog.ChatModels() {
+		profile := filepath.Join(home, codexProfileName(m.ID)+".config.toml")
+		if _, err := os.Stat(profile); !os.IsNotExist(err) {
+			t.Errorf("%s: the profile outlived a disconnect with no section to find", m.ID)
+		}
+	}
+}
+
+// Same, with no config.toml at all.
+func TestCodexRemovalTakesTheProfilesWithNoConfigLeft(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Dir(path)
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCodexConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range catalog.ChatModels() {
+		profile := filepath.Join(home, codexProfileName(m.ID)+".config.toml")
+		if _, err := os.Stat(profile); !os.IsNotExist(err) {
+			t.Errorf("%s: the profile outlived a disconnect with no config left", m.ID)
+		}
+	}
+}
+
+// Our window value is the number nan.builders publishes for the coding
+// model, which is exactly the number a member is most likely to have typed
+// themselves - and this PR teaches them to type it into a [profiles.*].
+// Judging a key by its value alone took theirs out of the profile and moved
+// it to the root, changing what that profile does without saying so.
+// The member here is one who is already connected - the only one the pruning
+// runs for - and who has since written a profile of their own.
+func TestCodexConfigLeavesAMemberProfileWindowAlone(t *testing.T) {
+	codexModel, _ := catalog.Get(catalog.Coding)
+	path := tempConfig(t, "config.toml")
+	existing := fmt.Sprintf(`model = "gpt-5"
+
+[model_providers.nan]
+base_url = "https://api.nan.builders/v1"
+wire_api = "chat"
+
+[profiles.big]
+model = "gpt-5"
+model_context_window = %d
+`, codexModel.Context)
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	content := string(data)
+
+	// Everything from the member's header to the end of the file: their key
+	// has to still be in there, under their own table.
+	profile := strings.Index(content, "[profiles.big]")
+	if profile < 0 {
+		t.Fatalf("the member's own profile is gone:\n%s", content)
+	}
+	if !strings.Contains(content[profile:], "model_context_window") {
+		t.Errorf("the member's window was taken out of [profiles.big]:\n%s", content)
+	}
+	// And the repair it came in for still happened.
+	if !strings.Contains(content, `wire_api = "responses"`) {
+		t.Errorf("the wire_api repair stopped happening:\n%s", content)
+	}
+}
+
 func TestFactoryConfigMarksWhatCannotSeeImages(t *testing.T) {
 	path := tempConfig(t, "settings.json")
 	if err := writeFactoryConfig(path, testKey); err != nil {
