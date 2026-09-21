@@ -116,7 +116,13 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	fmt.Println("Copy the link out of the email. Don't open it in your browser first:")
 	fmt.Println("the link works once, and the browser would spend it.")
 	fmt.Printf("It also expires %s after it is sent — an email that turns up late\n", auth.LinkValidity)
-	fmt.Println("turns up dead, so if it has not arrived, run this command again.")
+	// Saying "run this command again" and stopping there sent people at a
+	// blocking prompt looking for a way out of it. The empty line they reach
+	// for is the one exit that is not one: it comes back as `nothing pasted`
+	// and exit 1, which reads like the login failed rather than like they
+	// left it.
+	fmt.Println("turns up dead. If it has not arrived, leave with ctrl-c and run")
+	fmt.Println("this command again.")
 	fmt.Println()
 
 	fmt.Print("Paste the link: ")
