@@ -1,10 +1,26 @@
 name: Auto-add to NaN Staff project
 
+# pull_request_target, not pull_request, because of where the secret lives.
+# GitHub does not hand secrets to a workflow run from a fork, so on an outside
+# contribution ADD_TO_PROJECT_PAT arrived empty and the action stopped at
+# `Input required and not supplied: github-token`. The board missed exactly the
+# pull requests nobody on the team was going to file by hand, and the person
+# saw a red check on their first contribution - #25 sat like that for five days.
+#
+# pull_request_target runs in the context of the base repository, where the
+# secret exists. That trades away the isolation that makes pull_request safe,
+# and the price is only acceptable because of what this job does not do: it
+# never checks out the pull request, never runs anything from it, and never
+# reads its contents. The only input is a project URL written here. Anything
+# added below that touches the contributor's code has to move back to
+# pull_request, or it runs that code with a token that can write to the org.
 on:
   issues:
     types: [opened, reopened, transferred]
-  pull_request:
+  pull_request_target:
     types: [opened, reopened]
+
+permissions: {}
 
 jobs:
   add-to-project:
