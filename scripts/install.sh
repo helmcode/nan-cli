@@ -4,7 +4,7 @@ set -euo pipefail
 # Overridable so a fork can install its own build, and so the failure paths
 # below can be exercised against a repo that is not there.
 REPO="${REPO:-helmcode/nan-cli}"
-INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 VERSION="${VERSION:-}"
 
 if [ -t 1 ]; then
@@ -185,7 +185,16 @@ check_path() {
   case ":$PATH:" in
     *":$dir:"*) ;;
     *)
-      warn "$dir is not in your PATH"
+      # Add to current session PATH
+      export PATH="${PATH:+${PATH}:}$dir"
+      # Add to .profile so it persists
+      if ! grep -q "$dir" "$HOME/.profile" 2>/dev/null; then
+        cat >> "$HOME/.profile" << 'PROFILE_EOF'
+# Added by nan-cli installer
+export PATH="${PATH:+${PATH}:}${HOME}/.local/bin"
+PROFILE_EOF
+      fi
+      warn "$dir was not in your PATH — added it"
       warn "add this to your shell profile:"
       printf "    export PATH=\"%s:\$PATH\"\n" "$dir"
       ;;
@@ -226,6 +235,8 @@ main() {
   verify_provenance "$tmpdir/$archive"
 
   tar xz -C "$tmpdir" -f "$tmpdir/$archive"
+
+  mkdir -p "$INSTALL_DIR"
 
   info "installing to ${INSTALL_DIR}/nan..."
   install_bin "$tmpdir/nan" "$INSTALL_DIR"
