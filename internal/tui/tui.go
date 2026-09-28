@@ -147,6 +147,7 @@ type model struct {
 	lay         layout
 	scrollY     int
 	showHelp    bool
+	theme       ThemeMode
 	keyInput    textinput.Model
 	editingKey  bool
 	setupMsg    string
@@ -235,7 +236,8 @@ const (
 	loginAskLink
 )
 
-func newModel(client *api.Client, sess *session.Session) model {
+// newModel builds the panel starting in the mode the member last saved.
+func newModel(client *api.Client, sess *session.Session, theme ThemeMode) model {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(cBlue)
@@ -267,6 +269,7 @@ func newModel(client *api.Client, sess *session.Session) model {
 		spin:       sp,
 		lay:        newLayout(80, 24),
 		keyInput:   ti,
+		theme:      theme,
 	}
 }
 
@@ -600,6 +603,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.scrollY = 0
 				return m, m.maybeLoad()
 			}
+		// The theme, cycled from the panel the way it is set anywhere else:
+		// auto follows the terminal, dark and light pin it. Guarded like the
+		// other global keys, so it is the panel's key and not one the help
+		// overlay or the guided setup answers.
+		case "t":
+			if m.showHelp || m.wizard != wizardOff {
+				break
+			}
+			m.theme = nextTheme(m.theme)
+			applyTheme(m.theme)
+			// A failed save is ignored on purpose: the mode is already applied
+			// in memory, this file holds nothing the panel reads back to work,
+			// and the writes that do matter report their own errors.
+			_ = saveTheme(m.theme)
 		// Signing out, in two presses. `nan auth logout` already existed as a
 		// command, which is no use to someone who is looking at the panel and
 		// wants to switch accounts.
@@ -1010,7 +1027,7 @@ func (m model) View() string {
 		case tabHome:
 			content = renderHome(l, m.sess.Token != "", m.sess.APIKey != "", m.mood())
 		case tabAbout:
-			content = renderAbout(l)
+			content = m.renderAbout(l)
 		case tabSetup:
 			content = m.renderSetup(l)
 		default:
@@ -1049,7 +1066,7 @@ func (m model) View() string {
 	b.WriteString(strings.Join(visible, "\n"))
 
 	b.WriteString("\n")
-	hint := "←/→ tabs   ↑/↓ scroll   r refresh   ? help   q quit"
+	hint := "←/→ tabs   ↑/↓ scroll   r refresh   t theme   ? help   q quit"
 	if l.w < 55 {
 		hint = "←/→  ↑/↓  r  ?  q"
 	} else if l.w < 72 {
@@ -1194,7 +1211,7 @@ func parsePeriod(label string, raw any) period {
 	return p
 }
 
-func renderBar(pct float64, width int, color lipgloss.Color) string {
+func renderBar(pct float64, width int, color lipgloss.TerminalColor) string {
 	filled := int(pct / 100.0 * float64(width))
 	filled = clamp(filled, 0, width)
 	fill := lipgloss.NewStyle().Background(color).Foreground(color).Render(strings.Repeat("█", filled))
@@ -3530,7 +3547,9 @@ func (m model) renderSetup(l layout) string {
 
 const Version = "0.1.23"
 
-func renderAbout(l layout) string {
+// renderAbout draws the account tab. It is a method because the Appearance row
+// shows the theme, which lives on the model.
+func (m model) renderAbout(l layout) string {
 	var b strings.Builder
 
 	logoStyle := lipgloss.NewStyle().Bold(true).Foreground(cCyan)
@@ -3567,9 +3586,29 @@ func renderAbout(l layout) string {
 
 	b.WriteString(l.indent + sectionStyle.Render("Session") + "\n\n")
 	b.WriteString(l.indent + labelStyle.Render("Config:") +
-		dimStyle.Render(session.Path()) + "\n")
+		dimStyle.Render(session.Path()) + "\n\n")
+
+	b.WriteString(l.indent + sectionStyle.Render("Appearance") + "\n\n")
+	b.WriteString(l.indent + labelStyle.Render("Theme:") +
+		dimStyle.Render(m.themeLabel()) + "\n")
 
 	return b.String()
+}
+
+// themeLabel is what the About tab prints for the current mode. In auto the
+// useful half is which side the terminal actually resolved to, because auto is
+// the one mode whose result is nowhere else on screen.
+func (m model) themeLabel() string {
+	switch m.theme {
+	case ThemeDark:
+		return "dark"
+	case ThemeLight:
+		return "light"
+	}
+	if lipgloss.HasDarkBackground() {
+		return "auto (terminal looks dark)"
+	}
+	return "auto (terminal looks light)"
 }
 
 // ── help overlay ─────────────────────────────────────────────────────────────
@@ -3579,6 +3618,7 @@ func renderHelp() string {
 		{"←/→  h/l  Tab", "switch tabs"},
 		{"↑/↓  k/j", "scroll"},
 		{"r", "refresh current tab"},
+		{"t", "cycle theme auto/dark/light"},
 		{"s", "sign in, when there is no session"},
 		{"e", "edit API key (Setup tab)"},
 		{"space", "tick or untick the tool under the cursor (Setup tab)"},
@@ -3628,7 +3668,11 @@ func Run() error {
 		sess = &session.Session{}
 	}
 	client := api.New(sess.Token)
-	m := newModel(client, sess)
+	// Before the first frame: a saved theme has to be in force when the panel
+	// draws, not one keystroke later.
+	theme := loadTheme()
+	applyTheme(theme)
+	m := newModel(client, sess, theme)
 	// Home asks the API for nothing, so there is nothing to wait for: starting
 	// on `loading` would spin forever over a tab that is already drawn. The
 	// data tabs set it themselves in maybeLoad when you walk into them.

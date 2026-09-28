@@ -1059,10 +1059,10 @@ func TestBannerFitsAndCarriesTheNames(t *testing.T) {
 func TestAboutFallsBackToOneLineWhenNarrow(t *testing.T) {
 	// A 40-column terminal has no room for the art plus the wordmark, and a
 	// wrapped banner is worse than no banner.
-	if strings.Contains(renderAbout(newLayout(40, 24)), "█") {
+	if strings.Contains(model{}.renderAbout(newLayout(40, 24)), "█") {
 		t.Error("the banner is drawn at a width where it wraps")
 	}
-	if !strings.Contains(renderAbout(newLayout(BannerWidthPlain+4, 24)), "█") {
+	if !strings.Contains(model{}.renderAbout(newLayout(BannerWidthPlain+4, 24)), "█") {
 		t.Error("the banner is missing at a width that fits it")
 	}
 }
@@ -1074,7 +1074,7 @@ func TestHomeIsTheFirstTabAndNeedsNoNetwork(t *testing.T) {
 	if tabDefs[0].id != tabHome {
 		t.Fatalf("the first tab is %v, want Home", tabDefs[0].name)
 	}
-	m := newModel(nil, &session.Session{})
+	m := newModel(nil, &session.Session{}, ThemeAuto)
 	if cmd := m.maybeLoad(); cmd != nil {
 		t.Error("Home asks the API for something, so it cannot be the landing tab")
 	}
@@ -1458,7 +1458,7 @@ func setupModel(t *testing.T, sess *session.Session) model {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("HERMES_HOME", filepath.Join(home, "hermes"))
-	return newModel(nil, sess)
+	return newModel(nil, sess, ThemeAuto)
 }
 
 // The idea this replaced was to have the Setup tab fetch the key with the
@@ -1668,7 +1668,7 @@ func TestAboutShowsTheSessionPathThatExists(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
-	out := renderAbout(newLayout(100, 30))
+	out := model{}.renderAbout(newLayout(100, 30))
 	if strings.Contains(out, "~/") {
 		t.Error("the About tab still prints a tilde path")
 	}
@@ -1875,7 +1875,7 @@ func TestSigningInGivesTheClientTheNewToken(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("HERMES_HOME", filepath.Join(home, "h"))
 
-	m := newModel(api.New(""), &session.Session{})
+	m := newModel(api.New(""), &session.Session{}, ThemeAuto)
 	if m.client.Token() != "" {
 		t.Fatal("this test starts from a client with no token")
 	}
@@ -2146,7 +2146,7 @@ func TestSigningInLeadsStraightToTheKey(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("HERMES_HOME", filepath.Join(home, "h"))
 
-	m := newModel(api.New(""), &session.Session{})
+	m := newModel(api.New(""), &session.Session{}, ThemeAuto)
 	m.lay = newLayout(90, 30)
 	if err := session.Save(&session.Session{Token: "a-token"}); err != nil {
 		t.Fatal(err)
@@ -2267,7 +2267,7 @@ func TestSigningOutTakesTwoPressesAndClearsEverything(t *testing.T) {
 	if err := session.Save(sess); err != nil {
 		t.Fatal(err)
 	}
-	m := newModel(api.New("t"), sess)
+	m := newModel(api.New("t"), sess, ThemeAuto)
 	m.lay = newLayout(90, 30)
 	m.cache[tabUsage] = "somebody else's numbers"
 
@@ -2317,7 +2317,7 @@ func TestSigningOutStartsTheSetupAgain(t *testing.T) {
 	if err := session.Save(sess); err != nil {
 		t.Fatal(err)
 	}
-	m := newModel(api.New("t"), sess)
+	m := newModel(api.New("t"), sess, ThemeAuto)
 	m.lay = newLayout(90, 30)
 
 	press := func(m model, r rune) model {
