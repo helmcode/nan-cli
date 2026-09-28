@@ -23,27 +23,6 @@ import (
 	"github.com/nxssie/nan-cli/internal/session"
 )
 
-// ── palette ───────────────────────────────────────────────────────────────────
-
-var (
-	cCyan    = lipgloss.AdaptiveColor{Light: "#6d28d9", Dark: "#a78bfa"}
-	cBlue    = lipgloss.AdaptiveColor{Light: "#5b21b6", Dark: "#8b5cf6"}
-	cBlueDim = lipgloss.AdaptiveColor{Light: "#ddd6fe", Dark: "#2e1065"}
-	cGray    = lipgloss.AdaptiveColor{Light: "#52525b", Dark: "#71717a"}
-	cDimGray = lipgloss.AdaptiveColor{Light: "#a1a1aa", Dark: "#52525b"}
-	cWhite   = lipgloss.AdaptiveColor{Light: "#18181b", Dark: "#ffffff"}
-	cText    = lipgloss.AdaptiveColor{Light: "#374151", Dark: "#cbd5e1"}
-	cRed     = lipgloss.AdaptiveColor{Light: "#dc2626", Dark: "#ef4444"}
-
-	modelColors = []lipgloss.Color{
-		lipgloss.Color("#8b5cf6"),
-		lipgloss.Color("#a78bfa"),
-		lipgloss.Color("#10B981"),
-		lipgloss.Color("#F59E0B"),
-		lipgloss.Color("#EF4444"),
-	}
-)
-
 // ── layout ────────────────────────────────────────────────────────────────────
 
 // layout holds all computed dimensions for a given terminal size.
