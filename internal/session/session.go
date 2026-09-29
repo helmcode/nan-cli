@@ -16,7 +16,12 @@ type Session struct {
 
 var ErrNotLoggedIn = errors.New("not logged in — run: nan auth login")
 
-func dir() (string, error) {
+// Dir is the ~/.config/nan directory, and it is exported on purpose:
+// settings.json lives beside session.json, the theme reader is in internal/tui,
+// and it cannot call an unexported one. Two copies of this rule would drift,
+// and the drift would only show up as a theme saved in one place and looked
+// for in another.
+func Dir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -29,7 +34,7 @@ func dir() (string, error) {
 // on Windows and is not where anything is: a member told to look there finds
 // nothing, and the tilde is not something Explorer resolves.
 func Path() string {
-	d, err := dir()
+	d, err := Dir()
 	if err != nil {
 		return filepath.Join(".config", "nan", "session.json")
 	}
@@ -37,7 +42,7 @@ func Path() string {
 }
 
 func Load() (*Session, error) {
-	d, err := dir()
+	d, err := Dir()
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +68,7 @@ func Load() (*Session, error) {
 // it never leaves a half-written session.json behind either, which used to
 // read on the next run as not being logged in.
 func Save(s *Session) error {
-	d, err := dir()
+	d, err := Dir()
 	if err != nil {
 		return err
 	}
@@ -100,7 +105,7 @@ func Save(s *Session) error {
 }
 
 func Delete() error {
-	d, err := dir()
+	d, err := Dir()
 	if err != nil {
 		return err
 	}

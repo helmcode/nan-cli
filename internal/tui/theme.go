@@ -2,10 +2,15 @@ package tui
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/nxssie/nan-cli/internal/session"
 )
 
 // ── palette ───────────────────────────────────────────────────────────────────
@@ -95,14 +100,15 @@ func applyTheme(m ThemeMode) {
 }
 
 // settingsPath is where the theme lives, mirroring session.Path(): the same
-// config directory, and the same relative fallback for a home directory that
+// config directory, resolved by session.Dir() so settings.json always lands
+// beside session.json, and the same relative fallback for a home directory that
 // cannot be resolved.
 func settingsPath() string {
-	home, err := os.UserHomeDir()
+	d, err := session.Dir()
 	if err != nil {
 		return filepath.Join(".config", "nan", "settings.json")
 	}
-	return filepath.Join(home, ".config", "nan", "settings.json")
+	return filepath.Join(d, "settings.json")
 }
 
 func loadTheme() ThemeMode { return loadThemeFrom(settingsPath()) }
@@ -135,20 +141,72 @@ func loadThemeFrom(path string) ThemeMode {
 	return ThemeAuto
 }
 
+// readSettingsConfig reads settings.json with the same refusal semantics as
+// readJSONConfig - a missing or empty file is an empty map, and a file that
+// will not parse is refused rather than guessed at - but it decodes every
+// number as a json.Number instead of a float64.
+//
+// settings.json is shared, and the CLI is not its only writer: a foreign key
+// holds whatever its owner put there. json.Unmarshal turns every JSON number
+// into a float64, so an integer past 2^53 comes back rounded, and the
+// read-modify-write that only meant to set "theme" rewrites somebody else's
+// number on the way through. A json.Number keeps the literal digits, so the
+// round-trip writes every foreign value back exactly as it was read.
+func readSettingsConfig(path string) (map[string]any, error) {
+	f, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return map[string]any{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	// A decoder reads a stream, so on its own it would stop at the first value
+	// and silently leave a second one unread; json.Unmarshal rejects that as
+	// trailing data. Decoding a second time is how the stream form gets the
+	// same strictness back: one value in the file, and the next read is EOF.
+	dec := json.NewDecoder(f)
+	dec.UseNumber()
+	var cfg map[string]any
+	if err := dec.Decode(&cfg); err != nil {
+		if err == io.EOF {
+			// An empty or whitespace-only file is one with no setting in it,
+			// not one that cannot be parsed.
+			return map[string]any{}, nil
+		}
+		return nil, fmt.Errorf("%s does not parse as JSON, so it was left exactly as it is: %w",
+			filepath.Base(path), err)
+	}
+	var trailing any
+	if err := dec.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			err = errors.New("trailing data after the first JSON value")
+		}
+		return nil, fmt.Errorf("%s does not parse as JSON, so it was left exactly as it is: %w",
+			filepath.Base(path), err)
+	}
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	return cfg, nil
+}
+
 // saveThemeTo writes the theme key back into the settings file, leaving every
 // other key exactly where it was.
 //
 // It is a read-modify-write for the same reason the tool configs are: this file
 // is shared and one day holds a setting this CLI does not know about, and
 // writing our single key from scratch would take that setting with it. The
-// reader is readJSONConfig, whose whole point is refusing to hand back a file it
-// could not parse - so a settings.json somebody is midway through editing is
-// left alone rather than flattened, and the error travels out to the caller.
+// reader is readSettingsConfig, whose whole point is refusing to hand back a
+// file it could not parse - so a settings.json somebody is midway through
+// editing is left alone rather than flattened, and the error travels out to the
+// caller.
 func saveThemeTo(path string, m ThemeMode) error {
 	if m != ThemeDark && m != ThemeLight {
 		m = ThemeAuto // only ever one of the three constants, whatever came in
 	}
-	cfg, err := readJSONConfig(path)
+	cfg, err := readSettingsConfig(path)
 	if err != nil {
 		return err
 	}
