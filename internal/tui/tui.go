@@ -1305,12 +1305,18 @@ type providerPricing struct {
 	outPer1M float64 // $ per 1M output tokens
 }
 
-// Per 1M tokens, read off each vendor's own pricing page on 2026-09-14.
+// Per 1M tokens, read off each vendor's own pricing page on 2026-09-14, and
+// the Anthropic and OpenAI rows again on 2026-09-30 when both had newer
+// models out: Opus 5.5 and Sonnet 5.5 for Opus 5 and Sonnet 5, GPT-6.1 Sol and
+// GPT-6 Luna for their 5.6 namesakes. Terra stays at 5.6 because OpenAI has
+// not shipped a GPT-6 one. The newer rows are cheaper than the ones they
+// replace, and that is not the understating the paragraph below is about:
+// each is the price of the model a member would reach for today.
 //
 // Ten rows rather than the six this started as, and the reason is the spread
 // rather than the count. The tab multiplies a member's NaN token usage by each
 // of these, so a table that carried only mid-range models answered only the
-// mid-range question. From Luna at $0.20 in to Astra and Fable at $10, a
+// mid-range question. From Luna at $0.10 in to Astra and Fable at $10, a
 // reader can find the row that matches what they would actually have reached
 // for instead of taking ours as the comparison.
 //
@@ -1321,20 +1327,21 @@ type providerPricing struct {
 // whose whole claim is "this is what you would have paid elsewhere"
 // understating every competitor is the one direction it must not be wrong in.
 //
-// Two rows carry a condition the table cannot express, so each is taken at its
-// lowest published rate and the comparison stays conservative: Gemini 3.1 Pro
+// Some rows carry a condition the table cannot express, so each is taken at its
+// lowest published rate and the comparison stays conservative: the GPT-6 and
+// GPT-5.6 rows cost more above a 272k-token prompt, Gemini 3.1 Pro
 // costs $4/$18 above a 200k-token prompt, and Gemini 3.8 Flash is on a
 // promotional rate that doubles on 2027-01-01. TestGeminiFlashPromoHasNotExpired
 // fails on that date so the number is changed rather than forgotten.
 var pricingTable = []providerPricing{
 	{"Claude Fable 5.1", "Anthropic", 10.00, 50.00},
-	{"Claude Opus 5", "Anthropic", 5.00, 25.00},
-	{"Claude Sonnet 5", "Anthropic", 2.00, 10.00},
+	{"Claude Opus 5.5", "Anthropic", 4.00, 20.00},
+	{"Claude Sonnet 5.5", "Anthropic", 2.00, 10.00},
 	{"Claude Haiku 4.5", "Anthropic", 1.00, 5.00},
 	{"GPT-6 Astra", "OpenAI", 10.00, 50.00},
-	{"GPT-5.6 Sol", "OpenAI", 4.00, 20.00},
+	{"GPT-6.1 Sol", "OpenAI", 2.00, 10.00},
 	{"GPT-5.6 Terra", "OpenAI", 2.00, 12.00},
-	{"GPT-5.6 Luna", "OpenAI", 0.20, 1.20},
+	{"GPT-6 Luna", "OpenAI", 0.10, 0.50},
 	{"Gemini 3.1 Pro", "Google", 2.00, 12.00},
 	{"Gemini 3.8 Flash", "Google", 0.75, 3.75},
 }
@@ -2502,12 +2509,26 @@ wire_api = "responses"
 //
 // No API key goes in them: the provider section in config.toml is what
 // carries it, and a key in eight files is a key to rotate in eight files.
+//
+// They also switch off the two tools Codex adds on its own. Codex 0.159
+// sends the sub-agent tools as a "namespace" tool and web search as a
+// "web_search" one, and with either in the request the cluster's /responses
+// stops streaming items for qwen3.8-flash and mimo: all that comes back is
+// response.completed, which Codex does not read an answer from, so the turn
+// ends with no text and no tool call. Neither tool has anywhere to go on the
+// cluster anyway. Here and not in config.toml, because these files are ours
+// and leave with the disconnect - a web_search = "disabled" at the root
+// would stay behind and take search from the member's OpenAI sessions too.
 func writeCodexProfiles(codexHome string) error {
 	for _, m := range catalog.ChatModels() {
 		body := fmt.Sprintf(`# Written by the NaN CLI. Disconnecting Codex removes it.
 model = %q
 model_provider = "nan"
 model_context_window = %d
+web_search = "disabled"
+
+[features]
+multi_agent = false
 `, m.ID, m.Context)
 		path := filepath.Join(codexHome, codexProfileName(m.ID)+".config.toml")
 		if err := writeConfigFile(path, []byte(body)); err != nil {

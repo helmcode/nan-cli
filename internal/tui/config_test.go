@@ -552,6 +552,34 @@ func TestCodexProfilesGiveEveryModelItsOwnWindow(t *testing.T) {
 
 // Codex refuses a --profile with a dot in it ("pass a plain name such as
 // `work`"), which is every id on the cluster that carries a version number.
+// With the sub-agent namespace or web_search in the request, /responses
+// answers qwen3.8-flash and mimo with a lone response.completed, and Codex
+// ends the turn empty. The profiles are what keeps those tools out.
+func TestCodexProfilesLeaveOutTheToolsTheClusterCannotStream(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Dir(path)
+	for _, m := range catalog.ChatModels() {
+		data, err := os.ReadFile(filepath.Join(home, codexProfileName(m.ID)+".config.toml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := string(data)
+		if !strings.Contains(body, `web_search = "disabled"`) {
+			t.Errorf("%s: the profile still sends web_search:\n%s", m.ID, body)
+		}
+		if !strings.Contains(body, "[features]\nmulti_agent = false") {
+			t.Errorf("%s: the profile still sends the sub-agent namespace:\n%s", m.ID, body)
+		}
+		// Before the first header, or TOML puts it inside [features].
+		if strings.Index(body, "web_search") > strings.Index(body, "[features]") {
+			t.Errorf("%s: web_search landed inside [features], where Codex does not read it:\n%s", m.ID, body)
+		}
+	}
+}
+
 func TestCodexProfileNamesAreNamesCodexAccepts(t *testing.T) {
 	for _, m := range catalog.ChatModels() {
 		name := codexProfileName(m.ID)
