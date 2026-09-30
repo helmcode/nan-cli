@@ -2442,3 +2442,34 @@ func TestAFailedToolDoesNotStrandTheSetup(t *testing.T) {
 		t.Error("the screen does not say what can be done about it")
 	}
 }
+
+// Step 3 on a short terminal. The banner went on top and View cut what did not
+// fit from the bottom, so the part that went was the field for the key.
+// Reported as: "no hay espacio para ponerla en el setup".
+func TestTheKeyFieldFitsOnAShortTerminal(t *testing.T) {
+	for _, size := range [][2]int{{80, 14}, {80, 18}, {120, 22}, {120, 30}} {
+		m := setupModel(t, &session.Session{Token: "t"})
+		m.lay = newLayout(size[0], size[1])
+		m.wizard = wizardLink
+		m.startKeyEdit()
+		if !strings.Contains(m.View(), "paste your NaN API key here") {
+			t.Errorf("at %dx%d step 3 has no field to paste the key into", size[0], size[1])
+		}
+	}
+}
+
+// And a key the cluster refuses leaves the field open for another one, instead
+// of the error and nothing under it.
+func TestARefusedKeyOpensTheFieldAgain(t *testing.T) {
+	m := setupModel(t, &session.Session{Token: "t", APIKey: testKey})
+	m.wizard = wizardKey
+
+	updated, _ := m.Update(keyCheckedMsg{err: errors.New("401")})
+	after := updated.(model)
+	if !after.editingKey {
+		t.Error("after a refused key step 3 has nowhere to paste another")
+	}
+	if !strings.Contains(after.keyCheck, "refused") {
+		t.Errorf("the refusal is gone: %q", after.keyCheck)
+	}
+}
