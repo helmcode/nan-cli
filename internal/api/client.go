@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,6 +10,15 @@ import (
 )
 
 const BaseURL = "https://cloud-api.nan.builders/api"
+
+// ErrSessionExpired is the platform refusing the session a request carried.
+// The session token expires on the server, and nothing on this side knows
+// when: session.json still holds it, so everything reading that file goes on
+// believing the member is signed in. What the platform says instead is
+// `invalid session`, which names what it decided and not what to do about it,
+// so a 401 comes back as this and the caller can tell it apart from a
+// platform that is down.
+var ErrSessionExpired = errors.New("your session has expired")
 
 // A client with no timeout waits forever on a connection that is accepted and
 // then never answered, which in the panel is a spinner that never stops.
@@ -53,6 +63,9 @@ func (c *Client) get(path string) ([]byte, error) {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
+	}
+	if resp.StatusCode == http.StatusUnauthorized && c.token != "" {
+		return nil, ErrSessionExpired
 	}
 	if resp.StatusCode >= 400 {
 		var e struct {

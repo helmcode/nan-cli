@@ -129,6 +129,20 @@ type keyCheckedMsg struct {
 // someone to quit and run something is the detour this replaced.
 var errNotSignedIn = errors.New("not signed in — press s")
 
+// What a tab says when the platform turned the saved session down. The token
+// was still in session.json, so until the first request the panel had every
+// reason to think the member was signed in.
+var errSessionExpired = errors.New("your session has expired — press s to sign in again")
+
+// The platform refused the session the panel was holding. token is the one
+// the request carried, so an answer that was already on its way before a new
+// sign-in cannot throw the new session away. atStart is the check the panel
+// makes when it opens.
+type sessionExpiredMsg struct {
+	token   string
+	atStart bool
+}
+
 type configuredMsg struct {
 	msg     string
 	written []string
@@ -319,6 +333,35 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.err = msg.err
 
+	case sessionExpiredMsg:
+		if msg.token == "" || msg.token != m.sess.Token {
+			return m, nil
+		}
+		// An expired session is no session. Leaving the token in place kept
+		// Home saying the member was signed in, kept `s` doing nothing, and
+		// answered every tab `invalid session` - with the one key that fixes
+		// it switched off. The key and the tools stay: they are the member's
+		// and still work, and the session was the only thing that went stale.
+		m.sess.Token = ""
+		_ = session.Save(m.sess)
+		m.client = api.New("")
+		m.cache = make(map[tabID]any)
+		m.keyStatus, m.keyAsked = nil, false
+		m.loading = false
+		m.err = errSessionExpired
+		// Opening the panel on an expired session is the same moment as
+		// opening it with none, so it gets the same sign-in. Anywhere later it
+		// only says so: the prompt takes every key while it is up, and a
+		// member reading their usage did not ask for it. The key field the
+		// panel may have opened meanwhile gives way, as it would have with no
+		// session at all - unless something has already been typed into it.
+		if msg.atStart && m.wizard == wizardOff && m.loginStage == loginOff && m.keyInput.Value() == "" {
+			m.editingKey = false
+			m.keyInput.Blur()
+			m.err = nil
+			return m, m.startLogin()
+		}
+
 	case configuredMsg:
 		m.configuring = false
 		m.setupMsg = msg.msg
@@ -333,7 +376,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case firstRunMsg:
-		return m, m.resumeSetup()
+		return m, tea.Batch(m.resumeSetup(), m.checkSession())
 
 	case linkSentMsg:
 		m.loginBusy = false
@@ -643,6 +686,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *model) maybeLoad() tea.Cmd {
 	id := m.activeID()
+	// The error belongs to the tab that asked. There is one m.err for all of
+	// them, and the tabs that load nothing - Home, About, one already in the
+	// cache - never cleared it, so walking back to Home after a tab failed
+	// drew that tab's error where Home should be.
+	m.err = nil
 	// Setup asks the platform one thing, once, and stays usable while it
 	// waits: no spinner, no error state, nothing that stops a member pasting
 	// a key on a train.
@@ -779,6 +827,9 @@ func (m model) fetchKeyStatus() tea.Cmd {
 	client := m.client
 	return func() tea.Msg {
 		status, err := client.GetKeyStatus()
+		if errors.Is(err, api.ErrSessionExpired) {
+			return sessionExpiredMsg{token: client.Token()}
+		}
 		if err != nil {
 			// Silent on purpose: this is a hint, and a member with no
 			// connection still has a Setup tab that works.
@@ -822,7 +873,42 @@ func (m model) needsLogin(id tabID) bool {
 	return id != tabHome && id != tabAbout && id != tabSetup
 }
 
+// checkSession asks the platform whether the saved session still works, once,
+// when the panel opens. Home draws from whether there is a token, and the
+// token outlives the session on the server, so without this a member whose
+// session had expired opened the panel onto a Home that said they were signed
+// in. Anything but a refusal says nothing: offline is not signed out.
+func (m model) checkSession() tea.Cmd {
+	client := m.client
+	if client == nil || m.sess.Token == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		if _, err := client.GetMe(); errors.Is(err, api.ErrSessionExpired) {
+			return sessionExpiredMsg{token: client.Token(), atStart: true}
+		}
+		return nil
+	}
+}
+
+// fetchTab is fetchTabData with the one answer every tab shares taken out of
+// it: a refused session is not that tab's error, it is the panel's.
 func (m model) fetchTab(id tabID) tea.Cmd {
+	fetch := m.fetchTabData(id)
+	var token string
+	if m.client != nil {
+		token = m.client.Token()
+	}
+	return func() tea.Msg {
+		msg := fetch()
+		if e, ok := msg.(fetchErrMsg); ok && errors.Is(e.err, api.ErrSessionExpired) {
+			return sessionExpiredMsg{token: token}
+		}
+		return msg
+	}
+}
+
+func (m model) fetchTabData(id tabID) tea.Cmd {
 	client := m.client
 	apiKey := m.sess.APIKey
 	needsLogin := m.needsLogin(id)
