@@ -2502,12 +2502,26 @@ wire_api = "responses"
 //
 // No API key goes in them: the provider section in config.toml is what
 // carries it, and a key in eight files is a key to rotate in eight files.
+//
+// They also switch off the two tools Codex adds on its own. Codex 0.159
+// sends the sub-agent tools as a "namespace" tool and web search as a
+// "web_search" one, and with either in the request the cluster's /responses
+// stops streaming items for qwen3.8-flash and mimo: all that comes back is
+// response.completed, which Codex does not read an answer from, so the turn
+// ends with no text and no tool call. Neither tool has anywhere to go on the
+// cluster anyway. Here and not in config.toml, because these files are ours
+// and leave with the disconnect - a web_search = "disabled" at the root
+// would stay behind and take search from the member's OpenAI sessions too.
 func writeCodexProfiles(codexHome string) error {
 	for _, m := range catalog.ChatModels() {
 		body := fmt.Sprintf(`# Written by the NaN CLI. Disconnecting Codex removes it.
 model = %q
 model_provider = "nan"
 model_context_window = %d
+web_search = "disabled"
+
+[features]
+multi_agent = false
 `, m.ID, m.Context)
 		path := filepath.Join(codexHome, codexProfileName(m.ID)+".config.toml")
 		if err := writeConfigFile(path, []byte(body)); err != nil {
