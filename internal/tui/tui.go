@@ -437,6 +437,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// than five times later as a 401 inside five different tools.
 		if msg.err != nil {
 			m.keyCheck = "error: the cluster refused this key — " + msg.err.Error()
+			// During the guided setup the field closed on enter and stayed
+			// closed, so a refused key left step 3 with the error and nothing to
+			// paste a better one into. It opens again, empty, under the error.
+			if m.wizard == wizardKey && !m.editingKey {
+				return m, m.startKeyEdit()
+			}
 		} else {
 			m.keyCheck = fmt.Sprintf("key accepted by the cluster · %d models", msg.models)
 			// The last link in the chain. Signing in leads to the key, and the
@@ -500,7 +506,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.setupMsg = "error saving: " + err.Error()
 					} else {
 						m.setupMsg = "API key saved"
-						m.keyCheck = "checking it against the cluster…"
+						m.keyCheck = keyChecking
 						check = checkKey(val)
 					}
 				}
@@ -546,6 +552,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 		case "enter":
+			// Step 3 with its field closed - the key is still being checked, or
+			// something closed it - says "enter to continue", so enter opens it.
+			if m.wizard == wizardKey && m.keyCheck != keyChecking {
+				return m, m.startKeyEdit()
+			}
 			if m.wizard == wizardDone {
 				m.wizard = wizardOff
 				m.active = tabIndex(tabHome)
@@ -751,6 +762,9 @@ func (m *model) startLogin() tea.Cmd {
 	m.loginInput.EchoMode = textinput.EchoNormal
 	return m.loginInput.Focus()
 }
+
+// What step 3 says while the cluster is looking at a key just saved.
+const keyChecking = "checking it against the cluster…"
 
 // startKeyEdit opens the API key field, moving to the tab that shows it.
 func (m *model) startKeyEdit() tea.Cmd {
@@ -3231,11 +3245,6 @@ func (m model) renderWizard(l layout) string {
 	now := lipgloss.NewStyle().Foreground(cCyan).Bold(true)
 
 	var b strings.Builder
-	if l.w >= BannerWidthPlain+4 {
-		b.WriteString(Banner(l.indent, m.wizard.mood(),
-			l.w >= BannerWidth+4 && l.h >= BannerRoom) + "\n")
-	}
-
 	b.WriteString(l.indent + title.Render("Setting up") + "\n\n")
 
 	at := m.wizard.index()
@@ -3283,7 +3292,26 @@ func (m model) renderWizard(l layout) string {
 		}
 		b.WriteString(m.renderFailures(l))
 	}
-	return b.String()
+
+	// The banner goes on top only if it leaves room for the rest. It used to go
+	// first unconditionally, and View cuts what does not fit from the bottom -
+	// so on a short terminal the part that went was the field for the key, and
+	// step 3 asked for one with nowhere to type it. The mascot goes first, then
+	// the wordmark; the step you are on never does.
+	body := b.String()
+	room := l.h - 4 - strings.Count(body, "\n")
+	if l.w >= BannerWidthPlain+4 {
+		withMascot := l.w >= BannerWidth+4 && l.h >= BannerRoom
+		banner := Banner(l.indent, m.wizard.mood(), withMascot) + "\n"
+		if withMascot && strings.Count(banner, "\n") > room {
+			withMascot = false
+			banner = Banner(l.indent, m.wizard.mood(), false) + "\n"
+		}
+		if strings.Count(banner, "\n") <= room {
+			body = banner + body
+		}
+	}
+	return body
 }
 
 // What would not configure, and what to do about it.
