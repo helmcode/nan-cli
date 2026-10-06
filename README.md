@@ -8,11 +8,13 @@ CLI for [nan.builders](https://nan.builders) — manage your account, monitor us
 curl -fsSL https://nan.builders/install | bash
 ```
 
-By default installs to `/usr/local/bin`. Override with `INSTALL_DIR`:
+By default installs to `$HOME/.local/bin`, which is per-user and needs no root. Override with `INSTALL_DIR`:
 
 ```bash
-INSTALL_DIR=~/.local/bin curl -fsSL https://nan.builders/install | bash
+INSTALL_DIR=~/.nan/bin curl -fsSL https://nan.builders/install | bash
 ```
+
+If `$HOME/.local/bin` is not already on your `PATH`, the installer appends it to the startup file your shell actually reads — `~/.zshrc` for zsh, `~/.bashrc` or `~/.bash_profile` for bash, `config.fish` for fish — and tells you to source that file or open a new terminal.
 
 On Windows, from PowerShell:
 
