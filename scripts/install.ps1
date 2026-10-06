@@ -13,10 +13,10 @@
   - The artifact is a .zip, not a .tar.gz. Nothing on a stock Windows unpacks
     a tarball by double-clicking, and Expand-Archive is built in.
   - The default install directory is per-user (LOCALAPPDATA\Programs\nan) and
-    not a machine-wide one. /usr/local/bin has a sudo prompt that a person
-    expects; the Windows equivalent is an elevation dialog out of a piped
-    script, which is worse than installing for one user. Set -InstallDir to
-    override.
+    not a machine-wide one. $HOME/.local/bin is per-user and needs no elevation;
+    the old convention of a machine-wide directory like /usr/local/bin would
+    require a sudo prompt, which is worse for a piped script than installing
+    for one user. Set -InstallDir to override.
 
 .PARAMETER Version
   A tag such as v0.1.3. Defaults to the latest release.

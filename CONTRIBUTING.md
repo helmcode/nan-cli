@@ -25,10 +25,16 @@ To install a released binary instead of building from source:
 curl -fsSL https://nan.builders/install | bash
 ```
 
-By default it installs to `/usr/local/bin`. Override with `INSTALL_DIR`:
+By default it installs to `$HOME/.local/bin`, which is per-user and needs no root. Override with `INSTALL_DIR`:
 
 ```bash
-INSTALL_DIR=~/.local/bin curl -fsSL https://nan.builders/install | bash
+INSTALL_DIR=~/.nan/bin curl -fsSL https://nan.builders/install | bash
+```
+
+A custom `INSTALL_DIR` never edits a shell profile: if the directory is not on your `PATH`, the installer prints the line to add yourself. For a machine-wide install, with root or sudo:
+
+```bash
+curl -fsSL https://nan.builders/install | sudo INSTALL_DIR=/usr/local/bin bash
 ```
 
 ## Project structure
