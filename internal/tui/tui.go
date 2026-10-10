@@ -757,7 +757,7 @@ func (m *model) startLogin() tea.Cmd {
 	// A machine set up with a platform token looks signed in to whoever set
 	// it up. The dashboard cannot use one, and asking for an email with no
 	// word about it reads as the token having been lost.
-	if m.sess.PlatformToken != "" || os.Getenv("NAN_TOKEN") != "" {
+	if m.sess.PlatformToken != "" || os.Getenv(session.TokenEnvVar) != "" {
 		m.loginMsg = tokenOnlyNotice
 	}
 	m.loginInput.SetValue("")

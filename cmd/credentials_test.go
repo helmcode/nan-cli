@@ -76,8 +76,8 @@ func TestValidTokenShape(t *testing.T) {
 	}
 }
 
-// The documented precedence: NAN_TOKEN > --token-file > session > saved
-// platform token > saved API key.
+// The documented precedence: NAN_TOKEN > --token-file > saved platform
+// token > session > saved API key.
 func TestCredentialPrecedence(t *testing.T) {
 	full := `{"token":"sess-1","platformToken":"` + testPAT + `","apiKey":"` + testKey + `"}`
 	file := writeTokenFile(t, "nan_pat_fromfile\n", 0o600)
@@ -95,7 +95,8 @@ func TestCredentialPrecedence(t *testing.T) {
 		{name: "env is trimmed", session: full, env: "  nan_pat_fromenv\n", kind: credEnv, bearer: "nan_pat_fromenv"},
 		{name: "file wins over the session", session: full, file: file, kind: credFile, bearer: "nan_pat_fromfile"},
 		{name: "file works with no session at all", file: file, kind: credFile, bearer: "nan_pat_fromfile"},
-		{name: "session wins over saved tokens", session: full, kind: credSession, wantSess: "sess-1"},
+		{name: "saved platform token over the session", session: full, kind: credStoredToken, bearer: testPAT},
+		{name: "session over the saved key", session: `{"token":"sess-1","apiKey":"` + testKey + `"}`, kind: credSession, wantSess: "sess-1"},
 		{name: "saved platform token over saved key", session: `{"token":"","platformToken":"` + testPAT + `","apiKey":"` + testKey + `"}`, kind: credStoredToken, bearer: testPAT},
 		{name: "saved key last", session: `{"token":"","apiKey":"` + testKey + `"}`, kind: credStoredKey, bearer: testKey},
 	}
@@ -108,9 +109,6 @@ func TestCredentialPrecedence(t *testing.T) {
 			}
 			if cred.kind != c.kind || cred.bearer != c.bearer || cred.session != c.wantSess {
 				t.Errorf("got kind %d bearer %q session %q", cred.kind, cred.bearer, cred.session)
-			}
-			if cred.usingKey() != (c.kind != credSession) {
-				t.Errorf("usingKey = %v", cred.usingKey())
 			}
 		})
 	}
@@ -177,7 +175,7 @@ func TestTokenFileErrors(t *testing.T) {
 		path string
 		want string
 	}{
-		"missing":   {filepath.Join(dir, "nope"), "could not open"},
+		"missing":   {filepath.Join(dir, "nope"), "does not exist"},
 		"directory": {dir, "directory"},
 		"empty":     {writeTokenFile(t, "\n", 0o600), "empty"},
 		"too long":  {writeTokenFile(t, "nan_pat_"+strings.Repeat("a", 4096), 0o600), "not a valid token"},

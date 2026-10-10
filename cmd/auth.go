@@ -32,7 +32,7 @@ var authCmd = &cobra.Command{
 
 var loginCmd = &cobra.Command{
 	Use:   "login",
-	Short: "Log in with a sign-in link sent to your email",
+	Short: "Log in by email, or save a platform token with --api-token",
 	Long: `Log in with a sign-in link sent to your email.
 
 With --api-token, save a platform token instead, for a machine with nobody
@@ -50,7 +50,7 @@ email sign-in.`,
 
 var logoutCmd = &cobra.Command{
 	Use:   "logout",
-	Short: "Log out and delete local session",
+	Short: "Log out: delete the local session, saved token and API key",
 	RunE:  runLogout,
 }
 
@@ -74,8 +74,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		if tokenFlag != "" || linkFlag != "" || emailFlag != "" {
 			return fmt.Errorf("--api-token cannot be combined with --email, --link or --token")
 		}
-		in := tokenInput{r: os.Stdin, tty: isTerminal(os.Stdin), readHidden: func() ([]byte, error) { return term.ReadPassword(os.Stdin.Fd()) }}
-		return loginWithAPIToken(cmd.Context(), in, os.Stdout, os.Stderr)
+		return loginWithAPIToken(cmd.Context(), newTokenInput(os.Stdin), os.Stdout, os.Stderr)
 	}
 	if tokenFlag != "" {
 		token, err := flagValue(tokenFlag)
@@ -246,6 +245,17 @@ type tokenInput struct {
 	readHidden func() ([]byte, error)
 }
 
+// newTokenInput reads from f, hidden when f is a terminal. Asking the
+// terminal itself, not the file mode: /dev/null is a character device too,
+// and under cron or `docker run` without -i that is what stdin is.
+func newTokenInput(f *os.File) tokenInput {
+	return tokenInput{
+		r:          f,
+		tty:        term.IsTerminal(f.Fd()),
+		readHidden: func() ([]byte, error) { return term.ReadPassword(f.Fd()) },
+	}
+}
+
 func (in tokenInput) read(prompt io.Writer) (string, error) {
 	if in.tty {
 		fmt.Fprint(prompt, "Paste the token (it is not shown): ")
@@ -293,7 +303,9 @@ func loginWithAPIToken(ctx context.Context, in tokenInput, out, prompt io.Writer
 	case err != nil:
 		return fmt.Errorf("could not read %s, nothing was saved: %w", session.Path(), err)
 	}
-	if strings.HasPrefix(tok, "sk-") {
+	isKey := strings.HasPrefix(tok, "sk-")
+	replacedKey := isKey && current.APIKey != "" && current.APIKey != tok
+	if isKey {
 		current.APIKey = tok
 	} else {
 		current.PlatformToken = tok
@@ -303,8 +315,13 @@ func loginWithAPIToken(ctx context.Context, in tokenInput, out, prompt io.Writer
 	}
 
 	fmt.Fprintf(out, "Token saved to %s. nan run and nan runs will use it on this machine.\n", session.Path())
-	if current.Token != "" {
-		fmt.Fprintln(out, "You are also signed in with your email; while that session lasts, it is used first.")
+	if replacedKey {
+		fmt.Fprintln(out, "It replaces the API key saved before. Tools the Setup tab configured keep the old key until you apply Setup again.")
+	}
+	if isKey && current.Token != "" {
+		// The session goes first and nothing here knows when it expires, so
+		// saying "while it lasts" would promise a fallback that never happens.
+		fmt.Fprintln(out, "You are also signed in by email, and nan run uses that session first, even after it expires. To use only this key: nan auth logout, then save it again.")
 	}
 	return nil
 }

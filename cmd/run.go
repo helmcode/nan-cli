@@ -81,8 +81,8 @@ Authentication (the first one found is used):
                          API key (sk-...); for CI, set it from a secret
   2. --token-file PATH   the token on the first line of a file only you can
                          read (chmod 600)
-  3. your session        from: nan auth login
-  4. a saved token       from: nan auth login --api-token (reads stdin)
+  3. a saved token       from: nan auth login --api-token (reads stdin)
+  4. your session        from: nan auth login
   5. the API key saved in the dashboard's Setup tab
   Create platform tokens in Settings > Tokens at https://cloud.nan.builders.
   Never pass a token as an argument: it would end up in your shell history.

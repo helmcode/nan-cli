@@ -178,7 +178,6 @@ func TestAPITokenLoginSavesNothingOnFailure(t *testing.T) {
 	}{
 		{"empty stdin", "", http.StatusOK, "no token arrived", 0},
 		{"wrong shape", "ghp_SECRETnotours\n", http.StatusOK, "not a valid token", 0},
-		{"only the first line counts", "nan_pat_a\r\nX-SECRET: 1", http.StatusOK, "", 1},
 		{"refused", testPAT, http.StatusUnauthorized, "refused that token", 1},
 		{"platform down", testPAT, http.StatusBadGateway, "could not check the token", 1},
 	} {
@@ -187,13 +186,6 @@ func TestAPITokenLoginSavesNothingOnFailure(t *testing.T) {
 			calls, _ := tokenServer(t, c.status)
 			var out bytes.Buffer
 			err := loginWithAPIToken(context.Background(), pipedToken(c.input), &out, io.Discard)
-			if c.name == "only the first line counts" {
-				// Only the first line is the token, and that line is valid.
-				if err != nil {
-					t.Fatalf("first line refused: %v", err)
-				}
-				return
-			}
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("err = %v, want %q", err, c.want)
 			}
@@ -223,9 +215,6 @@ func TestAPITokenLoginOnATerminalReadsHidden(t *testing.T) {
 	if !hidden || !strings.Contains(prompt.String(), "not shown") {
 		t.Errorf("hidden=%v prompt=%q", hidden, prompt.String())
 	}
-	if !strings.Contains(out.String(), "session") {
-		t.Errorf("does not say the session is used first: %q", out.String())
-	}
 	if sess, _ := readSession(t, home); sess["token"] != "sess-1" || sess["platformToken"] != testPAT {
 		t.Errorf("session.json = %v", sess)
 	}
@@ -239,5 +228,78 @@ func TestAPITokenCannotBeCombined(t *testing.T) {
 	rootCmd.SetErr(io.Discard)
 	if err := rootCmd.Execute(); err == nil || !strings.Contains(err.Error(), "cannot be combined") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// Only the first line of stdin is the token: what follows cannot become part
+// of it, or of a header.
+func TestAPITokenLoginTakesOnlyTheFirstLine(t *testing.T) {
+	home := fakeHome(t, "")
+	_, auth := tokenServer(t, http.StatusOK)
+	if err := loginWithAPIToken(context.Background(), pipedToken("nan_pat_a\r\nX-SECRET: 1\n"), io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if *auth != "Bearer nan_pat_a" {
+		t.Errorf("Authorization = %q", *auth)
+	}
+	if sess, _ := readSession(t, home); sess["platformToken"] != "nan_pat_a" {
+		t.Errorf("session.json = %v", sess)
+	}
+}
+
+// Under cron, or `docker run` without -i, stdin is /dev/null: a character
+// device, but not a terminal. That is "nothing arrived", not a failed
+// attempt at a hidden prompt.
+func TestAPITokenLoginWithStdinFromDevNull(t *testing.T) {
+	fakeHome(t, "")
+	calls, _ := tokenServer(t, http.StatusOK)
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	in := newTokenInput(f)
+	if in.tty {
+		t.Fatal(os.DevNull + " taken for a terminal")
+	}
+	var prompt bytes.Buffer
+	err = loginWithAPIToken(context.Background(), in, io.Discard, &prompt)
+	if err == nil || !strings.Contains(err.Error(), "no token arrived") {
+		t.Errorf("err = %v", err)
+	}
+	if prompt.Len() != 0 || *calls != 0 {
+		t.Errorf("prompted %q, %d requests", prompt.String(), *calls)
+	}
+}
+
+// What the login says afterwards matches what the run commands will do.
+func TestAPITokenLoginSaysWhatWillBeUsed(t *testing.T) {
+	for _, c := range []struct {
+		name, session, tok string
+		want, notWant      []string
+	}{
+		{"token with a session", `{"token":"sess-1"}`, testPAT, nil, []string{"session first", "replaces"}},
+		{"key with a session", `{"token":"sess-1"}`, testKey, []string{"session first, even after it expires", "nan auth logout"}, []string{"replaces"}},
+		{"key over another key", `{"token":"","apiKey":"sk-old"}`, testKey, []string{"replaces the API key", "apply Setup again"}, []string{"session first"}},
+		{"same key again", `{"token":"","apiKey":"` + testKey + `"}`, testKey, nil, []string{"replaces", "session first"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fakeHome(t, c.session)
+			tokenServer(t, http.StatusOK)
+			var out bytes.Buffer
+			if err := loginWithAPIToken(context.Background(), pipedToken(c.tok), &out, io.Discard); err != nil {
+				t.Fatal(err)
+			}
+			for _, w := range c.want {
+				if !strings.Contains(out.String(), w) {
+					t.Errorf("%q does not say %q", out.String(), w)
+				}
+			}
+			for _, w := range c.notWant {
+				if strings.Contains(out.String(), w) {
+					t.Errorf("%q says %q", out.String(), w)
+				}
+			}
+		})
 	}
 }

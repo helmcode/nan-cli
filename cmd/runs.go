@@ -35,9 +35,10 @@ var runsCmd = &cobra.Command{
 	Use:   "runs",
 	Short: "List, inspect, follow and cancel agent runs",
 	Long: `List, inspect, follow and cancel the agent runs started with nan run, from
-the portal, or by your automations. They authenticate the same way as nan
-run: NAN_TOKEN, --token-file PATH, your nan auth login session, or a token
-saved with nan auth login --api-token (see: nan run --help).
+the portal, or by your automations. These commands authenticate the same
+way as nan run: NAN_TOKEN, --token-file PATH, a token saved with nan auth
+login --api-token, or your nan auth login session (the full order is in
+nan run --help).
 
 Docs: https://nan.builders/docs/runs`,
 	Annotations: sysexits,

@@ -10,12 +10,13 @@ import (
 	"strings"
 
 	"github.com/nxssie/nan-cli/internal/api"
+	"github.com/nxssie/nan-cli/internal/runs"
 	"github.com/nxssie/nan-cli/internal/session"
 )
 
 // tokenEnvVar holds a platform token (nan_pat_...) or an API key (sk-...)
 // for `nan run` and `nan runs`. It is read, never written anywhere.
-const tokenEnvVar = "NAN_TOKEN"
+const tokenEnvVar = session.TokenEnvVar
 
 // maxTokenLen bounds what is accepted as a token. Real ones are far shorter;
 // anything longer is a file that is not a token.
@@ -50,17 +51,13 @@ type credential struct {
 	bearer  string // a nan_pat_ token or an sk- key, for everything else
 }
 
-// usingKey reports whether the request carries a bearer token rather than
-// the session cookie.
-func (c credential) usingKey() bool { return c.kind != credSession }
-
 // describe names the credential for an error message.
 func (c credential) describe() string {
 	switch c.kind {
 	case credEnv:
 		return "the token in " + tokenEnvVar
 	case credFile:
-		return "the token in " + c.path
+		return "the token in " + runs.SanitizeLine(c.path)
 	case credStoredToken:
 		return "your saved platform token"
 	case credStoredKey:
@@ -104,9 +101,14 @@ const tokenShapeHint = "expected a platform token (nan_pat_...) from Settings > 
 //
 //  1. NAN_TOKEN
 //  2. --token-file PATH
-//  3. the session from `nan auth login`
-//  4. a platform token saved with `nan auth login --api-token`
+//  3. a platform token saved with `nan auth login --api-token`
+//  4. the session from `nan auth login`
 //  5. the API key saved by the Setup tab (or by --api-token, for an sk- key)
+//
+// A saved platform token goes before the session because it was saved for
+// exactly these commands, and because a session expires on the server with
+// nothing on this side knowing: ranked after it, the token would never be
+// reached on a machine that once signed in by email.
 func resolveCredential(getenv func(string) string, tokenFile string) (credential, error) {
 	if v := getenv(tokenEnvVar); v != "" {
 		tok := strings.TrimSpace(v)
@@ -131,10 +133,10 @@ func resolveCredential(getenv func(string) string, tokenFile string) (credential
 		return credential{}, exitf(exitAuth, "could not read your session (%v): run nan auth login", err)
 	}
 	switch {
-	case sess.Token != "":
-		return credential{kind: credSession, session: sess.Token}, nil
 	case sess.PlatformToken != "":
 		return credential{kind: credStoredToken, bearer: sess.PlatformToken}, nil
+	case sess.Token != "":
+		return credential{kind: credSession, session: sess.Token}, nil
 	case sess.APIKey != "":
 		return credential{kind: credStoredKey, bearer: sess.APIKey}, nil
 	}
@@ -150,11 +152,17 @@ func notSignedIn() *ExitError {
 // A token file that other users can read hands them the token, and one they
 // can write lets them swap in their own, so that runs (and their prompts) go
 // to an account they control. Like ssh with a private key, such a file is
-// refused rather than used.
+// refused rather than used. Only regular files are checked: a pipe, such as
+// the one `--token-file <(vault read ...)` hands over, belongs to the process
+// that made it and has no mode worth reading.
 func readTokenFile(path string) (string, error) {
+	shown := runs.SanitizeLine(path)
 	f, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", exitf(exitAuth, "--token-file %s does not exist", shown)
+	}
 	if err != nil {
-		return "", exitf(exitAuth, "could not open --token-file: %v", err)
+		return "", exitf(exitAuth, "could not open --token-file %s: %v", shown, errors.Unwrap(err))
 	}
 	defer f.Close()
 	info, err := f.Stat()
@@ -162,10 +170,10 @@ func readTokenFile(path string) (string, error) {
 		return "", exitf(exitAuth, "could not read --token-file: %v", err)
 	}
 	if info.IsDir() {
-		return "", exitf(exitAuth, "--token-file %s is a directory, not a file", path)
+		return "", exitf(exitAuth, "--token-file %s is a directory, not a file", shown)
 	}
 	if perm := info.Mode().Perm(); runtime.GOOS != "windows" && info.Mode().IsRegular() && perm&0o077 != 0 {
-		return "", exitf(exitAuth, "--token-file %s can be read or changed by other users (mode %04o); make it private with: chmod 600 %s", path, perm, path)
+		return "", exitf(exitAuth, "--token-file %s can be read or changed by other users (mode %04o); make it private with: chmod 600 %s", shown, perm, shown)
 	}
 	line, err := bufio.NewReader(io.LimitReader(f, maxTokenLen+2)).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
@@ -173,10 +181,10 @@ func readTokenFile(path string) (string, error) {
 	}
 	tok := strings.TrimSpace(line)
 	if tok == "" {
-		return "", exitf(exitAuth, "--token-file %s is empty: put the token on its first line", path)
+		return "", exitf(exitAuth, "--token-file %s is empty: put the token on its first line", shown)
 	}
 	if !validTokenShape(tok) {
-		return "", exitf(exitAuth, "the first line of --token-file %s is not a valid token: %s", path, tokenShapeHint)
+		return "", exitf(exitAuth, "the first line of --token-file %s is not a valid token: %s", shown, tokenShapeHint)
 	}
 	return tok, nil
 }

@@ -19,6 +19,10 @@ type Session struct {
 	EnabledTools  map[string]bool `json:"enabledTools,omitempty"`
 }
 
+// TokenEnvVar is the environment variable `nan run` and `nan runs` read a
+// platform token or an API key from. Nothing writes it to disk.
+const TokenEnvVar = "NAN_TOKEN"
+
 var ErrNotLoggedIn = errors.New("not logged in — run: nan auth login")
 
 func dir() (string, error) {

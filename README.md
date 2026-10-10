@@ -181,8 +181,8 @@ JSON object per line): <https://nan.builders/docs/runs>.
 2. **`--token-file PATH`**: the token on the first line of a file. The file
    must be private (`chmod 600`); one that other users can read or write is
    refused.
-3. **Your session**, from `nan auth login` (the emailed sign-in link).
-4. **A saved token**, from `nan auth login --api-token`.
+3. **A saved token**, from `nan auth login --api-token`.
+4. **Your session**, from `nan auth login` (the emailed sign-in link).
 5. **The API key** saved in the Setup tab.
 
 Create platform tokens in **Settings > Tokens** at

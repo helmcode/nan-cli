@@ -410,7 +410,7 @@ func TestAPIKeyIsUsedWithoutASession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !env.cred.usingKey() {
+	if env.cred.kind != credStoredKey || env.cred.bearer != "sk-member" {
 		t.Error("a session with only an API key does not use it")
 	}
 }
