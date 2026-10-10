@@ -108,6 +108,9 @@ func escapeLen(s string) int {
 
 // Truncate shortens s to at most n runes, marking the cut.
 func Truncate(s string, n int) string {
+	if n < 1 {
+		return ""
+	}
 	if utf8.RuneCountInString(s) <= n {
 		return s
 	}
@@ -295,9 +298,9 @@ func jsonUnsafe(r rune) bool { return r == 0x7f || (r >= 0x80 && unsafeRune(r)) 
 
 // SafeJSON marshals v for --json output. encoding/json already escapes C0
 // controls, ESC included; it leaves C1 controls and the bidi overrides as raw
-// UTF-8, which some terminals still act on when the output is read on one. It
-// also writes them as \u escapes, which every JSON parser reads back as the
-// same string.
+// UTF-8, which some terminals still act on when the output is read on one,
+// and it passes invalid UTF-8 in a json.RawMessage through untouched. This
+// writes all of those as \u escapes, which every JSON parser reads back.
 func SafeJSON(v any, indent bool) ([]byte, error) {
 	var out []byte
 	var err error
@@ -309,16 +312,24 @@ func SafeJSON(v any, indent bool) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !strings.ContainsFunc(string(out), jsonUnsafe) {
+	if utf8.Valid(out) && !strings.ContainsFunc(string(out), jsonUnsafe) {
 		return out, nil
 	}
+	// Invalid UTF-8 can only be inside a string here - json.RawMessage
+	// carries a guest's bytes through verbatim - and a lone 0x9b is a
+	// C1 CSI to a terminal not in UTF-8 mode. It goes out as U+FFFD.
 	var b strings.Builder
-	for _, r := range string(out) {
-		if jsonUnsafe(r) {
+	for i := 0; i < len(out); {
+		r, size := utf8.DecodeRune(out[i:])
+		i += size
+		switch {
+		case r == utf8.RuneError && size == 1:
+			b.WriteString(`\ufffd`)
+		case jsonUnsafe(r):
 			fmt.Fprintf(&b, `\u%04x`, r)
-			continue
+		default:
+			b.WriteRune(r)
 		}
-		b.WriteRune(r)
 	}
 	return []byte(b.String()), nil
 }

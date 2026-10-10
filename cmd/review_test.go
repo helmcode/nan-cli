@@ -162,3 +162,96 @@ func TestRunsLogsSaysWhenTheRunIsStillGoing(t *testing.T) {
 		t.Errorf("stderr = %q", stderr.String())
 	}
 }
+
+// Without -f the log comes a page at a time: each page asks after the last,
+// every event prints once, and a page that does not advance ends the loop.
+func TestRunsLogsPaginates(t *testing.T) {
+	defer resetRunsFlags()
+	for name, pages := range map[string][]string{
+		"until done": {
+			`{"data":[{"v":1,"seq":1,"type":"log","data":{"stream":"nan-run","text":"one"}},{"v":1,"seq":2,"type":"log","data":{"stream":"nan-run","text":"two"}}],"next_after":2,"done":false}`,
+			`{"data":[{"v":1,"seq":3,"type":"log","data":{"stream":"nan-run","text":"three"}}],"next_after":3,"done":true}`,
+		},
+		"stuck cursor": {
+			`{"data":[{"v":1,"seq":1,"type":"log","data":{"stream":"nan-run","text":"one"}}],"next_after":1,"done":false}`,
+			`{"data":[{"v":1,"seq":2,"type":"log","data":{"stream":"nan-run","text":"two"}}],"next_after":1,"done":false}`,
+			`{"data":[{"v":1,"seq":3,"type":"log","data":{"stream":"nan-run","text":"never"}}],"next_after":5,"done":true}`,
+		},
+	} {
+		resetRunsFlags()
+		var afters []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			afters = append(afters, r.URL.Query().Get("after"))
+			_, _ = io.WriteString(w, pages[len(afters)-1])
+		}))
+		var stdout bytes.Buffer
+		env := &runsEnv{client: api.NewRunsClient("t", "").WithBaseURL(srv.URL), stdout: &stdout, stderr: io.Discard}
+		if err := doRunsLogs(context.Background(), env, testRunID); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		srv.Close()
+		switch name {
+		case "until done":
+			if strings.Join(afters, ",") != "0,2" || stdout.String() != "nan-run │ one\nnan-run │ two\nnan-run │ three\n" {
+				t.Errorf("%s: afters=%v stdout=%q", name, afters, stdout.String())
+			}
+		case "stuck cursor":
+			if strings.Join(afters, ",") != "0,1" || strings.Contains(stdout.String(), "never") {
+				t.Errorf("%s: afters=%v stdout=%q", name, afters, stdout.String())
+			}
+		}
+	}
+}
+
+func TestJSONOutputNeutralisesALoneC1Byte(t *testing.T) {
+	defer resetRunsFlags()
+	resetRunsFlags()
+	logsJSON = true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "{\"data\":[{\"v\":1,\"seq\":1,\"type\":\"log\",\"data\":{\"text\":\"a\x9b31m\"}}],\"next_after\":1,\"done\":true}")
+	}))
+	defer srv.Close()
+	var stdout bytes.Buffer
+	env := &runsEnv{client: api.NewRunsClient("t", "").WithBaseURL(srv.URL), stdout: &stdout, stderr: io.Discard}
+	if err := doRunsLogs(context.Background(), env, testRunID); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.IndexByte(stdout.Bytes(), 0x9b) >= 0 {
+		t.Errorf("raw 0x9b in --json output: %q", stdout.String())
+	}
+
+	h := newHarness(t, &fakePlatform{events: []string{"id: 1\nevent: run_event\ndata: {\"v\":1,\"seq\":1,\"type\":\"log\",\"data\":{\"text\":\"a\x9b31m\"}}\n\n"}})
+	opts := defaultOpts()
+	opts.json = true
+	if err := doRun(context.Background(), h.env, opts, []string{"x"}); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.IndexByte(h.stdout.Bytes(), 0x9b) >= 0 {
+		t.Errorf("raw 0x9b in nan run --json: %q", h.stdout.String())
+	}
+}
+
+func TestContradictoryWorktreeFlagsSayWhatIsWrong(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	rootCmd.SetArgs([]string{"run", "--worktree", "--no-worktree", "x"})
+	rootCmd.SetOut(io.Discard)
+	rootCmd.SetErr(io.Discard)
+	cmd, err := rootCmd.ExecuteC()
+	code, msg := exitCodeFor(cmd, err)
+	runOpts = runOptions{agent: "pi", timeout: 30 * time.Minute}
+	_ = runCmd.Flags().Set("worktree", "false")
+	_ = runCmd.Flags().Set("no-worktree", "false")
+	if code != exitUsage || !strings.Contains(msg, "pick one") {
+		t.Errorf("exit %d: %s", code, msg)
+	}
+}
+
+func TestReconnectsAreAnnounced(t *testing.T) {
+	h := newHarness(t, &fakePlatform{dropFirst: true})
+	if err := doRun(context.Background(), h.env, defaultOpts(), []string{"x"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(h.stderr.String(), "reconnecting (1/5)") {
+		t.Errorf("stderr = %q", h.stderr.String())
+	}
+}

@@ -74,7 +74,7 @@ var runsLogsCmd = &cobra.Command{
 
 With -f, follow the run until it ends and exit with its code, the same codes
 as nan run: 0 succeeded, 1 failed, 2 timed out, 3 cancelled, 4 workspace
-not set up for it.`,
+not set up for it. Ctrl-C stops following; the run goes on.`,
 	Args:        oneRunID,
 	Annotations: sysexits,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -174,9 +174,6 @@ func checkLsFlags() error {
 }
 
 func doRunsLs(ctx context.Context, env *runsEnv) error {
-	if err := checkLsFlags(); err != nil {
-		return err
-	}
 	list, err := env.client.ListRuns(ctx, api.ListRunsParams{Workspace: lsWorkspace, State: lsState, Limit: lsLimit})
 	if err != nil {
 		return apiExit(err, env.usingKey)

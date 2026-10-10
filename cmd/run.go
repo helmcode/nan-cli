@@ -65,6 +65,9 @@ Ctrl-C detaches and leaves the run going. A second Ctrl-C within 2 seconds
 cancels it. Scripts that may retry should pass --idempotency-key, so a
 retry after a lost connection returns the run instead of starting another.
 
+A prompt given as an argument ends up in your shell history and in ps; for
+anything sensitive use -f FILE or "-".
+
 Exit codes:
   0   the run succeeded
   1   the run failed
@@ -108,12 +111,13 @@ func init() {
 	f.StringVar(&runOpts.cwd, "cwd", "", "Directory in the workspace to run in (default: /home/nan)")
 	f.BoolVar(&runOpts.worktree, "worktree", false, "Always run in a separate git worktree")
 	f.BoolVar(&runOpts.noWorktree, "no-worktree", false, "Run in the directory itself, even inside a git repository")
-	f.DurationVar(&runOpts.timeout, "timeout", 30*time.Minute, "Stop the run after this long (1m to 2h)")
+	f.DurationVar(&runOpts.timeout, "timeout", 30*time.Minute, "Stop the run after this long, 1m to 2h (default 30m)")
 	f.BoolVar(&runOpts.detach, "detach", false, "Queue the run, print its id and return without streaming")
 	f.BoolVar(&runOpts.json, "json", false, "Print events as JSON lines, then the finished run (with --detach: the run)")
 	f.StringVar(&runOpts.idempotencyKey, "idempotency-key", "", "Retry-safe key: the same key and request return the run already created")
 	f.StringVarP(&runOpts.file, "file", "f", "", `Read the prompt from FILE ("-" for stdin)`)
-	runCmd.MarkFlagsMutuallyExclusive("worktree", "no-worktree")
+	// cobra would print the default as "30m0s"; the usage line says 30m.
+	f.Lookup("timeout").DefValue = "0s"
 }
 
 // runsEnv is everything the run commands touch outside themselves, so the
@@ -123,7 +127,6 @@ type runsEnv struct {
 	usingKey   bool
 	stdout     io.Writer
 	stderr     io.Writer
-	stdin      io.Reader
 	interrupts <-chan os.Signal
 }
 
@@ -143,16 +146,7 @@ func newRunsEnv() (*runsEnv, error) {
 		usingKey: sess.Token == "",
 		stdout:   os.Stdout,
 		stderr:   os.Stderr,
-		stdin:    os.Stdin,
 	}, nil
-}
-
-func doRun(ctx context.Context, env *runsEnv, opts runOptions, args []string) error {
-	req, err := buildRunRequest(promptInput{r: env.stdin}, opts, args)
-	if err != nil {
-		return err
-	}
-	return startRun(ctx, env, opts, req)
 }
 
 func startRun(ctx context.Context, env *runsEnv, opts runOptions, req *api.CreateRunRequest) error {
@@ -243,6 +237,10 @@ func follow(ctx context.Context, env *runsEnv, id string, after int64, asJSON, d
 	type outcome struct {
 		run *api.Run
 		err error
+	}
+	env.client.OnRetry = func(attempt, max int, err error) {
+		renderer.Flush()
+		fmt.Fprintf(env.stderr, "── stream dropped, reconnecting (%d/%d)…\n", attempt, max)
 	}
 	done := make(chan outcome, 1)
 	go func() {

@@ -61,8 +61,7 @@ func TestRunsLsValidatesFlags(t *testing.T) {
 	} {
 		resetRunsFlags()
 		set()
-		h := newHarness(t, &fakePlatform{})
-		if err := doRunsLs(context.Background(), h.env); exitCode(err) != exitUsage {
+		if err := checkLsFlags(); exitCode(err) != exitUsage {
 			t.Errorf("exit %d (%v)", exitCode(err), err)
 		}
 	}
@@ -131,11 +130,15 @@ func TestRunsLogsTextIsSanitised(t *testing.T) {
 
 func TestRunsLogsFollowExitsWithTheRunsCode(t *testing.T) {
 	defer resetRunsFlags()
-	for state, want := range map[string]int{"succeeded": 0, "failed": 1, "timed_out": 2, "cancelled": 3} {
+	for _, tc := range []struct {
+		state, errorCode string
+		want             int
+	}{{"succeeded", "", 0}, {"failed", "agent_failed", 1}, {"timed_out", "", 2}, {"cancelled", "", 3}, {"failed", "config_error", 4}} {
+		state, want := tc.state, tc.want
 		resetRunsFlags()
 		logsFollow = true
 		logsAfter = 1
-		h := newHarness(t, &fakePlatform{finalState: state})
+		h := newHarness(t, &fakePlatform{finalState: state, finalError: tc.errorCode})
 		err := doRunsLogs(context.Background(), h.env, testRunID)
 		if exitCode(err) != want {
 			t.Errorf("%s: exit %d (%v), want %d", state, exitCode(err), err, want)

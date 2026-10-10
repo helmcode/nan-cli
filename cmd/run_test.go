@@ -169,7 +169,7 @@ func newHarness(t *testing.T, fake *fakePlatform) *harness {
 		stderr:     &bytes.Buffer{},
 		interrupts: make(chan os.Signal, 2),
 	}
-	h.env = &runsEnv{client: client, stdout: h.stdout, stderr: h.stderr, stdin: strings.NewReader(""), interrupts: h.interrupts}
+	h.env = &runsEnv{client: client, stdout: h.stdout, stderr: h.stderr, interrupts: h.interrupts}
 	return h
 }
 
@@ -185,6 +185,20 @@ func exitCode(err error) int {
 }
 
 func defaultOpts() runOptions { return runOptions{agent: "pi"} }
+
+// doRun is what `nan run`'s RunE does once it has a session: build the
+// request from the arguments, then start and follow the run.
+func doRun(ctx context.Context, env *runsEnv, opts runOptions, args []string) error {
+	return doRunWithStdin(ctx, env, opts, args, strings.NewReader(""))
+}
+
+func doRunWithStdin(ctx context.Context, env *runsEnv, opts runOptions, args []string, stdin io.Reader) error {
+	req, err := buildRunRequest(promptInput{r: stdin}, opts, args)
+	if err != nil {
+		return err
+	}
+	return startRun(ctx, env, opts, req)
+}
 
 func TestRunStreamsAndExitsWithTheRunsCode(t *testing.T) {
 	for _, tc := range []struct {
@@ -558,8 +572,7 @@ func TestPromptFromFileAndStdin(t *testing.T) {
 	}
 
 	h = newHarness(t, &fakePlatform{})
-	h.env.stdin = strings.NewReader("from stdin")
-	if err := doRun(context.Background(), h.env, defaultOpts(), []string{"-"}); err != nil {
+	if err := doRunWithStdin(context.Background(), h.env, defaultOpts(), []string{"-"}, strings.NewReader("from stdin")); err != nil {
 		t.Fatal(err)
 	}
 	if h.fake.created["prompt"] != "from stdin" {

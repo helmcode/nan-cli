@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -445,8 +446,11 @@ func TestFollowGivesUpOnStreamsThatNeverWork(t *testing.T) {
 		go func() { _, err := c.Follow(context.Background(), runID, 0, func(Frame) {}); done <- err }()
 		select {
 		case err := <-done:
-			if !errors.Is(err, ErrStreamLost) || calls != 6 {
-				t.Errorf("%s: err=%v calls=%d", name, err, calls)
+			mu.Lock()
+			n := calls
+			mu.Unlock()
+			if !errors.Is(err, ErrStreamLost) || n != 6 {
+				t.Errorf("%s: err=%v calls=%d", name, err, n)
 			}
 		case <-time.After(3 * time.Second):
 			t.Fatalf("%s: reconnected forever", name)
@@ -505,27 +509,26 @@ func TestFollowRetryBudgetResetsOnWorkingConnections(t *testing.T) {
 }
 
 func TestFollowRetriesTooManyRequests(t *testing.T) {
-	calls := 0
+	var calls atomic.Int32
 	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		if calls == 1 {
+		if calls.Add(1) == 1 {
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, sseEnd("succeeded"))
 	}), "t", "")
-	if _, err := c.Follow(context.Background(), runID, 0, func(Frame) {}); err != nil || calls != 2 {
-		t.Errorf("err=%v calls=%d", err, calls)
+	if _, err := c.Follow(context.Background(), runID, 0, func(Frame) {}); err != nil || calls.Load() != 2 {
+		t.Errorf("err=%v calls=%d", err, calls.Load())
 	}
 }
 
 func TestFollowSkipsAMalformedEnd(t *testing.T) {
-	calls := 0
+	var calls atomic.Int32
 	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
+		n := calls.Add(1)
 		w.Header().Set("Content-Type", "text/event-stream")
-		if calls == 1 {
+		if n == 1 {
 			_, _ = io.WriteString(w, "event: end\ndata: {not json\n\n")
 			return
 		}
@@ -542,15 +545,15 @@ func TestFollowRefusesOversizedLinesAndFrames(t *testing.T) {
 		"line":  "data: " + strings.Repeat("a", maxSSELine+1) + "\n\n",
 		"frame": strings.Repeat("data: "+strings.Repeat("a", maxSSELine/2)+"\n", 10) + "\n",
 	} {
-		calls := 0
+		var calls atomic.Int32
 		c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			calls++
+			calls.Add(1)
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = io.WriteString(w, body)
 		}), "t", "")
 		_, err := c.Follow(context.Background(), runID, 0, func(Frame) {})
-		if err == nil || errors.Is(err, ErrStreamLost) || calls != 1 {
-			t.Errorf("%s: err=%v calls=%d (want a fatal error, no retry)", name, err, calls)
+		if err == nil || errors.Is(err, ErrStreamLost) || calls.Load() != 1 {
+			t.Errorf("%s: err=%v calls=%d (want a fatal error, no retry)", name, err, calls.Load())
 		}
 	}
 }
@@ -576,5 +579,50 @@ func TestTerminal(t *testing.T) {
 		if Terminal(state) != want {
 			t.Errorf("Terminal(%s) != %v", state, want)
 		}
+	}
+}
+
+// A server that ignores Last-Event-ID and replays old events before hanging
+// up has shown nothing new: that is not a working connection.
+func TestFollowReplaysAloneDoNotRefillTheBudget(t *testing.T) {
+	var calls atomic.Int32
+	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, sseEvent(1, "log", `{}`))
+	}), "t", "")
+	done := make(chan error, 1)
+	go func() { _, err := c.Follow(context.Background(), runID, 0, func(Frame) {}); done <- err }()
+	select {
+	case err := <-done:
+		// the first connection delivers seq 1 and closes (one failure, budget
+		// fresh), then five that only replay it use the rest
+		if !errors.Is(err, ErrStreamLost) || calls.Load() != 6 {
+			t.Errorf("err=%v calls=%d", err, calls.Load())
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("reconnected forever on replays")
+	}
+}
+
+func TestFollowRefusesAnEndForAnotherRun(t *testing.T) {
+	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, sseEnd("succeeded"))
+	}), "t", "")
+	if _, err := c.Follow(context.Background(), "00000000-0000-4000-8000-000000000000", 0, func(Frame) {}); err == nil {
+		t.Error("took the end of a different run as this one's")
+	}
+}
+
+func TestOnRetryHearsEachReconnect(t *testing.T) {
+	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}), "t", "")
+	var attempts []int
+	c.OnRetry = func(attempt, max int, err error) { attempts = append(attempts, attempt) }
+	_, _ = c.Follow(context.Background(), runID, 0, func(Frame) {})
+	if fmt.Sprint(attempts) != "[1 2 3 4 5]" {
+		t.Errorf("attempts = %v", attempts)
 	}
 }

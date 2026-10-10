@@ -135,3 +135,31 @@ func TestOutcomeIsOneSanitisedLine(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// encoding/json carries a json.RawMessage's bytes through verbatim, invalid
+// UTF-8 included, and a lone 0x9b is a C1 CSI to an 8-bit terminal.
+func TestSafeJSONNeutralisesInvalidUTF8InRawMessages(t *testing.T) {
+	var ev api.Event
+	if err := json.Unmarshal([]byte("{\"seq\":1,\"type\":\"log\",\"data\":{\"text\":\"a\x9b31mRED\"}}"), &ev); err != nil {
+		t.Fatal(err)
+	}
+	out, err := SafeJSON(ev, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.IndexByte(out, 0x9b) >= 0 || !json.Valid(out) {
+		t.Errorf("out = %q", out)
+	}
+	if !strings.Contains(string(out), `a\ufffd31mRED`) {
+		t.Errorf("out = %q", out)
+	}
+	if got, _ := SafeJSON(map[string]string{"t": "a\x7fb"}, false); strings.ContainsRune(string(got), 0x7f) {
+		t.Errorf("DEL left raw: %q", got)
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	if Truncate("hello", 3) != "he…" || Truncate("hi", 3) != "hi" || Truncate("x", 0) != "" {
+		t.Error("Truncate")
+	}
+}

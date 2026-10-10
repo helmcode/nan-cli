@@ -193,6 +193,10 @@ type RunsClient struct {
 	IdleTimeout   time.Duration
 	HealthyAfter  time.Duration
 	Backoff       func(attempt int) time.Duration
+
+	// OnRetry, when set, hears about each reconnect before its backoff, so
+	// a caller can say why nothing is arriving.
+	OnRetry func(attempt, max int, err error)
 }
 
 // NewRunsClient builds a client for the session token or, when there is none,
@@ -265,8 +269,8 @@ func (c *RunsClient) newRequest(ctx context.Context, method, path string, body a
 }
 
 // maxResponse caps what a JSON response may make this process hold. The
-// largest legitimate one is a page of 1000 events of at most 64 KiB each.
-const maxResponse = 80 << 20
+// largest this CLI asks for is a page of 500 events of at most 64 KiB each.
+const maxResponse = 40 << 20
 
 // do sends a request and decodes a 2xx JSON answer into out. It returns the
 // status so callers can tell a 201 from an idempotent 200.
@@ -500,6 +504,9 @@ func (c *RunsClient) Follow(ctx context.Context, id string, after int64, onFrame
 			}
 			return nil, fmt.Errorf("%w: %v", ErrStreamLost, lastErr)
 		}
+		if c.OnRetry != nil {
+			c.OnRetry(failures, c.StreamRetries, lastErr)
+		}
 		backoff := c.Backoff
 		if backoff == nil {
 			backoff = defaultBackoff
@@ -641,6 +648,9 @@ func (c *RunsClient) followOnce(ctx context.Context, id string, lastSeq *int64, 
 				eventName, eventID, data, dataBytes = "", "", nil, 0
 				run, delivered := dispatchFrame(name, frameID, payload, lastSeq, onFrame)
 				if run != nil {
+					if run.ID != id {
+						return nil, true, &fatalStreamError{errors.New("the event stream ended with a different run")}
+					}
 					return run, true, nil
 				}
 				if delivered {
@@ -684,8 +694,10 @@ func dispatchFrame(name, id, payload string, lastSeq *int64, onFrame func(Frame)
 				ev.Seq = n
 			}
 		}
+		// A replay of what was already shown is not progress: a server that
+		// ignored Last-Event-ID would otherwise keep the retry budget full.
 		if ev.Seq <= *lastSeq {
-			return nil, true
+			return nil, false
 		}
 		*lastSeq = ev.Seq
 		onFrame(Frame{Event: &ev})
@@ -696,7 +708,7 @@ func dispatchFrame(name, id, payload string, lastSeq *int64, onFrame func(Frame)
 			return nil, false
 		}
 		onFrame(Frame{State: &st})
-		return nil, true
+		return nil, false
 	case "end":
 		var run Run
 		if json.Unmarshal([]byte(payload), &run) != nil || run.ID == "" {
