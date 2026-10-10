@@ -51,6 +51,12 @@ secrets file of its own: there the key goes into its `.env` and the config
 carries a `${NAN_API_KEY}` reference, which is also why it never reaches a
 command line.
 
+The same holds for a platform token saved with `nan auth login --api-token`:
+it goes into `session.json` (and nowhere else, since it is not an inference
+key), read from stdin so it never reaches a command line. `NAN_TOKEN` is
+never written anywhere, and a `--token-file` that other users can read or
+write is refused rather than used.
+
 **On Windows the mode bits do nothing.** The files inherit the ACL of the user
 profile they sit in, which already excludes other non-administrator accounts,
 and an administrator can take ownership regardless. If you keep your home

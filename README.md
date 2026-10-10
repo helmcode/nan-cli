@@ -105,13 +105,27 @@ id=$(nan run --detach "upgrade the dependencies")
 | `--ws NAME` | your only workspace | Workspace to run in. Required when you have more than one. |
 | `--agent pi\|hermes` | `pi` | Agent to run. |
 | `--model M` | the agent's own | Model for the agent. |
-| `--cwd PATH` | `/home/nan` | Directory in the workspace. |
-| `--worktree` / `--no-worktree` | auto | Run in a separate git worktree (auto: when `--cwd` is in a git repo). |
+| `--cwd PATH` | `/home/nan` | Folder in the workspace. |
+| `--worktree` / `--no-worktree` | auto | Work on a separate branch, or in the folder itself. See below. |
 | `--timeout D` | `30m` | Stop the run after this long, `1m` to `2h`. |
 | `--detach` | | Queue the run, print its id and return. |
 | `--json` | | Events as JSON lines, then the finished run object. With `--detach`, the run object. |
 | `--idempotency-key K` | | Retrying with the same key and request returns the run already created. |
 | `-f FILE` | | Read the prompt from a file (`-` for stdin). |
+| `--token-file PATH` | | Authenticate with the token on the first line of `PATH`. See [Authentication](#authentication). |
+
+**Git branch.** By default (auto) a run inside a git repository works on its
+own branch, `nan-run/<first 8 chars of the run id>`, and commits there. It
+never pushes, and your checkout is untouched. Outside a repository it works in
+the folder itself. `--worktree` forces a branch (and fails outside a
+repository); `--no-worktree` works in the folder even inside a repository.
+
+**Queue.** If the workspace is already running as many runs as its size
+allows, the run waits as `queued` and starts when one of them ends.
+
+**In the portal** the same settings have other names: Folder is `--cwd`,
+Separate branch is `--worktree` / `--no-worktree`, Time limit is `--timeout`,
+and Task is the prompt.
 
 While it streams, **Ctrl-C** detaches and leaves the run going, and prints how
 to pick it up again. A second Ctrl-C within 2 seconds cancels the run.
@@ -154,8 +168,51 @@ branch on it without parsing text:
 | 69 | nan.builders unavailable, or the stream was lost after retries (the run goes on; the id is printed) |
 | 75 | `--detach`, or Ctrl-C: the run was accepted and is still going |
 
-The runs commands use your `nan auth login` session, or the API key from the
-Setup tab when there is no session.
+Full reference, including the event types `nan runs logs --json` prints (one
+JSON object per line): <https://nan.builders/docs/runs>.
+
+### Authentication
+
+`nan run` and `nan runs` use the first of these they find:
+
+1. **`NAN_TOKEN`**: an environment variable holding a platform token
+   (`nan_pat_...`) or an API key (`sk-...`). Read on every command, never
+   written to disk.
+2. **`--token-file PATH`**: the token on the first line of a file. The file
+   must be private (`chmod 600`); one that other users can read or write is
+   refused.
+3. **Your session**, from `nan auth login` (the emailed sign-in link).
+4. **A saved token**, from `nan auth login --api-token`.
+5. **The API key** saved in the Setup tab.
+
+Create platform tokens in **Settings > Tokens** at
+<https://cloud.nan.builders>. A token works for runs and for listing your
+workspaces, and nothing else: it is not an inference key, and `nan me`,
+`nan metrics` and the dashboard still need `nan auth login`.
+
+**Headless: CI or a server.** Keep the token in your CI's secret store and
+expose it as `NAN_TOKEN`. For example, in GitHub Actions:
+
+```yaml
+- name: Review the PR with an agent
+  env:
+    NAN_TOKEN: ${{ secrets.NAN_TOKEN }}
+  run: |
+    curl -fsSL https://nan.builders/install | bash
+    nan run --ws ci --timeout 20m -f .github/review-task.md
+```
+
+On a machine you set up once, save the token instead. It is read from stdin
+(hidden when you paste it), checked against nan.builders, and stored in
+`~/.config/nan/session.json` with mode `0600`:
+
+```bash
+nan auth login --api-token              # paste it when asked
+nan auth login --api-token < token.txt  # or pipe it in
+```
+
+Never put a token on the command line itself: it would end up in your shell
+history and in `ps`.
 
 ## Build from source
 
