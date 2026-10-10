@@ -68,7 +68,10 @@ func TestCredentialsNeverReachTheOutput(t *testing.T) {
 			h := newHarness(t, fake)
 			c := api.NewRunsClient(creds[0], creds[1]).WithBaseURL(h.url)
 			c.Backoff = func(int) time.Duration { return time.Millisecond }
-			h.env.client, h.env.usingKey = c, creds[0] == ""
+			h.env.client = c
+			if creds[0] == "" {
+				h.env.cred = credential{kind: credStoredKey, bearer: creds[1]}
+			}
 			for _, detach := range []bool{false, true} {
 				opts := defaultOpts()
 				opts.detach = detach

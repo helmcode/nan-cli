@@ -14,7 +14,6 @@ import (
 
 	"github.com/nxssie/nan-cli/internal/api"
 	"github.com/nxssie/nan-cli/internal/runs"
-	"github.com/nxssie/nan-cli/internal/session"
 	"github.com/spf13/cobra"
 )
 
@@ -116,6 +115,7 @@ func init() {
 	f.BoolVar(&runOpts.json, "json", false, "Print events as JSON lines, then the finished run (with --detach: the run)")
 	f.StringVar(&runOpts.idempotencyKey, "idempotency-key", "", "Retry-safe key: the same key and request return the run already created")
 	f.StringVarP(&runOpts.file, "file", "f", "", `Read the prompt from FILE ("-" for stdin)`)
+	f.StringVar(&tokenFileFlag, "token-file", "", tokenFileUsage)
 	// cobra would print the default as "30m0s"; the usage line says 30m.
 	f.Lookup("timeout").DefValue = "0s"
 }
@@ -124,28 +124,22 @@ func init() {
 // tests can hand them a mock server, buffers and a fake Ctrl-C.
 type runsEnv struct {
 	client     *api.RunsClient
-	usingKey   bool
+	cred       credential
 	stdout     io.Writer
 	stderr     io.Writer
 	interrupts <-chan os.Signal
 }
 
 func newRunsEnv() (*runsEnv, error) {
-	sess, err := session.Load()
+	cred, err := resolveCredential(os.Getenv, tokenFileFlag)
 	if err != nil {
-		if errors.Is(err, session.ErrNotLoggedIn) {
-			return nil, &ExitError{Code: exitAuth, Err: err}
-		}
-		return nil, exitf(exitAuth, "could not read your session (%v) — run: nan auth login", err)
-	}
-	if sess.Token == "" && sess.APIKey == "" {
-		return nil, &ExitError{Code: exitAuth, Err: session.ErrNotLoggedIn}
+		return nil, err
 	}
 	return &runsEnv{
-		client:   api.NewRunsClient(sess.Token, sess.APIKey),
-		usingKey: sess.Token == "",
-		stdout:   os.Stdout,
-		stderr:   os.Stderr,
+		client: cred.client(),
+		cred:   cred,
+		stdout: os.Stdout,
+		stderr: os.Stderr,
 	}, nil
 }
 
@@ -167,7 +161,7 @@ func startRun(ctx context.Context, env *runsEnv, opts runOptions, req *api.Creat
 		if errors.As(err, &apiErr) && apiErr.Code == "workspace_not_running" {
 			return exitf(exitUnavailable, "workspace %q is not running — start it at https://cloud.nan.builders and try again", runs.SanitizeLine(req.Workspace))
 		}
-		return apiExit(err, env.usingKey)
+		return apiExit(err, env.cred)
 	}
 	if !runIDPattern.MatchString(run.ID) {
 		return exitf(exitUnavailable, "nan.builders answered with something that is not a run id")
@@ -312,7 +306,7 @@ func follow(ctx context.Context, env *runsEnv, id string, after int64, asJSON, d
 		defer cancel()
 		run, changed, err := env.client.CancelRun(cancelCtx, id)
 		if err != nil {
-			return apiExit(err, env.usingKey)
+			return apiExit(err, env.cred)
 		}
 		if !changed {
 			fmt.Fprintf(env.stderr, "run %s had already ended: %s\n", safeID, runs.SanitizeLine(run.State))
@@ -328,7 +322,7 @@ func streamExit(err error, env *runsEnv, id string) error {
 	if errors.Is(err, api.ErrStreamLost) {
 		return exitf(exitUnavailable, "%s — run %s goes on in the workspace; follow it with: nan runs logs %s -f", runs.SanitizeLine(err.Error()), safeID, safeID)
 	}
-	exit := notFound(err, safeID, env.usingKey)
+	exit := notFound(err, safeID, env.cred)
 	if exit.Code == exitUnavailable {
 		return exitf(exitUnavailable, "%s (run %s)", runs.SanitizeLine(exit.Error()), safeID)
 	}
@@ -470,7 +464,7 @@ func readPrompt(in promptInput, opts runOptions, args []string) (string, error) 
 func defaultWorkspace(ctx context.Context, env *runsEnv) (string, error) {
 	list, err := env.client.ListWorkspaces(ctx)
 	if err != nil {
-		exit := apiExit(err, env.usingKey)
+		exit := apiExit(err, env.cred)
 		if exit.Code == exitAuth {
 			return "", exit
 		}

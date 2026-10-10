@@ -386,6 +386,7 @@ func TestExpiredSessionExits65(t *testing.T) {
 }
 
 func TestNoSessionExits65(t *testing.T) {
+	t.Setenv(tokenEnvVar, "")
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", os.Getenv("HOME"))
 	_, err := newRunsEnv()
@@ -395,6 +396,7 @@ func TestNoSessionExits65(t *testing.T) {
 }
 
 func TestAPIKeyIsUsedWithoutASession(t *testing.T) {
+	t.Setenv(tokenEnvVar, "")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -408,7 +410,7 @@ func TestAPIKeyIsUsedWithoutASession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !env.usingKey {
+	if !env.cred.usingKey() {
 		t.Error("a session with only an API key does not use it")
 	}
 }
