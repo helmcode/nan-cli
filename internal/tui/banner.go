@@ -165,41 +165,6 @@ func Welcome(indent string) string {
 	return b.String()
 }
 
-// WelcomeStacked is the other arrangement: a small label above the wordmark and
-// the name under it, the way the Copilot CLI lays its welcome out, instead of
-// everything sitting to the right.
-func WelcomeStacked(indent string) string {
-	corner := lipgloss.NewStyle().Foreground(lipgloss.Color(brandVioletDeep))
-	name, dim, text := styles()
-
-	const pad = 3
-	inner := wordmarkWidth + 2
-	body := indent + strings.Repeat(" ", pad)
-	edge := func(left, right string) string {
-		return indent + corner.Render(left) + strings.Repeat(" ", inner) + corner.Render(right)
-	}
-
-	// Right-aligned under the art, like the reference's "Command-line
-	// interface" under the logo.
-	under := name.Render("nan.builders") + dim.Render(" · cloud CLI v"+Version)
-	gap := wordmarkWidth - lipgloss.Width(under)
-	if gap < 0 {
-		gap = 0
-	}
-
-	var b strings.Builder
-	b.WriteString(edge("┌─", "─┐") + "\n\n")
-	b.WriteString(body + dim.Render("welcome to") + "\n")
-	for _, row := range wordmark {
-		b.WriteString(body + paint(row) + "\n")
-	}
-	b.WriteString(body + strings.Repeat(" ", gap) + under + "\n\n")
-	b.WriteString(body + text.Render("created by ") + name.Render("@Nxssie") + "\n")
-	b.WriteString(body + text.Render("maintained by ") + name.Render("Helmcode Team") + "\n")
-	b.WriteString("\n" + edge("└─", "─┘") + "\n")
-	return b.String()
-}
-
 // ── home ──────────────────────────────────────────────────────────────────────
 
 // renderHome is the first thing the panel shows: the wordmark, and how to move

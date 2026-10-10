@@ -23,9 +23,13 @@ var rootCmd = &cobra.Command{
 		DisableDefaultCmd: true,
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return tui.Run()
+		return openTUI()
 	},
 }
+
+// openTUI is the dashboard. A variable so a test can tell whether a command
+// line reached it.
+var openTUI = tui.Run
 
 func init() {
 	// SilenceUsage covers runtime failures, but a mistyped flag IS a usage
@@ -35,10 +39,10 @@ func init() {
 		return err
 	})
 
-	// The same wordmark the About tab draws, so `--version` and the panel are
-	// recognisably the same program. This one is framed and stacked, which a
-	// command that prints once and exits can afford and a tab cannot.
-	rootCmd.SetVersionTemplate("\n" + tui.WelcomeStacked("  ") + "\n")
+	// One line a script can parse (`nan --version | cut -d' ' -f2`). The
+	// framed wordmark this used to print filled the screen like the dashboard
+	// does, and read as the dashboard having opened.
+	rootCmd.SetVersionTemplate("nan {{.Version}}\n")
 }
 
 func Execute() {
