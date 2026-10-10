@@ -136,6 +136,7 @@ func sse(seq int, typ, data string) string {
 
 type harness struct {
 	fake       *fakePlatform
+	url        string
 	env        *runsEnv
 	stdout     *bytes.Buffer
 	stderr     *bytes.Buffer
@@ -163,6 +164,7 @@ func newHarness(t *testing.T, fake *fakePlatform) *harness {
 	client.IdleTimeout = 2 * time.Second
 	h := &harness{
 		fake:       fake,
+		url:        srv.URL,
 		stdout:     &bytes.Buffer{},
 		stderr:     &bytes.Buffer{},
 		interrupts: make(chan os.Signal, 2),

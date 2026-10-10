@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -189,6 +191,7 @@ type RunsClient struct {
 	// milliseconds instead of minutes.
 	StreamRetries int
 	IdleTimeout   time.Duration
+	HealthyAfter  time.Duration
 	Backoff       func(attempt int) time.Duration
 }
 
@@ -200,10 +203,11 @@ func NewRunsClient(token, apiKey string) *RunsClient {
 		baseURL:       RunsBaseURL,
 		token:         token,
 		apiKey:        apiKey,
-		http:          &http.Client{Timeout: requestTimeout},
-		stream:        &http.Client{},
+		http:          &http.Client{Timeout: requestTimeout, CheckRedirect: noRedirects},
+		stream:        &http.Client{CheckRedirect: noRedirects},
 		StreamRetries: 5,
 		IdleTimeout:   45 * time.Second,
+		HealthyAfter:  time.Minute,
 		Backoff:       defaultBackoff,
 	}
 }
@@ -213,6 +217,11 @@ func (c *RunsClient) WithBaseURL(u string) *RunsClient {
 	c.baseURL = strings.TrimRight(u, "/")
 	return c
 }
+
+// noRedirects keeps the credential on the request it was meant for. /v1/runs
+// never redirects, and Go's default policy would forward the cookie or the
+// Authorization header to a same-host http:// target.
+func noRedirects(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 func defaultBackoff(attempt int) time.Duration {
 	d := time.Second << attempt
@@ -441,6 +450,9 @@ type Frame struct {
 // 64 KiB; a line this long is not one of ours and is not worth buffering.
 const maxSSELine = 1 << 20
 
+// maxSSEFrame bounds the data of one frame, which can span many lines.
+const maxSSEFrame = 4 << 20
+
 var errIdle = errors.New("the stream went quiet")
 
 // fatalStreamError is a failure reconnecting cannot fix.
@@ -455,8 +467,7 @@ func (e *fatalStreamError) Unwrap() error { return e.err }
 // The stream is expected to break: the platform closes it after 30 minutes,
 // and a tunnel or a proxy in between can drop it at any time. A break is a
 // reconnect with Last-Event-ID, so nothing is lost or repeated; only
-// StreamRetries breaks in a row without a byte in between give up, as
-// ErrStreamLost. A 401 or a 404 is never retried.
+// StreamRetries failed connections in a row give up, as ErrStreamLost. A 401 or a 404 is never retried.
 func (c *RunsClient) Follow(ctx context.Context, id string, after int64, onFrame func(Frame)) (*Run, error) {
 	lastSeq := after
 	failures := 0
@@ -501,12 +512,24 @@ func (c *RunsClient) Follow(ctx context.Context, id string, after int64, onFrame
 	}
 }
 
-// followOnce runs one connection of the stream. progressed is whether it
-// read anything at all - a heartbeat counts - which is what tells a stream
-// that lived and was closed from one that never worked.
+// followOnce runs one connection of the stream. progressed is whether the
+// connection was a working one: it delivered a frame, or it stayed up and
+// heartbeating for HealthyAfter. Only a connection that did neither counts
+// towards giving up - otherwise something that answers 200 and hangs up
+// straight away, over and over, would never be given up on, and a quiet run
+// whose stream the platform recycles every 30 minutes would be.
 func (c *RunsClient) followOnce(ctx context.Context, id string, lastSeq *int64, onFrame func(Frame)) (end *Run, progressed bool, err error) {
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	idle := c.IdleTimeout
+	if idle <= 0 {
+		idle = 45 * time.Second
+	}
+	healthyAfter := c.HealthyAfter
+	if healthyAfter <= 0 {
+		healthyAfter = time.Minute
+	}
 
 	path := "/v1/runs/" + url.PathEscape(id) + "/events?after=" + strconv.FormatInt(*lastSeq, 10)
 	req, err := c.newRequest(connCtx, http.MethodGet, path, nil)
@@ -519,8 +542,21 @@ func (c *RunsClient) followOnce(ctx context.Context, id string, lastSeq *int64, 
 		req.Header.Set("Last-Event-ID", strconv.FormatInt(*lastSeq, 10))
 	}
 
+	// The idle limit covers the wait for the response headers too: a
+	// connection that is accepted and never answered is as dead as one that
+	// goes quiet halfway.
+	var headerTimedOut atomic.Bool
+	headerTimer := time.AfterFunc(idle, func() {
+		headerTimedOut.Store(true)
+		cancel()
+	})
+	started := time.Now()
 	resp, err := c.stream.Do(req)
+	headerTimer.Stop()
 	if err != nil {
+		if headerTimedOut.Load() && ctx.Err() == nil {
+			return nil, false, errIdle
+		}
 		return nil, false, err
 	}
 	defer resp.Body.Close()
@@ -535,6 +571,9 @@ func (c *RunsClient) followOnce(ctx context.Context, id string, lastSeq *int64, 
 			return nil, false, statusErr
 		}
 		return nil, false, &fatalStreamError{statusErr}
+	}
+	if mt, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type")); mt != "text/event-stream" {
+		return nil, false, fmt.Errorf("expected an event stream, got %q", resp.Header.Get("Content-Type"))
 	}
 
 	lines := make(chan string)
@@ -556,10 +595,6 @@ func (c *RunsClient) followOnce(ctx context.Context, id string, lastSeq *int64, 
 		}
 	}()
 
-	idle := c.IdleTimeout
-	if idle <= 0 {
-		idle = 45 * time.Second
-	}
 	timer := time.NewTimer(idle)
 	defer timer.Stop()
 
@@ -567,23 +602,26 @@ func (c *RunsClient) followOnce(ctx context.Context, id string, lastSeq *int64, 
 		eventName string
 		eventID   string
 		data      []string
+		dataBytes int
+		heard     bool
 	)
+	healthy := func() bool { return progressed || (heard && time.Since(started) >= healthyAfter) }
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, progressed, ctx.Err()
+			return nil, healthy(), ctx.Err()
 		case <-timer.C:
-			return nil, progressed, errIdle
+			return nil, healthy(), errIdle
 		case err := <-readErr:
 			if errors.Is(err, bufio.ErrTooLong) {
-				return nil, progressed, &fatalStreamError{fmt.Errorf("the platform sent a stream line over %d bytes", maxSSELine)}
+				return nil, healthy(), &fatalStreamError{fmt.Errorf("the platform sent a stream line over %d bytes", maxSSELine)}
 			}
 			if errors.Is(err, io.EOF) {
-				return nil, progressed, nil
+				return nil, healthy(), nil
 			}
-			return nil, progressed, err
+			return nil, healthy(), err
 		case line := <-lines:
-			progressed = true
+			heard = true
 			if !timer.Stop() {
 				select {
 				case <-timer.C:
@@ -600,9 +638,13 @@ func (c *RunsClient) followOnce(ctx context.Context, id string, lastSeq *int64, 
 				payload := strings.Join(data, "\n")
 				name := eventName
 				frameID := eventID
-				eventName, eventID, data = "", "", nil
-				if run := dispatchFrame(name, frameID, payload, lastSeq, onFrame); run != nil {
+				eventName, eventID, data, dataBytes = "", "", nil, 0
+				run, delivered := dispatchFrame(name, frameID, payload, lastSeq, onFrame)
+				if run != nil {
 					return run, true, nil
+				}
+				if delivered {
+					progressed = true
 				}
 				continue
 			}
@@ -617,6 +659,10 @@ func (c *RunsClient) followOnce(ctx context.Context, id string, lastSeq *int64, 
 			case "id":
 				eventID = value
 			case "data":
+				dataBytes += len(value)
+				if dataBytes > maxSSEFrame {
+					return nil, healthy(), &fatalStreamError{fmt.Errorf("the platform sent a stream frame over %d bytes", maxSSEFrame)}
+				}
 				data = append(data, value)
 			}
 		}
@@ -626,12 +672,12 @@ func (c *RunsClient) followOnce(ctx context.Context, id string, lastSeq *int64, 
 // dispatchFrame hands one complete frame to the caller, and returns the run
 // when the frame is `end`. Events at or below lastSeq were already delivered
 // on a previous connection and are dropped, so a replay never shows twice.
-func dispatchFrame(name, id, payload string, lastSeq *int64, onFrame func(Frame)) *Run {
+func dispatchFrame(name, id, payload string, lastSeq *int64, onFrame func(Frame)) (end *Run, delivered bool) {
 	switch name {
 	case "", "run_event":
 		var ev Event
 		if json.Unmarshal([]byte(payload), &ev) != nil {
-			return nil
+			return nil, false
 		}
 		if ev.Seq == 0 {
 			if n, err := strconv.ParseInt(id, 10, 64); err == nil {
@@ -639,22 +685,24 @@ func dispatchFrame(name, id, payload string, lastSeq *int64, onFrame func(Frame)
 			}
 		}
 		if ev.Seq <= *lastSeq {
-			return nil
+			return nil, true
 		}
 		*lastSeq = ev.Seq
 		onFrame(Frame{Event: &ev})
+		return nil, true
 	case "state":
 		var st StateChange
 		if json.Unmarshal([]byte(payload), &st) != nil {
-			return nil
+			return nil, false
 		}
 		onFrame(Frame{State: &st})
+		return nil, true
 	case "end":
 		var run Run
 		if json.Unmarshal([]byte(payload), &run) != nil || run.ID == "" {
-			return nil
+			return nil, false
 		}
-		return &run
+		return &run, true
 	}
-	return nil
+	return nil, false
 }

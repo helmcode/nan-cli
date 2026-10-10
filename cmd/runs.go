@@ -50,6 +50,9 @@ var runsLsCmd = &cobra.Command{
 	Args:        cobra.NoArgs,
 	Annotations: sysexits,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := checkLsFlags(); err != nil {
+			return err
+		}
 		return withRunsEnv(func(env *runsEnv) error { return doRunsLs(cmd.Context(), env) })
 	},
 }
@@ -57,7 +60,7 @@ var runsLsCmd = &cobra.Command{
 var runsShowCmd = &cobra.Command{
 	Use:         "show <id>",
 	Short:       "Show one run: state, result, prompt",
-	Args:        cobra.ExactArgs(1),
+	Args:        oneRunID,
 	Annotations: sysexits,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return withRunsEnv(func(env *runsEnv) error { return doRunsShow(cmd.Context(), env, args[0]) })
@@ -72,7 +75,7 @@ var runsLogsCmd = &cobra.Command{
 With -f, follow the run until it ends and exit with its code, the same codes
 as nan run: 0 succeeded, 1 failed, 2 timed out, 3 cancelled, 4 workspace
 not set up for it.`,
-	Args:        cobra.ExactArgs(1),
+	Args:        oneRunID,
 	Annotations: sysexits,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return withRunsEnv(func(env *runsEnv) error { return doRunsLogs(cmd.Context(), env, args[0]) })
@@ -82,7 +85,7 @@ not set up for it.`,
 var runsCancelCmd = &cobra.Command{
 	Use:         "cancel <id>",
 	Short:       "Cancel a queued or running run",
-	Args:        cobra.ExactArgs(1),
+	Args:        oneRunID,
 	Annotations: sysexits,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return withRunsEnv(func(env *runsEnv) error { return doRunsCancel(cmd.Context(), env, args[0]) })
@@ -136,14 +139,18 @@ func checkRunID(id string) error {
 	return nil
 }
 
-func ctxOrBackground(ctx context.Context) context.Context {
-	if ctx == nil {
-		return context.Background()
+// oneRunID is cobra.ExactArgs(1) with a message that says what is missing.
+func oneRunID(cmd *cobra.Command, args []string) error {
+	switch {
+	case len(args) == 0:
+		return usageErrorf("missing run id — see: nan runs ls")
+	case len(args) > 1:
+		return usageErrorf("one run id at a time")
 	}
-	return ctx
+	return checkRunID(args[0])
 }
 
-func notFound(err error, id string, usingKey bool) error {
+func notFound(err error, id string, usingKey bool) *ExitError {
 	var apiErr *api.APIError
 	if errors.As(err, &apiErr) && apiErr.Status == 404 {
 		return usageErrorf("run %s not found", id)
@@ -156,14 +163,21 @@ var validStates = map[string]bool{
 	api.StateSucceeded: true, api.StateFailed: true, api.StateCancelled: true, api.StateTimedOut: true,
 }
 
-func doRunsLs(ctx context.Context, env *runsEnv) error {
+func checkLsFlags() error {
 	if lsState != "" && !validStates[lsState] {
 		return usageErrorf("--state must be one of queued, starting, running, succeeded, failed, cancelled, timed_out")
 	}
 	if lsLimit < 1 || lsLimit > 100 {
 		return usageErrorf("--limit must be between 1 and 100")
 	}
-	list, err := env.client.ListRuns(ctxOrBackground(ctx), api.ListRunsParams{Workspace: lsWorkspace, State: lsState, Limit: lsLimit})
+	return nil
+}
+
+func doRunsLs(ctx context.Context, env *runsEnv) error {
+	if err := checkLsFlags(); err != nil {
+		return err
+	}
+	list, err := env.client.ListRuns(ctx, api.ListRunsParams{Workspace: lsWorkspace, State: lsState, Limit: lsLimit})
 	if err != nil {
 		return apiExit(err, env.usingKey)
 	}
@@ -171,7 +185,11 @@ func doRunsLs(ctx context.Context, env *runsEnv) error {
 		return printJSON(env.stdout, list, true)
 	}
 	if len(list.Data) == 0 {
-		fmt.Fprintln(env.stderr, "No runs yet. Start one with: nan run \"<prompt>\"")
+		if lsWorkspace != "" || lsState != "" {
+			fmt.Fprintln(env.stderr, "No runs match.")
+		} else {
+			fmt.Fprintln(env.stderr, "No runs yet. Start one with: nan run \"<prompt>\"")
+		}
 		return nil
 	}
 	tw := tabwriter.NewWriter(env.stdout, 0, 0, 2, ' ', 0)
@@ -189,7 +207,11 @@ func doRunsLs(ctx context.Context, env *runsEnv) error {
 		return err
 	}
 	if list.NextCursor != nil {
-		fmt.Fprintf(env.stderr, "showing the %d most recent — raise --limit (up to 100) for more\n", len(list.Data))
+		if lsLimit < 100 {
+			fmt.Fprintf(env.stderr, "showing the %d most recent — raise --limit (up to 100) for more\n", len(list.Data))
+		} else {
+			fmt.Fprintf(env.stderr, "showing the %d most recent — narrow it with --ws or --state\n", len(list.Data))
+		}
 	}
 	return nil
 }
@@ -206,7 +228,7 @@ func doRunsShow(ctx context.Context, env *runsEnv, id string) error {
 	if err := checkRunID(id); err != nil {
 		return err
 	}
-	run, err := env.client.GetRun(ctxOrBackground(ctx), id)
+	run, err := env.client.GetRun(ctx, id)
 	if err != nil {
 		return notFound(err, id, env.usingKey)
 	}
@@ -311,13 +333,13 @@ func doRunsLogs(ctx context.Context, env *runsEnv, id string) error {
 	if logsAfter < 0 {
 		return usageErrorf("--after cannot be negative")
 	}
-	ctx = ctxOrBackground(ctx)
 	if logsFollow {
 		return follow(ctx, env, id, logsAfter, logsJSON, false)
 	}
 
 	renderer := &runs.Renderer{Out: env.stdout}
 	after := logsAfter
+	done := false
 	for {
 		page, err := env.client.EventsPage(ctx, id, after, 500)
 		if err != nil {
@@ -332,12 +354,16 @@ func doRunsLogs(ctx context.Context, env *runsEnv, id string) error {
 				renderer.Event(ev)
 			}
 		}
+		done = page.Done
 		if page.Done || len(page.Data) == 0 || page.NextAfter <= after {
 			break
 		}
 		after = page.NextAfter
 	}
 	renderer.Flush()
+	if !done {
+		fmt.Fprintf(env.stderr, "run %s is still going — follow it with: nan runs logs %s -f\n", id, id)
+	}
 	return nil
 }
 
@@ -345,7 +371,7 @@ func doRunsCancel(ctx context.Context, env *runsEnv, id string) error {
 	if err := checkRunID(id); err != nil {
 		return err
 	}
-	run, changed, err := env.client.CancelRun(ctxOrBackground(ctx), id)
+	run, changed, err := env.client.CancelRun(ctx, id)
 	if err != nil {
 		return notFound(err, id, env.usingKey)
 	}

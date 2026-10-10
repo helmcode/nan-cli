@@ -62,13 +62,14 @@ argument is "-". The run happens in the workspace, not on this machine: it
 goes on if this command stops, and its log stays on nan.builders.
 
 Ctrl-C detaches and leaves the run going. A second Ctrl-C within 2 seconds
-cancels it.
+cancels it. Scripts that may retry should pass --idempotency-key, so a
+retry after a lost connection returns the run instead of starting another.
 
 Exit codes:
   0   the run succeeded
   1   the run failed
   2   the run timed out
-  3   the run was cancelled
+  3   the run was cancelled (after a double Ctrl-C: cancel requested)
   4   the workspace is not set up for it (agent not installed, no inference
       key, bad configuration)
   64  usage error
@@ -84,11 +85,17 @@ Exit codes:
 	RunE: func(cmd *cobra.Command, args []string) error {
 		opts := runOpts
 		opts.timeoutSet = cmd.Flags().Changed("timeout")
+		// The arguments first: a usage mistake is the thing to report, even
+		// on a machine that is not signed in.
+		req, err := buildRunRequest(promptInput{r: os.Stdin, tty: isTerminal(os.Stdin), notice: os.Stderr}, opts, args)
+		if err != nil {
+			return err
+		}
 		env, err := newRunsEnv()
 		if err != nil {
 			return err
 		}
-		return runtimeError(doRun(cmd.Context(), env, opts, args))
+		return runtimeError(startRun(cmd.Context(), env, opts, req))
 	},
 }
 
@@ -141,13 +148,14 @@ func newRunsEnv() (*runsEnv, error) {
 }
 
 func doRun(ctx context.Context, env *runsEnv, opts runOptions, args []string) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	req, err := buildRunRequest(env, opts, args)
+	req, err := buildRunRequest(promptInput{r: env.stdin}, opts, args)
 	if err != nil {
 		return err
 	}
+	return startRun(ctx, env, opts, req)
+}
+
+func startRun(ctx context.Context, env *runsEnv, opts runOptions, req *api.CreateRunRequest) error {
 	if req.Workspace == "" {
 		name, err := defaultWorkspace(ctx, env)
 		if err != nil {
@@ -167,7 +175,10 @@ func doRun(ctx context.Context, env *runsEnv, opts runOptions, args []string) er
 		}
 		return apiExit(err, env.usingKey)
 	}
-	id := runs.SanitizeLine(run.ID)
+	if !runIDPattern.MatchString(run.ID) {
+		return exitf(exitUnavailable, "nan.builders answered with something that is not a run id")
+	}
+	id := run.ID
 
 	if replayed {
 		fmt.Fprintf(env.stderr, "run %s already exists for this idempotency key (%s)\n", id, runs.SanitizeLine(run.State))
@@ -205,6 +216,7 @@ func follow(ctx context.Context, env *runsEnv, id string, after int64, asJSON, d
 
 	renderer := &runs.Renderer{Out: env.stdout}
 	var writeErr error
+	lastState := ""
 	onFrame := func(f api.Frame) {
 		switch {
 		case f.Event != nil && asJSON:
@@ -214,6 +226,11 @@ func follow(ctx context.Context, env *runsEnv, id string, after int64, asJSON, d
 		case f.Event != nil:
 			renderer.Event(*f.Event)
 		case f.State != nil && !asJSON:
+			// A reconnect can repeat the state the stream was already in.
+			if f.State.State == lastState {
+				return
+			}
+			lastState = f.State.State
 			renderer.Flush()
 			state := runs.SanitizeLine(strings.ReplaceAll(f.State.State, "_", " "))
 			if f.State.ErrorCode != nil && *f.State.ErrorCode != "" {
@@ -237,18 +254,19 @@ func follow(ctx context.Context, env *runsEnv, id string, after int64, asJSON, d
 	// before that there is nothing to detach from, and a member stuck behind
 	// a slow request should be able to leave the ordinary way.
 	var interrupts <-chan os.Signal
+	release := func() {}
 	if detachable {
 		interrupts = env.interrupts
 		if interrupts == nil {
 			ch := make(chan os.Signal, 2)
 			signal.Notify(ch, os.Interrupt)
-			defer signal.Stop(ch)
+			release = func() { signal.Stop(ch) }
+			defer release()
 			interrupts = ch
 		}
 	}
 
-	select {
-	case res := <-done:
+	finish := func(res outcome) error {
 		renderer.Flush()
 		if res.err != nil {
 			return streamExit(res.err, env, id)
@@ -264,10 +282,20 @@ func follow(ctx context.Context, env *runsEnv, id string, after int64, asJSON, d
 			fmt.Fprintln(env.stderr, runs.Outcome(res.run))
 		}
 		return runExit(res.run)
+	}
+
+	select {
+	case res := <-done:
+		return finish(res)
 
 	case <-interrupts:
 		stopStream()
-		<-done
+		res := <-done
+		// The run may have ended in the same instant: then there is nothing
+		// to detach from, and its outcome is the answer.
+		if res.run != nil {
+			return finish(res)
+		}
 		renderer.Flush()
 		safeID := runs.SanitizeLine(id)
 		fmt.Fprintf(env.stderr, "\ndetached — run %s goes on in the workspace\n", safeID)
@@ -279,6 +307,9 @@ func follow(ctx context.Context, env *runsEnv, id string, after int64, asJSON, d
 		case <-time.After(cancelWindow):
 			return &ExitError{Code: exitDetached}
 		}
+		// From here a further Ctrl-C leaves the ordinary way, rather than
+		// sitting unheard behind the cancel request.
+		release()
 		cancelCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		run, changed, err := env.client.CancelRun(cancelCtx, id)
@@ -289,7 +320,7 @@ func follow(ctx context.Context, env *runsEnv, id string, after int64, asJSON, d
 			fmt.Fprintf(env.stderr, "run %s had already ended: %s\n", safeID, runs.SanitizeLine(run.State))
 			return runExit(run)
 		}
-		fmt.Fprintf(env.stderr, "cancel requested for run %s — check it with: nan runs show %s\n", safeID, safeID)
+		fmt.Fprintf(env.stderr, "cancel requested for run %s — it stops within seconds; check with: nan runs show %s\n", safeID, safeID)
 		return &ExitError{Code: exitCancelled}
 	}
 }
@@ -297,15 +328,11 @@ func follow(ctx context.Context, env *runsEnv, id string, after int64, asJSON, d
 func streamExit(err error, env *runsEnv, id string) error {
 	safeID := runs.SanitizeLine(id)
 	if errors.Is(err, api.ErrStreamLost) {
-		return exitf(exitUnavailable, "%v — run %s goes on in the workspace; follow it with: nan runs logs %s -f", err, safeID, safeID)
+		return exitf(exitUnavailable, "%s — run %s goes on in the workspace; follow it with: nan runs logs %s -f", runs.SanitizeLine(err.Error()), safeID, safeID)
 	}
-	var apiErr *api.APIError
-	if errors.As(err, &apiErr) && apiErr.Status == 404 {
-		return usageErrorf("run %s not found", safeID)
-	}
-	exit := apiExit(err, env.usingKey)
+	exit := notFound(err, safeID, env.usingKey)
 	if exit.Code == exitUnavailable {
-		return exitf(exitUnavailable, "%v (run %s)", exit.Err, safeID)
+		return exitf(exitUnavailable, "%s (run %s)", runs.SanitizeLine(exit.Error()), safeID)
 	}
 	return exit
 }
@@ -326,7 +353,20 @@ func printJSON(w io.Writer, v any, indent bool) error {
 
 // buildRunRequest checks the flags and reads the prompt. Everything here is
 // a usage error: nothing has been sent yet.
-func buildRunRequest(env *runsEnv, opts runOptions, args []string) (*api.CreateRunRequest, error) {
+// promptInput is where a "-" prompt comes from. With tty set, a notice says
+// the command is waiting for it, which otherwise looks exactly like a hang.
+type promptInput struct {
+	r      io.Reader
+	tty    bool
+	notice io.Writer
+}
+
+func isTerminal(f *os.File) bool {
+	info, err := f.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+func buildRunRequest(in promptInput, opts runOptions, args []string) (*api.CreateRunRequest, error) {
 	if opts.agent != "pi" && opts.agent != "hermes" {
 		return nil, usageErrorf("--agent must be pi or hermes, not %q", opts.agent)
 	}
@@ -340,7 +380,7 @@ func buildRunRequest(env *runsEnv, opts runOptions, args []string) (*api.CreateR
 		return nil, usageErrorf("--idempotency-key must be 1-128 of letters, digits and . _ : -")
 	}
 
-	prompt, err := readPrompt(env, opts, args)
+	prompt, err := readPrompt(in, opts, args)
 	if err != nil {
 		return nil, err
 	}
@@ -373,7 +413,7 @@ func buildRunRequest(env *runsEnv, opts runOptions, args []string) (*api.CreateR
 	return req, nil
 }
 
-func readPrompt(env *runsEnv, opts runOptions, args []string) (string, error) {
+func readPrompt(in promptInput, opts runOptions, args []string) (string, error) {
 	const how = `pass it as an argument, with -f FILE, or "-" to read stdin`
 	if len(args) > 1 {
 		return "", usageErrorf("the prompt is one argument — quote it, or %s", how)
@@ -388,7 +428,13 @@ func readPrompt(env *runsEnv, opts runOptions, args []string) (string, error) {
 	)
 	switch {
 	case opts.file == "-" || (len(args) == 1 && args[0] == "-"):
-		raw, err = io.ReadAll(io.LimitReader(env.stdin, maxPromptBytes+1))
+		if in.tty && in.notice != nil {
+			fmt.Fprintln(in.notice, "reading the prompt from stdin — end it with Ctrl-D")
+		}
+		if in.r == nil {
+			return "", usageErrorf("no stdin to read the prompt from")
+		}
+		raw, err = io.ReadAll(io.LimitReader(in.r, maxPromptBytes+1))
 		if err != nil {
 			return "", usageErrorf("could not read the prompt from stdin: %v", err)
 		}

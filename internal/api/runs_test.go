@@ -399,3 +399,182 @@ func TestFollowStopsWhenTheContextIsCancelled(t *testing.T) {
 		t.Errorf("got %v", err)
 	}
 }
+
+// A connection that is accepted and never answered must not hang the CLI:
+// the idle limit covers the wait for the headers as well.
+func TestFollowTimesOutWaitingForHeaders(t *testing.T) {
+	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}), "t", "")
+	c.IdleTimeout = 30 * time.Millisecond
+	c.StreamRetries = 1
+	done := make(chan error, 1)
+	go func() { _, err := c.Follow(context.Background(), runID, 0, func(Frame) {}); done <- err }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrStreamLost) {
+			t.Errorf("got %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Follow hung on a server that never sends headers")
+	}
+}
+
+// Something in between answering 200 with JSON - or with a heartbeat and a
+// hang-up - must count as a failure, or the client reconnects forever.
+func TestFollowGivesUpOnStreamsThatNeverWork(t *testing.T) {
+	for name, h := range map[string]http.HandlerFunc{
+		"not an event stream": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"data":[]}`)
+		},
+		"heartbeat and hang up": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, ": hb\n\n")
+		},
+	} {
+		var mu sync.Mutex
+		calls := 0
+		c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			calls++
+			mu.Unlock()
+			h(w, r)
+		}), "t", "")
+		done := make(chan error, 1)
+		go func() { _, err := c.Follow(context.Background(), runID, 0, func(Frame) {}); done <- err }()
+		select {
+		case err := <-done:
+			if !errors.Is(err, ErrStreamLost) || calls != 6 {
+				t.Errorf("%s: err=%v calls=%d", name, err, calls)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("%s: reconnected forever", name)
+		}
+	}
+}
+
+// The budget is for failures in a row: a connection that delivered frames,
+// or that stayed up heartbeating, starts the count again.
+func TestFollowRetryBudgetResetsOnWorkingConnections(t *testing.T) {
+	t.Run("frames", func(t *testing.T) {
+		var mu sync.Mutex
+		calls := 0
+		c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			calls++
+			n := calls
+			mu.Unlock()
+			switch {
+			case n == 4:
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, sseEvent(1, "log", `{}`))
+			case n == 8:
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, sseEnd("succeeded"))
+			default:
+				w.WriteHeader(http.StatusServiceUnavailable)
+			}
+		}), "t", "")
+		if _, err := c.Follow(context.Background(), runID, 0, func(Frame) {}); err != nil {
+			t.Fatalf("7 failures split by a working connection gave up: %v", err)
+		}
+	})
+	t.Run("long-lived heartbeats", func(t *testing.T) {
+		var mu sync.Mutex
+		calls := 0
+		c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			calls++
+			n := calls
+			mu.Unlock()
+			w.Header().Set("Content-Type", "text/event-stream")
+			if n < 9 {
+				_, _ = io.WriteString(w, ": hb\n\n")
+				w.(http.Flusher).Flush()
+				time.Sleep(20 * time.Millisecond)
+				return
+			}
+			_, _ = io.WriteString(w, sseEnd("succeeded"))
+		}), "t", "")
+		c.HealthyAfter = 10 * time.Millisecond
+		if _, err := c.Follow(context.Background(), runID, 0, func(Frame) {}); err != nil {
+			t.Fatalf("a quiet run whose stream is recycled gave up: %v", err)
+		}
+	})
+}
+
+func TestFollowRetriesTooManyRequests(t *testing.T) {
+	calls := 0
+	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, sseEnd("succeeded"))
+	}), "t", "")
+	if _, err := c.Follow(context.Background(), runID, 0, func(Frame) {}); err != nil || calls != 2 {
+		t.Errorf("err=%v calls=%d", err, calls)
+	}
+}
+
+func TestFollowSkipsAMalformedEnd(t *testing.T) {
+	calls := 0
+	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "text/event-stream")
+		if calls == 1 {
+			_, _ = io.WriteString(w, "event: end\ndata: {not json\n\n")
+			return
+		}
+		_, _ = io.WriteString(w, sseEnd("failed"))
+	}), "t", "")
+	run, err := c.Follow(context.Background(), runID, 0, func(Frame) {})
+	if err != nil || run.State != StateFailed {
+		t.Errorf("run=%v err=%v", run, err)
+	}
+}
+
+func TestFollowRefusesOversizedLinesAndFrames(t *testing.T) {
+	for name, body := range map[string]string{
+		"line":  "data: " + strings.Repeat("a", maxSSELine+1) + "\n\n",
+		"frame": strings.Repeat("data: "+strings.Repeat("a", maxSSELine/2)+"\n", 10) + "\n",
+	} {
+		calls := 0
+		c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, body)
+		}), "t", "")
+		_, err := c.Follow(context.Background(), runID, 0, func(Frame) {})
+		if err == nil || errors.Is(err, ErrStreamLost) || calls != 1 {
+			t.Errorf("%s: err=%v calls=%d (want a fatal error, no retry)", name, err, calls)
+		}
+	}
+}
+
+// /v1/runs never redirects, and following one would carry the credential to
+// wherever it points.
+func TestRunsClientDoesNotFollowRedirects(t *testing.T) {
+	hit := false
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true }))
+	defer target.Close()
+	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusFound)
+	}), "secret-session", "")
+	_, _ = c.GetRun(context.Background(), runID)
+	_, _ = c.Follow(context.Background(), runID, 0, func(Frame) {})
+	if hit {
+		t.Error("followed a redirect with the session attached")
+	}
+}
+
+func TestTerminal(t *testing.T) {
+	for state, want := range map[string]bool{"queued": false, "starting": false, "running": false, "succeeded": true, "failed": true, "cancelled": true, "timed_out": true} {
+		if Terminal(state) != want {
+			t.Errorf("Terminal(%s) != %v", state, want)
+		}
+	}
+}

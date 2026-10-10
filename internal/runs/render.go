@@ -290,6 +290,9 @@ func Outcome(run *api.Run) string {
 	return b.String()
 }
 
+// jsonUnsafe is what encoding/json leaves raw and a terminal may act on.
+func jsonUnsafe(r rune) bool { return r == 0x7f || (r >= 0x80 && unsafeRune(r)) }
+
 // SafeJSON marshals v for --json output. encoding/json already escapes C0
 // controls, ESC included; it leaves C1 controls and the bidi overrides as raw
 // UTF-8, which some terminals still act on when the output is read on one. It
@@ -306,12 +309,12 @@ func SafeJSON(v any, indent bool) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !strings.ContainsFunc(string(out), func(r rune) bool { return r >= 0x80 && unsafeRune(r) }) {
+	if !strings.ContainsFunc(string(out), jsonUnsafe) {
 		return out, nil
 	}
 	var b strings.Builder
 	for _, r := range string(out) {
-		if r >= 0x80 && unsafeRune(r) {
+		if jsonUnsafe(r) {
 			fmt.Fprintf(&b, `\u%04x`, r)
 			continue
 		}

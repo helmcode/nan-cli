@@ -116,6 +116,16 @@ id=$(nan run --detach "upgrade the dependencies")
 While it streams, **Ctrl-C** detaches and leaves the run going, and prints how
 to pick it up again. A second Ctrl-C within 2 seconds cancels the run.
 
+`--detach` exits 75 on purpose (the run is still going), so under `set -e`
+allow for it:
+
+```bash
+id=$(nan run --detach "upgrade the dependencies") || [ $? -eq 75 ]
+```
+
+A script that may retry should pass `--idempotency-key`: a retry after a lost
+connection then gets the run it already started instead of a second one.
+
 Everything the agent prints is shown with escape sequences and control
 characters removed: the output comes from your workspace, and it is not
 allowed to drive your terminal.
@@ -137,7 +147,7 @@ branch on it without parsing text:
 | 0 | succeeded |
 | 1 | failed |
 | 2 | timed out |
-| 3 | cancelled |
+| 3 | cancelled (after a double Ctrl-C: cancel requested — `nan runs show` has the final state) |
 | 4 | the workspace is not set up for it: agent not installed, no inference key, bad configuration |
 | 64 | usage error (also: more than one workspace and no `--ws`) |
 | 65 | not signed in, session expired, or not allowed |
