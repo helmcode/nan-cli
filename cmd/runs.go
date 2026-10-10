@@ -32,8 +32,14 @@ var (
 )
 
 var runsCmd = &cobra.Command{
-	Use:         "runs",
-	Short:       "List, inspect, follow and cancel agent runs",
+	Use:   "runs",
+	Short: "List, inspect, follow and cancel agent runs",
+	Long: `List, inspect, follow and cancel the agent runs started with nan run, from
+the portal, or by your automations. They authenticate the same way as nan
+run: NAN_TOKEN, --token-file PATH, your nan auth login session, or a token
+saved with nan auth login --api-token (see: nan run --help).
+
+Docs: https://nan.builders/docs/runs`,
 	Annotations: sysexits,
 	Args:        cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -70,11 +76,20 @@ var runsShowCmd = &cobra.Command{
 var runsLogsCmd = &cobra.Command{
 	Use:   "logs <id>",
 	Short: "Print a run's events (-f to follow until it ends)",
-	Long: `Print a run's events.
+	Long: `Print a run's events. Their types: started, message (what the agent
+says), tool_call and tool_result, log (agent stdout and stderr), artifact,
+error, truncated (output was cut), and finished.
 
 With -f, follow the run until it ends and exit with its code, the same codes
 as nan run: 0 succeeded, 1 failed, 2 timed out, 3 cancelled, 4 workspace
-not set up for it. Ctrl-C stops following; the run goes on.`,
+not set up for it. Ctrl-C stops following; the run goes on.
+
+With --json, print one event per line as a JSON object (seq, ts, type,
+data), then, with -f, the finished run. The event types and their data are
+described in the docs. --after N starts after event number N, to pick up
+where an earlier read stopped.
+
+Docs: https://nan.builders/docs/runs`,
 	Args:        oneRunID,
 	Annotations: sysexits,
 	RunE: func(cmd *cobra.Command, args []string) error {

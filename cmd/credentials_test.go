@@ -351,3 +351,29 @@ func fmtErr(err error) string {
 }
 
 func apiListOne() api.ListRunsParams { return api.ListRunsParams{Limit: 1} }
+
+// Through the command line: --token-file reaches the request.
+func TestRunsLsWithTokenFileFlag(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("Authorization")
+		_, _ = io.WriteString(w, `{"object":"list","data":[],"next_cursor":null}`)
+	}))
+	defer srv.Close()
+	old := runsBaseURL
+	runsBaseURL = srv.URL
+	defer func() { runsBaseURL = old }()
+	fakeHome(t, `{"token":"sess-1"}`)
+	path := writeTokenFile(t, testPAT+"\n", 0o600)
+	defer func() { tokenFileFlag = "" }()
+
+	rootCmd.SetArgs([]string{"runs", "ls", "--token-file", path})
+	rootCmd.SetOut(io.Discard)
+	rootCmd.SetErr(io.Discard)
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if got != "Bearer "+testPAT {
+		t.Errorf("Authorization = %q", got)
+	}
+}
