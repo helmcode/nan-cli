@@ -4,7 +4,7 @@ Thanks for your interest in contributing. This document covers how to get the pr
 
 ## Prerequisites
 
-- **Go 1.26.8+** — the version in `go.mod`, which is where the standard
+- **Go 1.26.9+** — the version in `go.mod`, which is where the standard
   library carries the current security fixes. The project uses [mise](https://mise.jdx.dev/) to pin the version. Run `mise install` in the repo root and Go will be available automatically.
 - A [nan.builders](https://nan.builders) account with an API key (needed to test the TUI at runtime).
 

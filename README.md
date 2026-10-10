@@ -159,7 +159,7 @@ Setup tab when there is no session.
 
 ## Build from source
 
-Requires Go 1.26.8+ ([mise](https://mise.jdx.dev/) recommended) — the version
+Requires Go 1.26.9+ ([mise](https://mise.jdx.dev/) recommended) — the version
 in `go.mod`, which is where the standard library carries the current security
 fixes:
 
