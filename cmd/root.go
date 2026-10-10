@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -41,8 +42,32 @@ func init() {
 }
 
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+	cmd, err := rootCmd.ExecuteC()
+	if err == nil {
+		return
 	}
+	code, msg := exitCodeFor(cmd, err)
+	if msg != "" {
+		fmt.Fprintln(os.Stderr, msg)
+	}
+	os.Exit(code)
+}
+
+// exitCodeFor is how a failed command ends. `nan run` and `nan runs` have a
+// documented table, and a script reads their codes: there anything that is
+// not already an ExitError is cobra refusing the arguments - an unknown
+// flag, a missing id, two flags that exclude each other - which is a usage
+// error. Every other command keeps exiting 1.
+func exitCodeFor(cmd *cobra.Command, err error) (int, string) {
+	var exit *ExitError
+	if errors.As(err, &exit) {
+		if exit.Err == nil {
+			return exit.Code, ""
+		}
+		return exit.Code, exit.Err.Error()
+	}
+	if cmd != nil && cmd.Annotations[sysexitsAnnotation] != "" {
+		return exitUsage, err.Error()
+	}
+	return 1, err.Error()
 }
