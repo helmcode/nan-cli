@@ -48,11 +48,15 @@ func usageErrorf(format string, args ...any) *ExitError {
 	return exitf(exitUsage, format, args...)
 }
 
-// authError is a refused or missing credential, with the one command that
-// fixes it.
-func authError(usingKey bool) *ExitError {
-	if usingKey {
-		return exitf(exitAuth, "nan.builders refused your API key — run: nan auth login")
+// authError is a refused credential, named (never shown) with what fixes it.
+func authError(cred credential) *ExitError {
+	switch cred.kind {
+	case credEnv, credFile:
+		return exitf(exitAuth, "nan.builders refused %s: it may be revoked or expired; create a new one in Settings > Tokens at https://cloud.nan.builders", cred.describe())
+	case credStoredToken:
+		return exitf(exitAuth, "nan.builders refused %s. Save a new one with: nan auth login --api-token. While a token is saved, it is used before your email session; nan auth logout removes it", cred.describe())
+	case credStoredKey:
+		return exitf(exitAuth, "nan.builders refused %s: run: nan auth login", cred.describe())
 	}
 	return exitf(exitAuth, "%v — run: nan auth login", api.ErrSessionExpired)
 }
@@ -60,13 +64,13 @@ func authError(usingKey bool) *ExitError {
 // apiExit maps a failed request onto an exit code and a message that says
 // what to do next. The platform's own message is guest-adjacent text too, so
 // it is sanitised like everything else.
-func apiExit(err error, usingKey bool) *ExitError {
+func apiExit(err error, cred credential) *ExitError {
 	var exit *ExitError
 	if errors.As(err, &exit) {
 		return exit
 	}
 	if errors.Is(err, api.ErrSessionExpired) {
-		return authError(usingKey)
+		return authError(cred)
 	}
 	if errors.Is(err, session.ErrNotLoggedIn) {
 		return &ExitError{Code: exitAuth, Err: err}

@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/nxssie/nan-cli/internal/api"
-	"github.com/nxssie/nan-cli/internal/session"
 	"github.com/spf13/cobra"
 )
 
@@ -20,7 +19,7 @@ func init() {
 }
 
 func runMe(cmd *cobra.Command, args []string) error {
-	sess, err := session.Load()
+	sess, err := requireSession("nan me")
 	if err != nil {
 		return err
 	}

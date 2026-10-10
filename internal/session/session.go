@@ -9,10 +9,19 @@ import (
 )
 
 type Session struct {
-	Token        string          `json:"token"`
-	APIKey       string          `json:"apiKey,omitempty"`
-	EnabledTools map[string]bool `json:"enabledTools,omitempty"`
+	Token  string `json:"token"`
+	APIKey string `json:"apiKey,omitempty"`
+	// PlatformToken is a nan_pat_ token saved with `nan auth login
+	// --api-token`. It is kept apart from APIKey because the Setup tab writes
+	// APIKey into every tool it configures, and the inference API refuses
+	// platform tokens.
+	PlatformToken string          `json:"platformToken,omitempty"`
+	EnabledTools  map[string]bool `json:"enabledTools,omitempty"`
 }
+
+// TokenEnvVar is the environment variable `nan run` and `nan runs` read a
+// platform token or an API key from. Nothing writes it to disk.
+const TokenEnvVar = "NAN_TOKEN"
 
 var ErrNotLoggedIn = errors.New("not logged in — run: nan auth login")
 

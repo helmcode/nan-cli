@@ -113,3 +113,35 @@ func TestASessionThatExpiresLaterDoesNotGrabTheKeyboard(t *testing.T) {
 		t.Error("an expiry mid-session threw the member into the sign-in")
 	}
 }
+
+// A platform token does not open the dashboard; the sign-in says so instead
+// of asking for an email as if nothing were set up.
+func TestSignInExplainsAPlatformToken(t *testing.T) {
+	t.Setenv("NAN_TOKEN", "")
+	m := setupModel(t, &session.Session{})
+	m.startLogin()
+	if m.loginMsg != "" {
+		t.Errorf("a machine with nothing set up gets %q", m.loginMsg)
+	}
+
+	for name, setup := range map[string]func() *session.Session{
+		"saved": func() *session.Session { return &session.Session{PlatformToken: "nan_pat_x"} },
+		"env": func() *session.Session {
+			t.Setenv("NAN_TOKEN", "nan_pat_x")
+			return &session.Session{}
+		},
+	} {
+		m := setupModel(t, setup())
+		m.lay = newLayout(90, 30)
+		m.startLogin()
+		flat := strings.Join(strings.Fields(m.View()), " ")
+		for _, want := range []string{"nan run and nan runs only", "email sign-in"} {
+			if !strings.Contains(flat, want) {
+				t.Errorf("%s: the sign-in does not say %q:\n%s", name, want, m.View())
+			}
+		}
+		if strings.Contains(flat, "nan_pat_x") {
+			t.Errorf("%s: the token is on screen", name)
+		}
+	}
+}

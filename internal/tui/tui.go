@@ -754,6 +754,12 @@ func (m *model) startLogin() tea.Cmd {
 	m.wizard = wizardEmail
 	m.loginStage = loginAskEmail
 	m.loginMsg = ""
+	// A machine set up with a platform token looks signed in to whoever set
+	// it up. The dashboard cannot use one, and asking for an email with no
+	// word about it reads as the token having been lost.
+	if m.sess.PlatformToken != "" || os.Getenv(session.TokenEnvVar) != "" {
+		m.loginMsg = tokenOnlyNotice
+	}
 	m.loginInput.SetValue("")
 	m.loginInput.Placeholder = "you@example.com"
 	m.loginInput.Prompt = "Email: "
@@ -762,6 +768,10 @@ func (m *model) startLogin() tea.Cmd {
 	m.loginInput.EchoMode = textinput.EchoNormal
 	return m.loginInput.Focus()
 }
+
+// tokenOnlyNotice is what the sign-in says on a machine that has a platform
+// token and no session.
+const tokenOnlyNotice = "the platform token on this machine works for nan run and nan runs only; the dashboard needs the email sign-in"
 
 // What step 3 says while the cluster is looking at a key just saved.
 const keyChecking = "checking it against the cluster…"
@@ -3549,7 +3559,7 @@ func (m model) renderSetup(l layout) string {
 
 // ── about renderer ───────────────────────────────────────────────────────────
 
-const Version = "0.1.24"
+const Version = "0.1.25"
 
 func renderAbout(l layout) string {
 	var b strings.Builder

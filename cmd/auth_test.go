@@ -1,8 +1,17 @@
 package cmd
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -61,4 +70,258 @@ func withStdin(t *testing.T, content string) {
 		os.Stdin = original
 		f.Close()
 	})
+}
+
+// tokenServer answers GET /v1/runs?limit=1 with status, and records what it
+// was asked.
+func tokenServer(t *testing.T, status int) (*int, *string) {
+	t.Helper()
+	calls, auth := new(int), new(string)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*calls++
+		*auth = r.Header.Get("Authorization")
+		if r.URL.Path != "/v1/runs" || r.URL.Query().Get("limit") != "1" {
+			t.Errorf("unexpected request %s", r.URL)
+		}
+		w.WriteHeader(status)
+		if status == http.StatusOK {
+			_, _ = io.WriteString(w, `{"object":"list","data":[],"next_cursor":null}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"error":{"message":"invalid token","code":"invalid_api_key"}}`)
+	}))
+	t.Cleanup(srv.Close)
+	old := runsBaseURL
+	runsBaseURL = srv.URL
+	t.Cleanup(func() { runsBaseURL = old })
+	return calls, auth
+}
+
+func readSession(t *testing.T, home string) (map[string]any, os.FileMode) {
+	t.Helper()
+	path := filepath.Join(home, ".config", "nan", "session.json")
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, 0
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	return m, info.Mode().Perm()
+}
+
+func pipedToken(s string) tokenInput { return tokenInput{r: strings.NewReader(s)} }
+
+func TestAPITokenLoginSavesAVerifiedToken(t *testing.T) {
+	for _, c := range []struct {
+		name, tok, field string
+	}{
+		{"platform token", testPAT, "platformToken"},
+		{"api key", testKey, "apiKey"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			home := fakeHome(t, `{"token":"","enabledTools":{"pi":true}}`)
+			calls, auth := tokenServer(t, http.StatusOK)
+			var out, prompt bytes.Buffer
+			if err := loginWithAPIToken(context.Background(), pipedToken(c.tok+"\n"), &out, &prompt); err != nil {
+				t.Fatal(err)
+			}
+			if *calls != 1 || *auth != "Bearer "+c.tok {
+				t.Errorf("verification: %d calls, Authorization %q", *calls, *auth)
+			}
+			sess, mode := readSession(t, home)
+			if sess[c.field] != c.tok {
+				t.Errorf("session.json = %v", sess)
+			}
+			if sess["enabledTools"] == nil {
+				t.Error("saving the token dropped the rest of the session")
+			}
+			if runtime.GOOS != "windows" && mode != 0o600 {
+				t.Errorf("session.json mode %04o", mode)
+			}
+			if strings.Contains(out.String()+prompt.String(), "SECRET") {
+				t.Errorf("token printed: %q %q", out.String(), prompt.String())
+			}
+		})
+	}
+}
+
+// A platform token must not land in apiKey: the Setup tab writes apiKey into
+// every tool it configures, and the inference API refuses platform tokens.
+func TestAPITokenLoginKeepsPlatformTokensOutOfAPIKey(t *testing.T) {
+	home := fakeHome(t, `{"token":"","apiKey":"`+testKey+`"}`)
+	tokenServer(t, http.StatusOK)
+	if err := loginWithAPIToken(context.Background(), pipedToken(testPAT), io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	sess, _ := readSession(t, home)
+	if sess["apiKey"] != testKey || sess["platformToken"] != testPAT {
+		t.Errorf("session.json = %v", sess)
+	}
+}
+
+func TestAPITokenLoginSavesNothingOnFailure(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		input  string
+		status int
+		want   string
+		calls  int
+	}{
+		{"empty stdin", "", http.StatusOK, "no token arrived", 0},
+		{"wrong shape", "ghp_SECRETnotours\n", http.StatusOK, "not a valid token", 0},
+		{"refused", testPAT, http.StatusUnauthorized, "refused that token", 1},
+		{"platform down", testPAT, http.StatusBadGateway, "could not check the token", 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			home := fakeHome(t, "")
+			calls, _ := tokenServer(t, c.status)
+			var out bytes.Buffer
+			err := loginWithAPIToken(context.Background(), pipedToken(c.input), &out, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want %q", err, c.want)
+			}
+			if *calls != c.calls {
+				t.Errorf("%d requests, want %d", *calls, c.calls)
+			}
+			if sess, _ := readSession(t, home); sess != nil {
+				t.Errorf("saved %v after a failure", sess)
+			}
+			if strings.Contains(err.Error()+out.String(), "SECRET") {
+				t.Errorf("token echoed: %v", err)
+			}
+		})
+	}
+}
+
+// On a terminal the token is read without echo, after a prompt on stderr.
+func TestAPITokenLoginOnATerminalReadsHidden(t *testing.T) {
+	home := fakeHome(t, `{"token":"sess-1"}`)
+	tokenServer(t, http.StatusOK)
+	hidden := false
+	in := tokenInput{tty: true, readHidden: func() ([]byte, error) { hidden = true; return []byte(testPAT + "\n"), nil }}
+	var out, prompt bytes.Buffer
+	if err := loginWithAPIToken(context.Background(), in, &out, &prompt); err != nil {
+		t.Fatal(err)
+	}
+	if !hidden || !strings.Contains(prompt.String(), "not shown") {
+		t.Errorf("hidden=%v prompt=%q", hidden, prompt.String())
+	}
+	if sess, _ := readSession(t, home); sess["token"] != "sess-1" || sess["platformToken"] != testPAT {
+		t.Errorf("session.json = %v", sess)
+	}
+}
+
+func TestAPITokenCannotBeCombined(t *testing.T) {
+	fakeHome(t, "")
+	defer func() { apiTokenFlag, emailFlag = false, "" }()
+	rootCmd.SetArgs([]string{"auth", "login", "--api-token", "--email", "a@b.c"})
+	rootCmd.SetOut(io.Discard)
+	rootCmd.SetErr(io.Discard)
+	if err := rootCmd.Execute(); err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+// Only the first line of stdin is the token: what follows cannot become part
+// of it, or of a header.
+func TestAPITokenLoginTakesOnlyTheFirstLine(t *testing.T) {
+	home := fakeHome(t, "")
+	_, auth := tokenServer(t, http.StatusOK)
+	if err := loginWithAPIToken(context.Background(), pipedToken("nan_pat_a\r\nX-SECRET: 1\n"), io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if *auth != "Bearer nan_pat_a" {
+		t.Errorf("Authorization = %q", *auth)
+	}
+	if sess, _ := readSession(t, home); sess["platformToken"] != "nan_pat_a" {
+		t.Errorf("session.json = %v", sess)
+	}
+}
+
+// Under cron, or `docker run` without -i, stdin is /dev/null: a character
+// device, but not a terminal. That is "nothing arrived", not a failed
+// attempt at a hidden prompt.
+func TestAPITokenLoginWithStdinFromDevNull(t *testing.T) {
+	fakeHome(t, "")
+	calls, _ := tokenServer(t, http.StatusOK)
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	in := newTokenInput(f)
+	if in.tty {
+		t.Fatal(os.DevNull + " taken for a terminal")
+	}
+	var prompt bytes.Buffer
+	err = loginWithAPIToken(context.Background(), in, io.Discard, &prompt)
+	if err == nil || !strings.Contains(err.Error(), "no token arrived") {
+		t.Errorf("err = %v", err)
+	}
+	if prompt.Len() != 0 || *calls != 0 {
+		t.Errorf("prompted %q, %d requests", prompt.String(), *calls)
+	}
+}
+
+// What the login says afterwards matches what the run commands will do.
+func TestAPITokenLoginSaysWhatWillBeUsed(t *testing.T) {
+	for _, c := range []struct {
+		name, session, tok string
+		want, notWant      []string
+	}{
+		{"token with a session", `{"token":"sess-1"}`, testPAT, nil, []string{"session first", "replaces"}},
+		{"key with a session", `{"token":"sess-1"}`, testKey, []string{"session first, even after it expires", "nan auth logout"}, []string{"replaces"}},
+		{"key over another key", `{"token":"","apiKey":"sk-old"}`, testKey, []string{"replaces the API key", "apply Setup again"}, []string{"session first"}},
+		{"same key again", `{"token":"","apiKey":"` + testKey + `"}`, testKey, nil, []string{"replaces", "session first"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fakeHome(t, c.session)
+			tokenServer(t, http.StatusOK)
+			var out bytes.Buffer
+			if err := loginWithAPIToken(context.Background(), pipedToken(c.tok), &out, io.Discard); err != nil {
+				t.Fatal(err)
+			}
+			for _, w := range c.want {
+				if !strings.Contains(out.String(), w) {
+					t.Errorf("%q does not say %q", out.String(), w)
+				}
+			}
+			for _, w := range c.notWant {
+				if strings.Contains(out.String(), w) {
+					t.Errorf("%q says %q", out.String(), w)
+				}
+			}
+		})
+	}
+}
+
+// A terminal that cannot be read hidden fails with the reason, ends the
+// prompt line, and saves nothing.
+func TestAPITokenLoginHiddenReadFailure(t *testing.T) {
+	home := fakeHome(t, "")
+	calls, _ := tokenServer(t, http.StatusOK)
+	in := tokenInput{tty: true, readHidden: func() ([]byte, error) { return nil, errors.New("not supported") }}
+	var prompt bytes.Buffer
+	err := loginWithAPIToken(context.Background(), in, io.Discard, &prompt)
+	if err == nil || !strings.Contains(err.Error(), "could not read the token") {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.HasSuffix(prompt.String(), "\n") {
+		t.Errorf("prompt line left open: %q", prompt.String())
+	}
+	if *calls != 0 {
+		t.Errorf("%d requests", *calls)
+	}
+	if sess, _ := readSession(t, home); sess != nil {
+		t.Errorf("saved %v", sess)
+	}
 }

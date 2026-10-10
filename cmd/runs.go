@@ -32,8 +32,15 @@ var (
 )
 
 var runsCmd = &cobra.Command{
-	Use:         "runs",
-	Short:       "List, inspect, follow and cancel agent runs",
+	Use:   "runs",
+	Short: "List, inspect, follow and cancel agent runs",
+	Long: `List, inspect, follow and cancel the agent runs started with nan run, from
+the portal, or by your automations. These commands authenticate the same
+way as nan run: NAN_TOKEN, --token-file PATH, a token saved with nan auth
+login --api-token, or your nan auth login session (the full order is in
+nan run --help).
+
+Docs: https://nan.builders/docs/runs`,
 	Annotations: sysexits,
 	Args:        cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -70,11 +77,20 @@ var runsShowCmd = &cobra.Command{
 var runsLogsCmd = &cobra.Command{
 	Use:   "logs <id>",
 	Short: "Print a run's events (-f to follow until it ends)",
-	Long: `Print a run's events.
+	Long: `Print a run's events. Their types: started, message (what the agent
+says), tool_call and tool_result, log (agent stdout and stderr), artifact,
+error, truncated (output was cut), and finished.
 
 With -f, follow the run until it ends and exit with its code, the same codes
 as nan run: 0 succeeded, 1 failed, 2 timed out, 3 cancelled, 4 workspace
-not set up for it. Ctrl-C stops following; the run goes on.`,
+not set up for it. Ctrl-C stops following; the run goes on.
+
+With --json, print one event per line as a JSON object (seq, ts, type,
+data), then, with -f, the finished run. The event types and their data are
+described in the docs. --after N starts after event number N, to pick up
+where an earlier read stopped.
+
+Docs: https://nan.builders/docs/runs`,
 	Args:        oneRunID,
 	Annotations: sysexits,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -95,6 +111,7 @@ var runsCancelCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(runsCmd)
 	runsCmd.AddCommand(runsLsCmd, runsShowCmd, runsLogsCmd, runsCancelCmd)
+	runsCmd.PersistentFlags().StringVar(&tokenFileFlag, "token-file", "", tokenFileUsage)
 
 	runsLsCmd.Flags().StringVar(&lsWorkspace, "ws", "", "Only runs in this workspace")
 	runsLsCmd.Flags().StringVar(&lsState, "state", "", "Only runs in this state: queued, starting, running, succeeded, failed, cancelled, timed_out")
@@ -150,12 +167,12 @@ func oneRunID(cmd *cobra.Command, args []string) error {
 	return checkRunID(args[0])
 }
 
-func notFound(err error, id string, usingKey bool) *ExitError {
+func notFound(err error, id string, cred credential) *ExitError {
 	var apiErr *api.APIError
 	if errors.As(err, &apiErr) && apiErr.Status == 404 {
 		return usageErrorf("run %s not found", id)
 	}
-	return apiExit(err, usingKey)
+	return apiExit(err, cred)
 }
 
 var validStates = map[string]bool{
@@ -176,7 +193,7 @@ func checkLsFlags() error {
 func doRunsLs(ctx context.Context, env *runsEnv) error {
 	list, err := env.client.ListRuns(ctx, api.ListRunsParams{Workspace: lsWorkspace, State: lsState, Limit: lsLimit})
 	if err != nil {
-		return apiExit(err, env.usingKey)
+		return apiExit(err, env.cred)
 	}
 	if lsJSON {
 		return printJSON(env.stdout, list, true)
@@ -227,7 +244,7 @@ func doRunsShow(ctx context.Context, env *runsEnv, id string) error {
 	}
 	run, err := env.client.GetRun(ctx, id)
 	if err != nil {
-		return notFound(err, id, env.usingKey)
+		return notFound(err, id, env.cred)
 	}
 	if showJSON {
 		return printJSON(env.stdout, run, true)
@@ -340,7 +357,7 @@ func doRunsLogs(ctx context.Context, env *runsEnv, id string) error {
 	for {
 		page, err := env.client.EventsPage(ctx, id, after, 500)
 		if err != nil {
-			return notFound(err, id, env.usingKey)
+			return notFound(err, id, env.cred)
 		}
 		for _, ev := range page.Data {
 			if logsJSON {
@@ -370,7 +387,7 @@ func doRunsCancel(ctx context.Context, env *runsEnv, id string) error {
 	}
 	run, changed, err := env.client.CancelRun(ctx, id)
 	if err != nil {
-		return notFound(err, id, env.usingKey)
+		return notFound(err, id, env.cred)
 	}
 	if cancelJSON {
 		return printJSON(env.stdout, run, true)

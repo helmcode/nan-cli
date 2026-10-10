@@ -14,7 +14,6 @@ import (
 
 	"github.com/nxssie/nan-cli/internal/api"
 	"github.com/nxssie/nan-cli/internal/runs"
-	"github.com/nxssie/nan-cli/internal/session"
 	"github.com/spf13/cobra"
 )
 
@@ -61,9 +60,39 @@ The prompt is the argument, the contents of -f FILE, or stdin when the
 argument is "-". The run happens in the workspace, not on this machine: it
 goes on if this command stops, and its log stays on nan.builders.
 
-Ctrl-C detaches and leaves the run going. A second Ctrl-C within 2 seconds
-cancels it. Scripts that may retry should pass --idempotency-key, so a
-retry after a lost connection returns the run instead of starting another.
+Git branch:
+  By default (auto) a run inside a git repository works on its own branch,
+  nan-run/<first 8 chars of the run id>, and commits there. It never
+  pushes, and your checkout is untouched. Outside a repository it works in
+  the folder itself.
+    --worktree       always use a separate branch (fails outside a repository)
+    --no-worktree    work in the folder itself, even inside a repository
+
+Queue:
+  If the workspace is already running as many runs as its size allows, the
+  run waits as queued and starts when one of them ends.
+
+In the portal:
+  Folder = --cwd, Separate branch = --worktree/--no-worktree,
+  Time limit = --timeout, Task = the prompt.
+
+Authentication (the first one found is used):
+  1. NAN_TOKEN           env var with a platform token (nan_pat_...) or an
+                         API key (sk-...); for CI, set it from a secret
+  2. --token-file PATH   the token on the first line of a file only you can
+                         read (chmod 600)
+  3. a saved token       from: nan auth login --api-token (reads stdin)
+  4. your session        from: nan auth login
+  5. a saved API key     from the dashboard's Setup tab, or an sk- key
+                         saved with nan auth login --api-token
+  Create platform tokens in Settings > Tokens at https://cloud.nan.builders.
+  Never pass a token as an argument: it would end up in your shell history.
+
+Detaching:
+  Ctrl-C detaches and leaves the run going. A second Ctrl-C within 2
+  seconds cancels it. Scripts that may retry should pass --idempotency-key,
+  so a retry after a lost connection returns the run instead of starting
+  another.
 
 A prompt given as an argument ends up in your shell history and in ps; for
 anything sensitive use -f FILE or "-".
@@ -78,11 +107,14 @@ Exit codes:
   64  usage error
   65  not signed in, or not allowed
   69  nan.builders unavailable, or the stream was lost (the run goes on)
-  75  detached: the run was accepted and is still going`,
+  75  detached: the run was accepted and is still going
+
+Docs: https://nan.builders/docs/runs`,
 	Example: `  nan run "review PR 42 and write the findings to artifacts/review.md"
   nan run --ws develop --cwd /home/nan/projects/api -f task.md
   git diff | nan run -
-  id=$(nan run --detach "upgrade the dependencies")`,
+  id=$(nan run --detach "upgrade the dependencies")
+  nan run --ws ci -f task.md    # in CI, with NAN_TOKEN set from a secret`,
 	Args:        cobra.ArbitraryArgs,
 	Annotations: sysexits,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -108,14 +140,15 @@ func init() {
 	f.StringVar(&runOpts.workspace, "ws", "", "Workspace to run in (default: your only workspace)")
 	f.StringVar(&runOpts.agent, "agent", "pi", "Agent to run: pi or hermes")
 	f.StringVar(&runOpts.model, "model", "", "Model for the agent (default: the agent's own)")
-	f.StringVar(&runOpts.cwd, "cwd", "", "Directory in the workspace to run in (default: /home/nan)")
-	f.BoolVar(&runOpts.worktree, "worktree", false, "Always run in a separate git worktree")
-	f.BoolVar(&runOpts.noWorktree, "no-worktree", false, "Run in the directory itself, even inside a git repository")
+	f.StringVar(&runOpts.cwd, "cwd", "", "Folder in the workspace to run in (default: /home/nan)")
+	f.BoolVar(&runOpts.worktree, "worktree", false, "Always work on a separate branch, nan-run/<id> (fails outside a git repository)")
+	f.BoolVar(&runOpts.noWorktree, "no-worktree", false, "Work in the folder itself, even inside a git repository")
 	f.DurationVar(&runOpts.timeout, "timeout", 30*time.Minute, "Stop the run after this long, 1m to 2h (default 30m)")
 	f.BoolVar(&runOpts.detach, "detach", false, "Queue the run, print its id and return without streaming")
 	f.BoolVar(&runOpts.json, "json", false, "Print events as JSON lines, then the finished run (with --detach: the run)")
 	f.StringVar(&runOpts.idempotencyKey, "idempotency-key", "", "Retry-safe key: the same key and request return the run already created")
 	f.StringVarP(&runOpts.file, "file", "f", "", `Read the prompt from FILE ("-" for stdin)`)
+	f.StringVar(&tokenFileFlag, "token-file", "", tokenFileUsage)
 	// cobra would print the default as "30m0s"; the usage line says 30m.
 	f.Lookup("timeout").DefValue = "0s"
 }
@@ -124,28 +157,22 @@ func init() {
 // tests can hand them a mock server, buffers and a fake Ctrl-C.
 type runsEnv struct {
 	client     *api.RunsClient
-	usingKey   bool
+	cred       credential
 	stdout     io.Writer
 	stderr     io.Writer
 	interrupts <-chan os.Signal
 }
 
 func newRunsEnv() (*runsEnv, error) {
-	sess, err := session.Load()
+	cred, err := resolveCredential(os.Getenv, tokenFileFlag)
 	if err != nil {
-		if errors.Is(err, session.ErrNotLoggedIn) {
-			return nil, &ExitError{Code: exitAuth, Err: err}
-		}
-		return nil, exitf(exitAuth, "could not read your session (%v) — run: nan auth login", err)
-	}
-	if sess.Token == "" && sess.APIKey == "" {
-		return nil, &ExitError{Code: exitAuth, Err: session.ErrNotLoggedIn}
+		return nil, err
 	}
 	return &runsEnv{
-		client:   api.NewRunsClient(sess.Token, sess.APIKey),
-		usingKey: sess.Token == "",
-		stdout:   os.Stdout,
-		stderr:   os.Stderr,
+		client: cred.client(),
+		cred:   cred,
+		stdout: os.Stdout,
+		stderr: os.Stderr,
 	}, nil
 }
 
@@ -167,7 +194,7 @@ func startRun(ctx context.Context, env *runsEnv, opts runOptions, req *api.Creat
 		if errors.As(err, &apiErr) && apiErr.Code == "workspace_not_running" {
 			return exitf(exitUnavailable, "workspace %q is not running — start it at https://cloud.nan.builders and try again", runs.SanitizeLine(req.Workspace))
 		}
-		return apiExit(err, env.usingKey)
+		return apiExit(err, env.cred)
 	}
 	if !runIDPattern.MatchString(run.ID) {
 		return exitf(exitUnavailable, "nan.builders answered with something that is not a run id")
@@ -312,7 +339,7 @@ func follow(ctx context.Context, env *runsEnv, id string, after int64, asJSON, d
 		defer cancel()
 		run, changed, err := env.client.CancelRun(cancelCtx, id)
 		if err != nil {
-			return apiExit(err, env.usingKey)
+			return apiExit(err, env.cred)
 		}
 		if !changed {
 			fmt.Fprintf(env.stderr, "run %s had already ended: %s\n", safeID, runs.SanitizeLine(run.State))
@@ -328,7 +355,7 @@ func streamExit(err error, env *runsEnv, id string) error {
 	if errors.Is(err, api.ErrStreamLost) {
 		return exitf(exitUnavailable, "%s — run %s goes on in the workspace; follow it with: nan runs logs %s -f", runs.SanitizeLine(err.Error()), safeID, safeID)
 	}
-	exit := notFound(err, safeID, env.usingKey)
+	exit := notFound(err, safeID, env.cred)
 	if exit.Code == exitUnavailable {
 		return exitf(exitUnavailable, "%s (run %s)", runs.SanitizeLine(exit.Error()), safeID)
 	}
@@ -470,7 +497,7 @@ func readPrompt(in promptInput, opts runOptions, args []string) (string, error) 
 func defaultWorkspace(ctx context.Context, env *runsEnv) (string, error) {
 	list, err := env.client.ListWorkspaces(ctx)
 	if err != nil {
-		exit := apiExit(err, env.usingKey)
+		exit := apiExit(err, env.cred)
 		if exit.Code == exitAuth {
 			return "", exit
 		}
