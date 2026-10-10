@@ -303,3 +303,25 @@ func TestAPITokenLoginSaysWhatWillBeUsed(t *testing.T) {
 		})
 	}
 }
+
+// A terminal that cannot be read hidden fails with the reason, ends the
+// prompt line, and saves nothing.
+func TestAPITokenLoginHiddenReadFailure(t *testing.T) {
+	home := fakeHome(t, "")
+	calls, _ := tokenServer(t, http.StatusOK)
+	in := tokenInput{tty: true, readHidden: func() ([]byte, error) { return nil, errors.New("not supported") }}
+	var prompt bytes.Buffer
+	err := loginWithAPIToken(context.Background(), in, io.Discard, &prompt)
+	if err == nil || !strings.Contains(err.Error(), "could not read the token") {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.HasSuffix(prompt.String(), "\n") {
+		t.Errorf("prompt line left open: %q", prompt.String())
+	}
+	if *calls != 0 {
+		t.Errorf("%d requests", *calls)
+	}
+	if sess, _ := readSession(t, home); sess != nil {
+		t.Errorf("saved %v", sess)
+	}
+}

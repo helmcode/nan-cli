@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -220,6 +221,20 @@ func TestTokenFilePathIsSanitised(t *testing.T) {
 		}
 		assertNoControl(t, err.Error())
 	}
+	if runtime.GOOS != "windows" {
+		// A path under a regular file fails to open with ENOTDIR, which is
+		// not "does not exist": the branch where *os.PathError would carry
+		// the raw path into the message.
+		parent := filepath.Join(dir, "plain")
+		if err := os.WriteFile(parent, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := readTokenFile(filepath.Join(parent, evil))
+		if err == nil || !strings.Contains(err.Error(), "could not open") {
+			t.Fatalf("err = %v", err)
+		}
+		assertNoControl(t, err.Error())
+	}
 	assertNoControl(t, credential{kind: credFile, path: "/tmp/" + evil}.describe())
 	assertNoControl(t, authError(credential{kind: credFile, path: "/tmp/" + evil}).Error())
 }
@@ -415,5 +430,26 @@ func TestRunsLsWithTokenFileFlag(t *testing.T) {
 	}
 	if got != "Bearer "+testPAT {
 		t.Errorf("Authorization = %q", got)
+	}
+}
+
+func TestUnwrapPathDropsOnlyThePath(t *testing.T) {
+	cause := errors.New("not a directory")
+	if got := unwrapPath(&os.PathError{Op: "open", Path: "/secret\x1b/path", Err: cause}); got != cause {
+		t.Errorf("PathError: got %v", got)
+	}
+	wrapped := fmt.Errorf("ctx: %w", &os.PathError{Op: "read", Path: "/p", Err: cause})
+	if got := unwrapPath(wrapped); got != cause {
+		t.Errorf("wrapped PathError: got %v", got)
+	}
+	other := errors.New("other")
+	if got := unwrapPath(other); got != other {
+		t.Errorf("other error changed: %v", got)
+	}
+}
+
+func TestDescribeSession(t *testing.T) {
+	if got := (credential{kind: credSession}).describe(); got != "your session" {
+		t.Errorf("describe = %q", got)
 	}
 }
