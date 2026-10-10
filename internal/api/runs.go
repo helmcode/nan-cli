@@ -583,10 +583,18 @@ func (c *RunsClient) followOnce(ctx context.Context, id string, lastSeq *int64, 
 		return nil, false, fmt.Errorf("expected an event stream, got %q", resp.Header.Get("Content-Type"))
 	}
 
+	// The idle limit is about the connection going quiet, so it is measured
+	// from the last bytes read, not the last complete line: a long line that
+	// is still arriving is not idle, and must end on its own terms (as the
+	// fatal oversize error below) rather than as a reconnect.
+	var lastRead atomic.Int64
+	lastRead.Store(time.Now().UnixNano())
+	body := &activityReader{r: resp.Body, last: &lastRead}
+
 	lines := make(chan string)
 	readErr := make(chan error, 1)
 	go func() {
-		scanner := bufio.NewScanner(resp.Body)
+		scanner := bufio.NewScanner(body)
 		scanner.Buffer(make([]byte, 0, 64<<10), maxSSELine)
 		for scanner.Scan() {
 			select {
@@ -613,20 +621,34 @@ func (c *RunsClient) followOnce(ctx context.Context, id string, lastSeq *int64, 
 		heard     bool
 	)
 	healthy := func() bool { return progressed || (heard && time.Since(started) >= healthyAfter) }
+	readEnded := func(err error) (*Run, bool, error) {
+		if errors.Is(err, bufio.ErrTooLong) {
+			return nil, healthy(), &fatalStreamError{fmt.Errorf("the platform sent a stream line over %d bytes", maxSSELine)}
+		}
+		if errors.Is(err, io.EOF) {
+			return nil, healthy(), nil
+		}
+		return nil, healthy(), err
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, healthy(), ctx.Err()
 		case <-timer.C:
+			// A read that already ended decides the outcome, whichever of
+			// the two select happened to pick.
+			select {
+			case err := <-readErr:
+				return readEnded(err)
+			default:
+			}
+			if quiet := time.Since(time.Unix(0, lastRead.Load())); quiet < idle {
+				timer.Reset(idle - quiet)
+				continue
+			}
 			return nil, healthy(), errIdle
 		case err := <-readErr:
-			if errors.Is(err, bufio.ErrTooLong) {
-				return nil, healthy(), &fatalStreamError{fmt.Errorf("the platform sent a stream line over %d bytes", maxSSELine)}
-			}
-			if errors.Is(err, io.EOF) {
-				return nil, healthy(), nil
-			}
-			return nil, healthy(), err
+			return readEnded(err)
 		case line := <-lines:
 			heard = true
 			if !timer.Stop() {
@@ -677,6 +699,21 @@ func (c *RunsClient) followOnce(ctx context.Context, id string, lastSeq *int64, 
 			}
 		}
 	}
+}
+
+// activityReader records when it last read any bytes, so the idle limit
+// can tell a quiet connection from one busy with a long line.
+type activityReader struct {
+	r    io.Reader
+	last *atomic.Int64
+}
+
+func (a *activityReader) Read(p []byte) (int, error) {
+	n, err := a.r.Read(p)
+	if n > 0 {
+		a.last.Store(time.Now().UnixNano())
+	}
+	return n, err
 }
 
 // dispatchFrame hands one complete frame to the caller, and returns the run

@@ -558,6 +558,37 @@ func TestFollowRefusesOversizedLinesAndFrames(t *testing.T) {
 	}
 }
 
+// The idle limit is about a connection that has gone quiet, not about one
+// slow to finish a line: an oversized line that trickles in for longer than
+// IdleTimeout must still end as the fatal oversize error on the first
+// connection, never as an idle reconnect. (On a slow runner the 1 MiB line of
+// the test above took longer than the idle limit to arrive, and was retried.)
+func TestFollowOversizedLineArrivingSlowlyIsNotIdle(t *testing.T) {
+	var calls atomic.Int32
+	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: ")
+		chunk := strings.Repeat("a", 128<<10)
+		for sent := 0; sent <= maxSSELine; sent += len(chunk) {
+			if _, err := io.WriteString(w, chunk); err != nil {
+				return
+			}
+			w.(http.Flusher).Flush()
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(20 * time.Millisecond):
+			}
+		}
+	}), "t", "")
+	c.IdleTimeout = 60 * time.Millisecond
+	_, err := c.Follow(context.Background(), runID, 0, func(Frame) {})
+	if err == nil || errors.Is(err, ErrStreamLost) || !strings.Contains(err.Error(), "stream line over") || calls.Load() != 1 {
+		t.Errorf("err=%v calls=%d (want the fatal oversize error, no retry)", err, calls.Load())
+	}
+}
+
 // /v1/runs never redirects, and following one would carry the credential to
 // wherever it points.
 func TestRunsClientDoesNotFollowRedirects(t *testing.T) {
