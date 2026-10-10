@@ -83,7 +83,8 @@ Authentication (the first one found is used):
                          read (chmod 600)
   3. a saved token       from: nan auth login --api-token (reads stdin)
   4. your session        from: nan auth login
-  5. the API key saved in the dashboard's Setup tab
+  5. a saved API key     from the dashboard's Setup tab, or an sk- key
+                         saved with nan auth login --api-token
   Create platform tokens in Settings > Tokens at https://cloud.nan.builders.
   Never pass a token as an argument: it would end up in your shell history.
 

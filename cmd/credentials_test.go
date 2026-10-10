@@ -175,17 +175,59 @@ func TestTokenFileErrors(t *testing.T) {
 		path string
 		want string
 	}{
-		"missing":   {filepath.Join(dir, "nope"), "does not exist"},
-		"directory": {dir, "directory"},
-		"empty":     {writeTokenFile(t, "\n", 0o600), "empty"},
-		"too long":  {writeTokenFile(t, "nan_pat_"+strings.Repeat("a", 4096), 0o600), "not a valid token"},
+		"missing":                              {filepath.Join(dir, "nope"), "does not exist"},
+		"directory":                            {dir, "directory"},
+		"empty":                                {writeTokenFile(t, "\n", 0o600), "empty"},
+		"too long":                             {writeTokenFile(t, "nan_pat_"+strings.Repeat("a", 4096), 0o600), "not a valid token"},
+		"control characters in a missing path": {filepath.Join(dir, "x\x1b[31m\r\x07"), "does not exist"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := readTokenFile(c.path)
 			if exitCode(err) != exitAuth || !strings.Contains(err.Error(), c.want) {
 				t.Errorf("exit %d (%v), want %q", exitCode(err), err, c.want)
 			}
+			assertNoControl(t, err.Error())
 		})
+	}
+}
+
+// The path is the member's own, but it is still printed: escape sequences in
+// it must not reach the terminal, on any branch.
+func TestTokenFilePathIsSanitised(t *testing.T) {
+	const evil = "tok\x1b]0;pwned\x07\r\u009b"
+	dir := t.TempDir()
+	if runtime.GOOS != "windows" {
+		path := filepath.Join(dir, evil)
+		if err := os.WriteFile(path, []byte(testPAT), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := readTokenFile(path)
+		if err == nil || !strings.Contains(err.Error(), "chmod 600") {
+			t.Fatalf("err = %v", err)
+		}
+		assertNoControl(t, err.Error())
+
+		empty := filepath.Join(dir, evil+"empty")
+		if err := os.WriteFile(empty, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err = readTokenFile(empty)
+		if err == nil || !strings.Contains(err.Error(), "empty") {
+			t.Fatalf("err = %v", err)
+		}
+		assertNoControl(t, err.Error())
+	}
+	assertNoControl(t, credential{kind: credFile, path: "/tmp/" + evil}.describe())
+	assertNoControl(t, authError(credential{kind: credFile, path: "/tmp/" + evil}).Error())
+}
+
+func assertNoControl(t *testing.T, s string) {
+	t.Helper()
+	if strings.ContainsAny(s, "\x1b\x07\r\u009b") {
+		t.Errorf("control characters reach the terminal: %q", s)
 	}
 }
 

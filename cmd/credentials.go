@@ -16,7 +16,7 @@ import (
 
 // tokenEnvVar holds a platform token (nan_pat_...) or an API key (sk-...)
 // for `nan run` and `nan runs`. It is read, never written anywhere.
-const tokenEnvVar = session.TokenEnvVar
+const tokenEnvVar = session.TokenEnvVar // short name for the many messages that print it
 
 // maxTokenLen bounds what is accepted as a token. Real ones are far shorter;
 // anything longer is a file that is not a token.
@@ -161,13 +161,14 @@ func readTokenFile(path string) (string, error) {
 	if errors.Is(err, os.ErrNotExist) {
 		return "", exitf(exitAuth, "--token-file %s does not exist", shown)
 	}
+	// The *PathError would repeat the path unsanitised; its cause is enough.
 	if err != nil {
-		return "", exitf(exitAuth, "could not open --token-file %s: %v", shown, errors.Unwrap(err))
+		return "", exitf(exitAuth, "could not open --token-file %s: %v", shown, unwrapPath(err))
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return "", exitf(exitAuth, "could not read --token-file: %v", err)
+		return "", exitf(exitAuth, "could not read --token-file %s: %v", shown, unwrapPath(err))
 	}
 	if info.IsDir() {
 		return "", exitf(exitAuth, "--token-file %s is a directory, not a file", shown)
@@ -177,7 +178,7 @@ func readTokenFile(path string) (string, error) {
 	}
 	line, err := bufio.NewReader(io.LimitReader(f, maxTokenLen+2)).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
-		return "", exitf(exitAuth, "could not read --token-file: %v", err)
+		return "", exitf(exitAuth, "could not read --token-file %s: %v", shown, unwrapPath(err))
 	}
 	tok := strings.TrimSpace(line)
 	if tok == "" {
@@ -187,6 +188,16 @@ func readTokenFile(path string) (string, error) {
 		return "", exitf(exitAuth, "the first line of --token-file %s is not a valid token: %s", shown, tokenShapeHint)
 	}
 	return tok, nil
+}
+
+// unwrapPath drops the path an *os.PathError carries, which error messages
+// here print sanitised on their own.
+func unwrapPath(err error) error {
+	var pe *os.PathError
+	if errors.As(err, &pe) {
+		return pe.Err
+	}
+	return err
 }
 
 // requireSession is for the commands that only a signed-in session can use.

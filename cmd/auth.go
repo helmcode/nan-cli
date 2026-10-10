@@ -38,10 +38,11 @@ var loginCmd = &cobra.Command{
 With --api-token, save a platform token instead, for a machine with nobody
 at the keyboard (a server, a CI runner). Create the token in Settings >
 Tokens at https://cloud.nan.builders. It is read from stdin only, so it
-never ends up in your shell history or in ps, checked against nan.builders,
-and saved in ~/.config/nan/session.json, readable only by you. Tokens work
-for nan run and nan runs; the other commands and the dashboard need the
-email sign-in.`,
+never ends up in your shell history or in ps. It is checked against
+nan.builders and saved in ~/.config/nan/session.json, readable only by you.
+Tokens work for nan run and nan runs; the other commands and the dashboard
+need the email sign-in. An API key (sk-...) can be saved the same way; it
+replaces the one the Setup tab saved.`,
 	Example: `  nan auth login --email you@example.com
   nan auth login --api-token              # paste the token; it is not shown
   nan auth login --api-token < token.txt`,

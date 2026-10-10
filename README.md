@@ -183,7 +183,8 @@ JSON object per line): <https://nan.builders/docs/runs>.
    refused.
 3. **A saved token**, from `nan auth login --api-token`.
 4. **Your session**, from `nan auth login` (the emailed sign-in link).
-5. **The API key** saved in the Setup tab.
+5. **A saved API key**, from the Setup tab (or an `sk-...` key saved with
+   `nan auth login --api-token`).
 
 Create platform tokens in **Settings > Tokens** at
 <https://cloud.nan.builders>. A token works for runs and for listing your
