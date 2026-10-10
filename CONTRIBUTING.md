@@ -4,7 +4,7 @@ Thanks for your interest in contributing. This document covers how to get the pr
 
 ## Prerequisites
 
-- **Go 1.26.8+** — the version in `go.mod`, which is where the standard
+- **Go 1.26.9+** — the version in `go.mod`, which is where the standard
   library carries the current security fixes. The project uses [mise](https://mise.jdx.dev/) to pin the version. Run `mise install` in the repo root and Go will be available automatically.
 - A [nan.builders](https://nan.builders) account with an API key (needed to test the TUI at runtime).
 
@@ -35,9 +35,11 @@ INSTALL_DIR=~/.local/bin curl -fsSL https://nan.builders/install | bash
 
 ```
 main.go                   Entry point — delegates to cmd.Execute()
-cmd/                      Cobra subcommands (auth, me, metrics)
+cmd/                      Cobra subcommands (auth, me, metrics, run, runs)
 internal/
   api/client.go           HTTP client for the nan.builders REST API
+  api/runs.go             /v1/runs client and its SSE event stream
+  runs/render.go          Run events to terminal lines, guest text sanitised
   session/session.go      Session persistence (~/.config/nan/session.json)
   tui/tui.go              Entire TUI — layout, renderers, and tool writers
 ```
