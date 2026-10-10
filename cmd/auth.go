@@ -2,11 +2,15 @@ package cmd
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
+	"github.com/charmbracelet/x/term"
+	"github.com/nxssie/nan-cli/internal/api"
 	"github.com/nxssie/nan-cli/internal/auth"
 	"github.com/nxssie/nan-cli/internal/session"
 	"github.com/nxssie/nan-cli/internal/tui"
@@ -18,6 +22,7 @@ var (
 	emailFlag     string
 	linkFlag      string
 	keepToolsFlag bool
+	apiTokenFlag  bool
 )
 
 var authCmd = &cobra.Command{
@@ -28,7 +33,19 @@ var authCmd = &cobra.Command{
 var loginCmd = &cobra.Command{
 	Use:   "login",
 	Short: "Log in with a sign-in link sent to your email",
-	RunE:  runLogin,
+	Long: `Log in with a sign-in link sent to your email.
+
+With --api-token, save a platform token instead, for a machine with nobody
+at the keyboard (a server, a CI runner). Create the token in Settings >
+Tokens at https://cloud.nan.builders. It is read from stdin only, so it
+never ends up in your shell history or in ps, checked against nan.builders,
+and saved in ~/.config/nan/session.json, readable only by you. Tokens work
+for nan run and nan runs; the other commands and the dashboard need the
+email sign-in.`,
+	Example: `  nan auth login --email you@example.com
+  nan auth login --api-token              # paste the token; it is not shown
+  nan auth login --api-token < token.txt`,
+	RunE: runLogin,
 }
 
 var logoutCmd = &cobra.Command{
@@ -44,6 +61,7 @@ func init() {
 	loginCmd.Flags().StringVar(&emailFlag, "email", "", "Email to send the sign-in link to")
 	loginCmd.Flags().StringVar(&linkFlag, "link", "", `Finish the login with the link from the email ("-" reads it from stdin, keeping the token out of your shell history)`)
 	loginCmd.Flags().StringVar(&tokenFlag, "token", "", `Save a nan_session token directly, skipping the email ("-" reads it from stdin, keeping it out of your shell history)`)
+	loginCmd.Flags().BoolVar(&apiTokenFlag, "api-token", false, "Save a platform token (nan_pat_...) or API key (sk-...) for nan run and nan runs, read from stdin")
 	logoutCmd.Flags().BoolVar(&keepToolsFlag, "keep-tools", false, "Leave the API key in the tools this CLI configured")
 }
 
@@ -52,6 +70,13 @@ func init() {
 // answered 404 since that flow was retired: the browser landed on an error page
 // and the command then asked for a cookie that no longer existed.
 func runLogin(cmd *cobra.Command, args []string) error {
+	if apiTokenFlag {
+		if tokenFlag != "" || linkFlag != "" || emailFlag != "" {
+			return fmt.Errorf("--api-token cannot be combined with --email, --link or --token")
+		}
+		in := tokenInput{r: os.Stdin, tty: isTerminal(os.Stdin), readHidden: func() ([]byte, error) { return term.ReadPassword(os.Stdin.Fd()) }}
+		return loginWithAPIToken(cmd.Context(), in, os.Stdout, os.Stderr)
+	}
 	if tokenFlag != "" {
 		token, err := flagValue(tokenFlag)
 		if err != nil {
@@ -210,5 +235,76 @@ func saveToken(token string) error {
 		return fmt.Errorf("could not save session: %w", err)
 	}
 	fmt.Println("Logged in successfully.")
+	return nil
+}
+
+// tokenInput is where `nan auth login --api-token` reads the token from. On
+// a terminal it is read without echo; anywhere else, the first line of stdin.
+type tokenInput struct {
+	r          io.Reader
+	tty        bool
+	readHidden func() ([]byte, error)
+}
+
+func (in tokenInput) read(prompt io.Writer) (string, error) {
+	if in.tty {
+		fmt.Fprint(prompt, "Paste the token (it is not shown): ")
+		raw, err := in.readHidden()
+		fmt.Fprintln(prompt)
+		if err != nil {
+			return "", fmt.Errorf("could not read the token: %w", err)
+		}
+		return strings.TrimSpace(string(raw)), nil
+	}
+	line, err := bufio.NewReader(io.LimitReader(in.r, maxTokenLen+2)).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", fmt.Errorf("could not read the token from stdin: %w", err)
+	}
+	return strings.TrimSpace(line), nil
+}
+
+// loginWithAPIToken saves a platform token (or an API key) for the run
+// commands, after nan.builders has accepted it. Nothing is saved otherwise,
+// and the token is never printed.
+func loginWithAPIToken(ctx context.Context, in tokenInput, out, prompt io.Writer) error {
+	tok, err := in.read(prompt)
+	if err != nil {
+		return err
+	}
+	if tok == "" {
+		return fmt.Errorf("no token arrived on stdin: paste it when asked, or pipe it in: nan auth login --api-token < token.txt")
+	}
+	if !validTokenShape(tok) {
+		return fmt.Errorf("that is not a valid token, nothing was saved: %s", tokenShapeHint)
+	}
+
+	client := api.NewRunsClient("", tok).WithBaseURL(runsBaseURL)
+	if _, err := client.ListRuns(ctx, api.ListRunsParams{Limit: 1}); err != nil {
+		if errors.Is(err, api.ErrSessionExpired) {
+			return fmt.Errorf("nan.builders refused that token (revoked, expired or mistyped), nothing was saved: create one in Settings > Tokens at https://cloud.nan.builders")
+		}
+		return fmt.Errorf("could not check the token, nothing was saved: %v", apiExit(err, credential{kind: credStoredToken}).Err)
+	}
+
+	current, err := session.Load()
+	switch {
+	case errors.Is(err, session.ErrNotLoggedIn):
+		current = &session.Session{}
+	case err != nil:
+		return fmt.Errorf("could not read %s, nothing was saved: %w", session.Path(), err)
+	}
+	if strings.HasPrefix(tok, "sk-") {
+		current.APIKey = tok
+	} else {
+		current.PlatformToken = tok
+	}
+	if err := session.Save(current); err != nil {
+		return fmt.Errorf("could not save the token: %w", err)
+	}
+
+	fmt.Fprintf(out, "Token saved to %s. nan run and nan runs will use it on this machine.\n", session.Path())
+	if current.Token != "" {
+		fmt.Fprintln(out, "You are also signed in with your email; while that session lasts, it is used first.")
+	}
 	return nil
 }
