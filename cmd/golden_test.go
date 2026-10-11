@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/nxssie/nan-cli/internal/api"
@@ -16,6 +17,15 @@ import (
 // goldenEnv serves cloud-api's own golden responses (copied into
 // internal/api/testdata/phase2) on the paths that return them.
 func goldenEnv(t *testing.T) (*runsEnv, *bytes.Buffer, *bytes.Buffer) {
+	t.Helper()
+	env, out, errOut, _ := goldenEnvWith(t, "")
+	return env, out, errOut
+}
+
+// goldenEnvWith is goldenEnv that also answers GET /api/workspaces with
+// workspaces (a JSON body; "" leaves it a 404, as for a platform token
+// without workspaces:read), and records every request it serves.
+func goldenEnvWith(t *testing.T, workspaces string) (*runsEnv, *bytes.Buffer, *bytes.Buffer, func() []string) {
 	t.Helper()
 	const run = "6f1c2a9b-0000-4000-8000-000000000001"
 	const auto = "a0000000-0000-4000-8000-000000000001"
@@ -27,7 +37,17 @@ func goldenEnv(t *testing.T) (*runsEnv, *bytes.Buffer, *bytes.Buffer) {
 		"/v1/automations/" + auto + "/triggers":   "automation_triggers.json",
 		"/v1/automations/" + auto + "/deliveries": "automation_deliveries.json",
 	}
+	var mu sync.Mutex
+	var seen []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		if r.URL.Path == "/api/workspaces" && r.Method == http.MethodGet && workspaces != "" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(workspaces))
+			return
+		}
 		name, ok := routes[r.URL.Path]
 		if !ok || r.Method != http.MethodGet {
 			http.NotFound(w, r)
@@ -43,7 +63,11 @@ func goldenEnv(t *testing.T) (*runsEnv, *bytes.Buffer, *bytes.Buffer) {
 	t.Cleanup(srv.Close)
 	var out, errOut bytes.Buffer
 	env := &runsEnv{client: api.NewRunsClient("s", "").WithBaseURL(srv.URL), stdout: &out, stderr: &errOut}
-	return env, &out, &errOut
+	return env, &out, &errOut, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), seen...)
+	}
 }
 
 func wantAll(t *testing.T, what, out string, wants ...string) {
@@ -66,7 +90,8 @@ func TestGoldenRender(t *testing.T) {
 	if err := doRunsShow(ctx, env, run); err != nil {
 		t.Fatal(err)
 	}
-	wantAll(t, "runs show", out.String(), "awaiting_approval", "propose", "a0000000-0000-4000-8000-000000000001",
+	wantAll(t, "runs show", out.String(), "awaiting_approval", "propose", "PR review api (a0000000-0000-4000-8000-000000000001)",
+		"develop ("+ws+")",
 		"acme/api", "GITHUB_TOKEN (the agent)", "pending", "3 actions", "d0000000-0000-4000-8000-000000000004",
 		"github_pr_review ok", "nan runs reject "+run, "/workspaces/"+ws+"/runs/"+run)
 
@@ -88,7 +113,7 @@ func TestGoldenRender(t *testing.T) {
 	if err := doApprovalsLs(ctx, env, api.ApprovalPending); err != nil {
 		t.Fatal(err)
 	}
-	wantAll(t, "approvals ls", out.String(), run, "pending", "a0000000-0000-4000-8000-000000000001", "github_pr_review")
+	wantAll(t, "approvals ls", out.String(), run, "pending", "PR review api", "github_pr_review")
 	if strings.Contains(out.String(), "github_pr_comment") {
 		t.Errorf("approvals ls lists an action that applied automatically:\n%s", out.String())
 	}
@@ -98,6 +123,30 @@ func TestGoldenRender(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantAll(t, "automations ls", out.String(), "PR review api", ws, "enabled", "github_pr_review")
+
+	// With workspaces:read the workspace is named, from one lookup.
+	const workspaces = `[{"workspace_uuid":"` + ws + `","name":"develop","status":"running"}]`
+	env, out, _, seen := goldenEnvWith(t, workspaces)
+	if err := doAutomationsLs(ctx, env); err != nil {
+		t.Fatal(err)
+	}
+	if lines := strings.Split(out.String(), "\n"); len(lines) < 2 || !strings.Contains(lines[1], "develop") || strings.Contains(lines[1], ws) {
+		t.Errorf("automations ls does not name the workspace:\n%s", out.String())
+	}
+	env, out, _, seen = goldenEnvWith(t, workspaces)
+	if err := doAutomationsShow(ctx, env, "PR review api"); err != nil {
+		t.Fatal(err)
+	}
+	wantAll(t, "automations show", out.String(), "develop ("+ws+")")
+	n := 0
+	for _, r := range seen() {
+		if r == "GET /api/workspaces" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("automations show: GET /api/workspaces %d times, want 1: %v", n, seen())
+	}
 
 	env, out, _ = goldenEnv(t)
 	if err := doAutomationsShow(ctx, env, "PR review api"); err != nil {

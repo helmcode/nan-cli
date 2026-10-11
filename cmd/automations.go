@@ -66,7 +66,8 @@ an API key.
 
 Authentication is the same as nan run (see nan run --help). A platform token
 needs the automations:read scope to list and inspect, and automations:run to
-start a run.
+start a run. Workspace names are looked up with workspaces:read; without it
+the workspace's id is shown instead.
 
 Docs: https://nan.builders/docs/runs`,
 	Annotations: sysexits,
@@ -246,13 +247,16 @@ func doAutomationsLs(ctx context.Context, env *runsEnv) error {
 		fmt.Fprintf(env.stderr, "No automations yet. Create one in the portal: %s\n", runs.NewAutomationURL)
 		return nil
 	}
+	for i := range list.Data {
+		env.nameWorkspace(ctx, list.Data[i].Workspace)
+	}
 	tw := tabwriter.NewWriter(env.stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tNAME\tWORKSPACE\tAGENT\tSTATUS\tAPPROVAL")
 	for _, a := range list.Data {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			runs.SanitizeLine(a.ID),
 			runs.Truncate(runs.SanitizeLine(a.Name), 40),
-			runs.SanitizeLine(a.Workspace.Label()),
+			runs.Truncate(runs.SanitizeLine(a.Workspace.Label()), 40),
 			runs.SanitizeLine(a.Agent),
 			automationStatus(a),
 			runs.Truncate(approvalSummary(a.ApprovalKinds), 40))
@@ -295,6 +299,7 @@ func doAutomationsShow(ctx context.Context, env *runsEnv, ref string) error {
 	if autoShowJSON {
 		return printJSON(env.stdout, a, true)
 	}
+	env.nameWorkspace(ctx, a.Workspace)
 	triggers, trigErr := env.client.ListTriggers(ctx, id)
 
 	tw := tabwriter.NewWriter(env.stdout, 0, 0, 2, ' ', 0)
@@ -310,7 +315,9 @@ func doAutomationsShow(ctx context.Context, env *runsEnv, ref string) error {
 	if a.Template != "" && a.Template != "custom" {
 		row("template", runs.SanitizeLine(a.Template))
 	}
-	row("workspace", runs.SanitizeLine(a.Workspace.Label()))
+	if a.Workspace != nil {
+		row("workspace", runs.NameAndID(a.Workspace.Name, a.Workspace.ID))
+	}
 	agent := runs.SanitizeLine(a.Agent)
 	if a.Model != nil && *a.Model != "" {
 		agent += " · model " + runs.SanitizeLine(*a.Model)
@@ -486,7 +493,12 @@ func doAutomationsRun(ctx context.Context, env *runsEnv, ref string, input json.
 		return runExit(run)
 	}
 	if !replayed {
-		name := runs.SanitizeLine(run.Automation.Label())
+		// The platform names the automation by id; what the member typed
+		// (a name, usually) reads better than a UUID they did not.
+		name := ""
+		if run.Automation != nil {
+			name = runs.SanitizeLine(run.Automation.Name)
+		}
 		if name == "" {
 			name = runs.Truncate(runs.SanitizeLine(ref), 64)
 		}

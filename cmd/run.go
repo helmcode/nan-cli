@@ -163,6 +163,10 @@ type runsEnv struct {
 	stdout     io.Writer
 	stderr     io.Writer
 	interrupts <-chan os.Signal
+
+	// names caches the workspace and automation names the text views
+	// look up (names.go).
+	names nameCache
 }
 
 func newRunsEnv() (*runsEnv, error) {

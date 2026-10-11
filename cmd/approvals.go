@@ -35,7 +35,8 @@ CLI session or tokens (an agent in a workspace, a CI job) can approve the
 actions an agent proposed.
 
 Authentication is the same as nan run (see nan run --help); a platform token
-needs the runs scope.
+needs the runs scope. Automation names are looked up with automations:read;
+without it the automation's id is shown instead.
 
 Docs: https://nan.builders/docs/runs`,
 	Annotations: sysexits,
@@ -125,6 +126,9 @@ func doApprovalsLs(ctx context.Context, env *runsEnv, state string) error {
 			fmt.Fprintln(env.stderr, "No approvals match.")
 		}
 		return nil
+	}
+	for i := range list.Data {
+		env.nameAutomation(ctx, list.Data[i].Automation)
 	}
 	tw := tabwriter.NewWriter(env.stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "RUN\tSTATE\tAUTOMATION\tWAITING FOR APPROVAL\tEXPIRES")

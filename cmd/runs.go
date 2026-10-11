@@ -44,7 +44,8 @@ var runsCmd = &cobra.Command{
 the portal, or by your automations. These commands authenticate the same
 way as nan run: NAN_TOKEN, --token-file PATH, a token saved with nan auth
 login --api-token, or your nan auth login session (the full order is in
-nan run --help).
+nan run --help). Automation names are looked up with automations:read;
+without it the automation's id is shown instead.
 
 A run of an automation can stop in awaiting_approval: the agent is done and
 the actions it proposed (a push, a pull request, a comment) wait for you.
@@ -280,13 +281,16 @@ func doRunsLs(ctx context.Context, env *runsEnv) error {
 		}
 		return nil
 	}
+	for i := range list.Data {
+		env.nameRunWorkspace(ctx, &list.Data[i])
+	}
 	tw := tabwriter.NewWriter(env.stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tSTATE\tWORKSPACE\tAGENT\tCREATED\tPROMPT")
 	for _, r := range list.Data {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			runs.SanitizeLine(r.ID),
 			runs.SanitizeLine(r.State),
-			runs.SanitizeLine(r.Workspace.Name),
+			runs.Truncate(runs.SanitizeLine(refLabel(r.Workspace.Name, r.Workspace.ID)), 40),
 			runs.SanitizeLine(r.Agent),
 			localTime(r.CreatedAt),
 			runs.Truncate(runs.SanitizeLine(r.PromptPreview), 60))
@@ -323,6 +327,7 @@ func doRunsShow(ctx context.Context, env *runsEnv, id string) error {
 	if showJSON {
 		return printJSON(env.stdout, run, true)
 	}
+	env.nameRun(ctx, run)
 
 	tw := tabwriter.NewWriter(env.stdout, 0, 0, 2, ' ', 0)
 	row := func(k, v string) {
@@ -345,7 +350,7 @@ func doRunsShow(ctx context.Context, env *runsEnv, id string) error {
 	if run.ExitCode != nil {
 		row("exit code", fmt.Sprint(*run.ExitCode))
 	}
-	row("workspace", runs.SanitizeLine(run.Workspace.Name))
+	row("workspace", runs.NameAndID(run.Workspace.Name, run.Workspace.ID))
 	agent := runs.SanitizeLine(run.Agent)
 	if run.Model != nil && *run.Model != "" {
 		agent += " · model " + runs.SanitizeLine(*run.Model)
@@ -356,7 +361,7 @@ func doRunsShow(ctx context.Context, env *runsEnv, id string) error {
 		row("phase", runs.SanitizeLine(run.Phase)+phaseNote(run.Phase))
 	}
 	if run.Automation != nil {
-		row("automation", runs.SanitizeLine(run.Automation.Label()))
+		row("automation", runs.NameAndID(run.Automation.Name, run.Automation.ID))
 	}
 	if run.GitHubRepo != nil {
 		row("repository", runs.SanitizeLine(*run.GitHubRepo))
@@ -569,6 +574,7 @@ func doRunsProposal(ctx context.Context, env *runsEnv, id string, withDiff, asJS
 	if asJSON {
 		return printJSON(env.stdout, run.Approval, true)
 	}
+	env.nameAutomation(ctx, run.Automation)
 	runs.Proposal(env.stdout, run)
 	if !withDiff {
 		return nil

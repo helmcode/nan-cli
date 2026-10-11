@@ -177,6 +177,12 @@ a CI job could read: this machine's CLI session, a platform token or an API
 key. A platform token needs the `automations:read` scope to list and inspect
 automations and `automations:run` to start one.
 
+The text views show workspace and automation names, looked up once per
+command; detail views print `name (id)` so the id stays copyable. A token
+without `workspaces:read` (or `automations:read`, for automation names in
+`nan approvals ls` and `nan runs show`) gets the ids instead, never an error.
+`--json` prints the API's objects unchanged, with ids only.
+
 ### Exit codes
 
 `nan run`, `nan runs logs -f` and `nan automations run` exit with the run's outcome, so a script can
