@@ -31,6 +31,12 @@ const (
 	StateFailed    = "failed"
 	StateCancelled = "cancelled"
 	StateTimedOut  = "timed_out"
+
+	// StateAwaitingApproval is a run whose agent finished and proposed
+	// actions that wait for the member's decision. It is not terminal: the
+	// run goes on to succeeded (approved, in the portal), cancelled
+	// (rejected or expired) or failed (an earlier automatic action failed).
+	StateAwaitingApproval = "awaiting_approval"
 )
 
 // Terminal reports whether a run in this state will never change again.
@@ -94,6 +100,15 @@ type Run struct {
 	CreatedAt       string       `json:"created_at"`
 	StartedAt       *string      `json:"started_at"`
 	FinishedAt      *string      `json:"finished_at"`
+
+	// Phase 2 (automations). Absent on an ad-hoc run of an older platform.
+	Phase           string    `json:"phase,omitempty"` // run | propose | apply
+	InferenceSource string    `json:"inference_source,omitempty"`
+	Automation      *Ref      `json:"automation,omitempty"`
+	ParentRunID     *string   `json:"parent_run_id,omitempty"`
+	Approval        *Approval `json:"approval,omitempty"`
+	ApplyRunID      *string   `json:"apply_run_id,omitempty"`
+	ApplyRunIDs     []string  `json:"apply_run_ids,omitempty"`
 }
 
 // CreateRunRequest is the body of POST /v1/runs. Pointers are the fields the
@@ -316,7 +331,9 @@ func (c *RunsClient) statusError(status int, body []byte) error {
 		} `json:"error"`
 	}
 	var bare struct {
-		Error string `json:"error"`
+		Error   string  `json:"error"`
+		Message string  `json:"message"`
+		Param   *string `json:"param"`
 	}
 	switch {
 	case json.Unmarshal(body, &openai) == nil && (openai.Error.Message != "" || openai.Error.Code != nil):
@@ -332,7 +349,16 @@ func (c *RunsClient) statusError(status int, body []byte) error {
 			apiErr.Code = strconv.Itoa(int(code))
 		}
 	case json.Unmarshal(body, &bare) == nil && bare.Error != "":
+		// /api answers {"error":"text"} on older routes and
+		// {"error":"code","message":"text"} on newer ones (secrets).
 		apiErr.Message = bare.Error
+		if bare.Message != "" {
+			apiErr.Code = bare.Error
+			apiErr.Message = bare.Message
+		}
+		if bare.Param != nil {
+			apiErr.Param = *bare.Param
+		}
 	}
 	return apiErr
 }
