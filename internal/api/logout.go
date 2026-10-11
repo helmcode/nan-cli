@@ -12,13 +12,9 @@ import (
 // platform that accepts the connection and never answers: the local sign-out
 // goes ahead either way, this only decides how long it waits to say whether
 // the platform got the message.
-const logoutTimeout = 10 * time.Second
-
-// WithBaseURL points the client somewhere else, for tests.
-func (c *Client) WithBaseURL(u string) *Client {
-	c.baseURL = u
-	return c
-}
+//
+// A variable only so the tests can make a hanging platform time out quickly.
+var logoutTimeout = 10 * time.Second
 
 // Logout ends the session on the platform (POST /auth/logout), so the token
 // stops working everywhere and not only on this machine. Deleting
@@ -30,7 +26,10 @@ func (c *Client) WithBaseURL(u string) *Client {
 // logout still revokes it. Both name the same session; it is revoked once.
 //
 // A 401 means the platform already refuses the session, which is the outcome
-// wanted, so it is not an error. Anything else that is not 2xx is: nothing was
+// wanted, so it is not an error. This assumes cloud-api answers 401 here only
+// for a session it rejects, which is true today: /auth/logout itself never
+// 401s (it is public and answers 200), and the edge in front of it does not
+// authenticate. Redirects are not followed: a 3xx did not revoke anything. Anything else that is not 2xx is: nothing was
 // revoked, and the caller should say so.
 func (c *Client) Logout() error {
 	if c.token == "" {
@@ -52,7 +51,9 @@ func (c *Client) Logout() error {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "nan-cli")
 
-	resp, err := c.http.Do(req)
+	hc := *c.http
+	hc.CheckRedirect = noRedirects
+	resp, err := hc.Do(req)
 	if err != nil {
 		return err
 	}

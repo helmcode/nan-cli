@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -29,6 +31,16 @@ func logoutServer(t *testing.T, status int) (*[]string, string) {
 	return seen, srv.URL
 }
 
+// captureLogoutWarnings collects what runLogout tells the member on stderr.
+func captureLogoutWarnings(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	buf := new(bytes.Buffer)
+	orig := logoutWarnings
+	logoutWarnings = buf
+	t.Cleanup(func() { logoutWarnings = orig })
+	return buf
+}
+
 func withAPIBase(t *testing.T, u string) {
 	t.Helper()
 	orig := apiBaseURL
@@ -45,11 +57,15 @@ func TestLogoutEndsTheSessionOnThePlatformFirst(t *testing.T) {
 	home := fakeHome(t, `{"token":"session-jwt"}`)
 	seen, u := logoutServer(t, http.StatusOK)
 	withAPIBase(t, u)
+	warnings := captureLogoutWarnings(t)
 	keepToolsFlag = true
 	t.Cleanup(func() { keepToolsFlag = false })
 
 	if err := runLogout(logoutCmd, nil); err != nil {
 		t.Fatalf("runLogout: %v", err)
+	}
+	if warn := warnings.String(); warn != "" {
+		t.Errorf("a confirmed logout warns: %q", warn)
 	}
 	if len(*seen) != 1 || (*seen)[0] != "POST /auth/logout Bearer session-jwt" {
 		t.Errorf("platform saw %v, want one POST /auth/logout with the session bearer", *seen)
@@ -63,11 +79,21 @@ func TestLogoutStillSignsOutLocallyWhenThePlatformFails(t *testing.T) {
 	home := fakeHome(t, `{"token":"session-jwt"}`)
 	_, u := logoutServer(t, http.StatusBadGateway)
 	withAPIBase(t, u)
+	warnings := captureLogoutWarnings(t)
 	keepToolsFlag = true
 	t.Cleanup(func() { keepToolsFlag = false })
 
 	if err := runLogout(logoutCmd, nil); err != nil {
 		t.Fatalf("runLogout: %v", err)
+	}
+	warn := warnings.String()
+	for _, want := range []string{"Could not end the session on the platform", "HTTP 502", "stays valid until it expires", "Sign out other sessions"} {
+		if !strings.Contains(warn, want) {
+			t.Errorf("warning %q does not say %q", warn, want)
+		}
+	}
+	if strings.Contains(warn, "session-jwt") {
+		t.Error("the warning prints the session token")
 	}
 	if sessionFileExists(home) {
 		t.Error("a platform failure kept the member signed in locally")

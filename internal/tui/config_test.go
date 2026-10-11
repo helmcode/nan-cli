@@ -2292,7 +2292,7 @@ func TestSigningOutTakesTwoPressesAndClearsEverything(t *testing.T) {
 	}
 
 	// Two presses do it, and take the key and the cached answers with them.
-	out := press(press(m, 'o'), 'o')
+	out := signOut(t, m)
 	if out.sess.Token != "" || out.sess.APIKey != "" {
 		t.Error("signing out left the session behind")
 	}
@@ -2321,11 +2321,7 @@ func TestSigningOutStartsTheSetupAgain(t *testing.T) {
 	m := newModel(api.New("t").WithBaseURL(newFakePlatform(t, http.StatusOK).url), sess)
 	m.lay = newLayout(90, 30)
 
-	press := func(m model, r rune) model {
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
-		return updated.(model)
-	}
-	out := press(press(m, 'o'), 'o')
+	out := signOut(t, m)
 	if out.wizard != wizardEmail {
 		t.Errorf("after signing out the panel is at %v, want the first step", out.wizard)
 	}

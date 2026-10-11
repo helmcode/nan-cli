@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -34,6 +35,12 @@ type Client struct {
 
 func New(token string) *Client {
 	return &Client{token: token, http: &http.Client{Timeout: requestTimeout}, baseURL: BaseURL}
+}
+
+// WithBaseURL points the client somewhere else, for tests.
+func (c *Client) WithBaseURL(u string) *Client {
+	c.baseURL = strings.TrimRight(u, "/")
+	return c
 }
 
 // Token is what this client sends. The panel builds a client once, at start,

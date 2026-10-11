@@ -155,6 +155,18 @@ type firstRunMsg struct{}
 type linkSentMsg struct{ err error }
 type signedInMsg struct{ err error }
 
+// signedOutMsg is the platform's answer to ending the session (err nil when it
+// confirmed).
+type signedOutMsg struct{ err error }
+
+// revokeSession ends the session on the platform. It never fails the
+// sign-out: the error only decides what the member is told.
+func revokeSession(client *api.Client) tea.Cmd {
+	return func() tea.Msg {
+		return signedOutMsg{err: client.Logout()}
+	}
+}
+
 // ── model ─────────────────────────────────────────────────────────────────────
 
 type model struct {
@@ -184,12 +196,15 @@ type model struct {
 	// Set by the first press of `o`, cleared by anything else: signing out is
 	// not something to do to somebody on a stray keystroke.
 	confirmSignOut bool
-	wizard         wizardStep
-	loginStage     loginStage
-	loginInput     textinput.Model
-	loginEmail     string
-	loginMsg       string
-	loginBusy      bool
+	// signingOut: the platform has been asked to end the session and has not
+	// answered yet. A third `o` does not ask again.
+	signingOut bool
+	wizard     wizardStep
+	loginStage loginStage
+	loginInput textinput.Model
+	loginEmail string
+	loginMsg   string
+	loginBusy  bool
 }
 
 // Where a member is in the guided setup. The inner inputs still drive
@@ -332,6 +347,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case fetchErrMsg:
 		m.loading = false
 		m.err = msg.err
+
+	case signedOutMsg:
+		// Only the answer to a sign-out still in flight. The session may have
+		// expired meanwhile (sessionExpiredMsg cleared the token); the member
+		// still asked to sign out, so the local half still runs.
+		if !m.signingOut {
+			return m, nil
+		}
+		m.signingOut = false
+		return m.finishSignOut(msg.err)
 
 	case sessionExpiredMsg:
 		if msg.token == "" || msg.token != m.sess.Token {
@@ -637,39 +662,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.confirmSignOut = false
 			// End the session on the platform first, while session.json
 			// still holds it: deleting the file alone leaves any copy of the
-			// token working until it expires. A failure does not keep the
-			// member signed in here; the local sign-out goes ahead.
-			revokeErr := m.client.Logout()
-			if err := session.Delete(); err != nil {
-				m.setupMsg = "error: " + err.Error()
+			// token working until it expires. That is a network call, so it
+			// runs as a command and the panel stays responsive; the local
+			// sign-out happens when it answers (signedOutMsg), whatever the
+			// answer. Quitting before then leaves the member signed in here,
+			// which is consistent: nothing was revoked either.
+			if m.signingOut {
 				break
 			}
-			// Everything the session was holding goes with it: the key lives in
-			// the same file, and the tabs are full of answers that were true
-			// for somebody else.
-			//
-			// And the key does not only live there. Every tool configured from
-			// this panel got a copy, where deleting session.json leaves it
-			// working - so a member who signs out because they are handing the
-			// machine over would have been signed out of everything except the
-			// cluster their key bills.
-			removed, failed := RemoveNanFromTools()
-			m.sess = &session.Session{}
-			m.client = api.New("")
-			m.cache = make(map[tabID]any)
-			m.keyStatus, m.keyAsked, m.keyCheck = nil, false, ""
-			m.configured, m.setupMsg = nil, signOutMessage(removed, failed)
-			if revokeErr != nil && len(failed) == 0 {
-				m.setupMsg = "signed out here, but the platform did not confirm it (" + revokeErr.Error() + ")  ·  the session stays valid until it expires"
-			}
-			m.err = nil
-			return m, m.resumeSetup()
+			m.signingOut = true
+			m.setupMsg = "signing out…"
+			return m, revokeSession(m.client)
 
 		// `s` and not `l`: l is already the vim spelling of "next tab".
 		case "s":
 			// Any tab, because the one a member is looking at when this is
 			// needed is whichever they walked into and got told to sign in.
-			if !m.showHelp && m.sess.Token == "" {
+			if !m.showHelp && m.sess.Token == "" && !m.signingOut {
 				return m, m.startLogin()
 			}
 
@@ -2108,6 +2117,40 @@ func RemoveNanFromTools() (removed []string, failed []string) {
 		}
 	}
 	return removed, failed
+}
+
+// finishSignOut is the local half of signing out, once the platform has
+// answered (revokeErr nil when it confirmed the session is over).
+func (m model) finishSignOut(revokeErr error) (tea.Model, tea.Cmd) {
+	if err := session.Delete(); err != nil {
+		m.setupMsg = "error: " + err.Error()
+		return m, nil
+	}
+	// Everything the session was holding goes with it: the key lives in
+	// the same file, and the tabs are full of answers that were true
+	// for somebody else.
+	//
+	// And the key does not only live there. Every tool configured from
+	// this panel got a copy, where deleting session.json leaves it
+	// working - so a member who signs out because they are handing the
+	// machine over would have been signed out of everything except the
+	// cluster their key bills.
+	removed, failed := RemoveNanFromTools()
+	m.sess = &session.Session{}
+	m.client = api.New("")
+	m.cache = make(map[tabID]any)
+	m.keyStatus, m.keyAsked, m.keyCheck = nil, false, ""
+	m.configured, m.setupMsg = nil, signOutMessage(removed, failed)
+	if revokeErr != nil {
+		m.setupMsg += "  ·  " + revokeNotConfirmed(revokeErr)
+	}
+	m.err = nil
+	return m, m.resumeSetup()
+}
+
+// revokeNotConfirmed says the session may outlive the local sign-out.
+func revokeNotConfirmed(err error) string {
+	return "the platform did not confirm the sign-out (" + err.Error() + "): the session stays valid until it expires"
 }
 
 // What to say afterwards. Signing out and leaving the key behind in four other

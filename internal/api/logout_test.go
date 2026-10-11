@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 // Spec (prod E2E 2026-10-12): signing out of the CLI must end the session on
@@ -78,5 +79,50 @@ func TestLogoutWithoutASessionSendsNothing(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Errorf("sent %d requests with no session", calls)
+	}
+}
+
+// A platform that accepts the connection and never answers does not hold the
+// sign-out hostage: Logout gives up and says it was not confirmed.
+func TestLogoutGivesUpOnAHangingPlatform(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	orig := logoutTimeout
+	logoutTimeout = 50 * time.Millisecond
+	defer func() { logoutTimeout = orig }()
+
+	start := time.Now()
+	if err := New("t").WithBaseURL(srv.URL).Logout(); err == nil {
+		t.Error("a platform that never answered reads as a revoked session")
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("Logout waited %v on a hanging platform", took)
+	}
+}
+
+// A redirect is not a revocation, and the session is not sent on to wherever
+// it points.
+func TestLogoutDoesNotFollowRedirects(t *testing.T) {
+	followed := false
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { followed = true }))
+	defer target.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/auth/logout", http.StatusTemporaryRedirect)
+	}))
+	defer srv.Close()
+
+	if err := New("t").WithBaseURL(srv.URL + "/").Logout(); err == nil {
+		t.Error("a 307 reads as a revoked session")
+	}
+	if followed {
+		t.Error("Logout followed the redirect")
 	}
 }
