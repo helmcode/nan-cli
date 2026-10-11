@@ -15,6 +15,8 @@ func resetRunsFlags() {
 	showJSON = false
 	logsFollow, logsAfter, logsJSON = false, 0, false
 	cancelJSON = false
+	proposalDiff, proposalJSON = false, false
+	rejectReason, rejectJSON = "", false
 }
 
 func TestRunsLsJSON(t *testing.T) {

@@ -14,15 +14,18 @@ import (
 // know how it ended without parsing text, so these are a contract: the first
 // five are the run's own outcome, the rest follow sysexits.h.
 const (
-	exitSucceeded   = 0
-	exitFailed      = 1
-	exitTimedOut    = 2
-	exitCancelled   = 3
-	exitConfig      = 4
-	exitUsage       = 64
-	exitAuth        = 65
-	exitUnavailable = 69
-	exitDetached    = 75
+	exitSucceeded = 0
+	exitFailed    = 1
+	exitTimedOut  = 2
+	exitCancelled = 3
+	exitConfig    = 4
+	// exitAwaitingApproval: the agent is done and its proposed actions wait
+	// for the member's approval in the portal (runs.ExitAwaitingApproval).
+	exitAwaitingApproval = runs.ExitAwaitingApproval
+	exitUsage            = 64
+	exitAuth             = 65
+	exitUnavailable      = 69
+	exitDetached         = 75
 )
 
 // ExitError ends the process with Code, printing Err first when there is one.
@@ -93,6 +96,20 @@ func apiExit(err error, cred credential) *ExitError {
 		return exitf(exitUnavailable, "too many runs are queued — wait for some to finish (%s)", msg)
 	case "rate_limited":
 		return exitf(exitUnavailable, "too many runs started in the last hour — try again later")
+	case "browser_session_required":
+		return exitf(exitAuth, "%s", browserOnly)
+	case "token_scope_denied":
+		return exitf(exitAuth, "%s — %s", msg, scopeHint(cred))
+	case "automation_disabled":
+		return exitf(exitConfig, "that automation is disabled — enable it in the portal at %s", runs.AutomationsURL)
+	case "automation_rate_limited":
+		return exitf(exitUnavailable, "that automation has started as many runs as its hourly limit allows — try again later (%s)", msg)
+	case "skipped_active":
+		return exitf(exitUnavailable, "that automation already has a run in progress, and it is set to skip a new one while one is active")
+	case "not_awaiting_approval":
+		return usageErrorf("that run is not awaiting approval — see its state with: nan runs show <id>")
+	case "secrets_unavailable":
+		return exitf(exitUnavailable, "the secrets store is unavailable right now — try again in a few minutes")
 	}
 	switch {
 	case apiErr.Status == 400:
@@ -108,6 +125,22 @@ func apiExit(err error, cred credential) *ExitError {
 		return usageErrorf("%s", msg)
 	}
 	return exitf(exitUnavailable, "nan.builders could not do that right now: %s", msg)
+}
+
+// browserOnly explains the one class of refusal no credential of this CLI
+// can get past.
+var browserOnly = "this needs you signed in through the browser: do it in the portal at " + runs.PortalURL +
+	". Approving a proposal, writing a secret and creating or editing an automation are portal-only, so that " +
+	"nothing that can read this machine's CLI session or tokens (an agent in a workspace, a CI job) can do them. " +
+	"See https://nan.builders/docs/runs"
+
+// scopeHint is what to do about a platform token missing a scope.
+func scopeHint(cred credential) string {
+	switch cred.kind {
+	case credEnv, credFile, credStoredToken:
+		return "create a token with that scope in Settings > Tokens at " + runs.PortalURL + " (existing tokens keep the scopes they were created with)"
+	}
+	return "sign in with: nan auth login"
 }
 
 // runExit is the exit for a run that ended - or the detach code for one
