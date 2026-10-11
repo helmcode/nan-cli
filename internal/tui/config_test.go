@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -2267,7 +2268,7 @@ func TestSigningOutTakesTwoPressesAndClearsEverything(t *testing.T) {
 	if err := session.Save(sess); err != nil {
 		t.Fatal(err)
 	}
-	m := newModel(api.New("t"), sess)
+	m := newModel(api.New("t").WithBaseURL(newFakePlatform(t, http.StatusOK).url), sess)
 	m.lay = newLayout(90, 30)
 	m.cache[tabUsage] = "somebody else's numbers"
 
@@ -2317,7 +2318,7 @@ func TestSigningOutStartsTheSetupAgain(t *testing.T) {
 	if err := session.Save(sess); err != nil {
 		t.Fatal(err)
 	}
-	m := newModel(api.New("t"), sess)
+	m := newModel(api.New("t").WithBaseURL(newFakePlatform(t, http.StatusOK).url), sess)
 	m.lay = newLayout(90, 30)
 
 	press := func(m model, r rune) model {

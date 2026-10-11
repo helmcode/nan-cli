@@ -635,6 +635,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 			m.confirmSignOut = false
+			// End the session on the platform first, while session.json
+			// still holds it: deleting the file alone leaves any copy of the
+			// token working until it expires. A failure does not keep the
+			// member signed in here; the local sign-out goes ahead.
+			revokeErr := m.client.Logout()
 			if err := session.Delete(); err != nil {
 				m.setupMsg = "error: " + err.Error()
 				break
@@ -654,6 +659,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cache = make(map[tabID]any)
 			m.keyStatus, m.keyAsked, m.keyCheck = nil, false, ""
 			m.configured, m.setupMsg = nil, signOutMessage(removed, failed)
+			if revokeErr != nil && len(failed) == 0 {
+				m.setupMsg = "signed out here, but the platform did not confirm it (" + revokeErr.Error() + ")  ·  the session stays valid until it expires"
+			}
 			m.err = nil
 			return m, m.resumeSetup()
 
@@ -3559,7 +3567,7 @@ func (m model) renderSetup(l layout) string {
 
 // ── about renderer ───────────────────────────────────────────────────────────
 
-const Version = "0.1.27"
+const Version = "0.1.28"
 
 func renderAbout(l layout) string {
 	var b strings.Builder
