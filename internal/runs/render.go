@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/nxssie/nan-cli/internal/api"
@@ -243,6 +244,30 @@ func (r *Renderer) Event(ev api.Event) {
 		}
 		_ = json.Unmarshal(ev.Data, &d)
 		r.line("── output truncated (%s): the run went on, its log did not", SanitizeLine(d.Reason))
+	case "approval_required":
+		var d struct {
+			ProposalSHA256 string   `json:"proposal_sha256"`
+			Kinds          []string `json:"kinds"`
+		}
+		_ = json.Unmarshal(ev.Data, &d)
+		kinds := make([]string, 0, len(d.Kinds))
+		for _, k := range d.Kinds {
+			kinds = append(kinds, SanitizeLine(k))
+		}
+		r.line("── approval required for: %s (proposal %s)", strings.Join(kinds, ", "), Truncate(SanitizeLine(d.ProposalSHA256), 13))
+	case "action":
+		var d struct {
+			Index   int    `json:"index"`
+			Kind    string `json:"kind"`
+			Status  string `json:"status"`
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(ev.Data, &d)
+		msg := ""
+		if m := Truncate(SanitizeLine(strings.TrimSpace(d.Message)), 200); m != "" {
+			msg = ": " + m
+		}
+		r.line("── action %d %s %s%s", d.Index+1, SanitizeLine(d.Kind), SanitizeLine(d.Status), msg)
 	case "finished":
 		// The end of the stream carries the authoritative outcome; Finish
 		// prints it, so this would only say it twice.
@@ -253,12 +278,20 @@ func (r *Renderer) Event(ev api.Event) {
 // Flush ends a line left open by assistant text.
 func (r *Renderer) Flush() { r.newline() }
 
+// ExitAwaitingApproval is the exit code for a run whose agent is done and
+// whose proposed actions wait for the member's approval. The run is not
+// over, but nothing more happens until the member decides, so a script
+// waiting on it has its answer.
+const ExitAwaitingApproval = 10
+
 // ExitCode is the process exit code for a run, as `nan run` documents it.
 // A run that has not finished yet has none; ok is false.
 func ExitCode(run *api.Run) (code int, ok bool) {
 	switch run.State {
 	case api.StateSucceeded:
 		return 0, true
+	case api.StateAwaitingApproval:
+		return ExitAwaitingApproval, true
 	case api.StateTimedOut:
 		return 2, true
 	case api.StateCancelled:
@@ -290,7 +323,61 @@ func Outcome(run *api.Run) string {
 			fmt.Fprintf(&b, " · %d files changed", run.Result.ChangedFiles)
 		}
 	}
+	if run.State == api.StateAwaitingApproval {
+		b.WriteString("\n" + ApprovalHint(run))
+	}
 	return b.String()
+}
+
+// PortalURL is the member portal, where approving, writing secrets and
+// creating or editing automations happen.
+const PortalURL = "https://cloud.nan.builders"
+
+// AutomationsURL is the portal's automations page, with the approvals inbox.
+const AutomationsURL = PortalURL + "/automations"
+
+// RunURL is a run's page in the portal, where its proposal is approved.
+// The workspace id is part of the path; without a well-formed one this
+// falls back to the automations page.
+func RunURL(run *api.Run) string {
+	if !isUUID(run.ID) || !isUUID(run.Workspace.ID) {
+		return AutomationsURL
+	}
+	return PortalURL + "/workspaces/" + strings.ToLower(run.Workspace.ID) + "/runs/" + strings.ToLower(run.ID)
+}
+
+func isUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// ApprovalHint tells a member what to do with a run awaiting approval:
+// where to read the proposal, where to approve it, and how to turn it down.
+func ApprovalHint(run *api.Run) string {
+	return "  review:  nan runs proposal " + SanitizeLine(run.ID) + "\n" + approveLine(run) + "\n" + rejectLine(run)
+}
+
+func approveLine(run *api.Run) string {
+	return "  approve: in the portal, " + RunURL(run) + " (approving needs a browser sign-in)"
+}
+
+func rejectLine(run *api.Run) string {
+	return "  reject:  nan runs reject " + SanitizeLine(run.ID)
 }
 
 // jsonUnsafe is what encoding/json leaves raw and a terminal may act on.
@@ -332,4 +419,170 @@ func SafeJSON(v any, indent bool) ([]byte, error) {
 		}
 	}
 	return []byte(b.String()), nil
+}
+
+// Proposal prints a run's proposal as plain text: what the agent proposed
+// to do, which of it applies automatically and which waits for the member,
+// and where to decide. Every string in a proposal except the action kinds
+// was written by the agent; it goes through Sanitize like any other text
+// from a run, so a body cannot carry an escape sequence to the terminal.
+func Proposal(w io.Writer, run *api.Run) {
+	a := run.Approval
+	id := SanitizeLine(run.ID)
+	row := func(k, v string) { fmt.Fprintf(w, "%-12s%s\n", k, v) }
+
+	row("run", id+" ("+strings.ReplaceAll(SanitizeLine(run.State), "_", " ")+")")
+	if run.Automation != nil {
+		row("automation", SanitizeLine(run.Automation.Label()))
+	}
+	state := SanitizeLine(a.State)
+	switch a.State {
+	case api.ApprovalPending:
+		state = "waiting for your approval"
+		if a.ExpiresAt != nil {
+			state += ", expires " + localTime(*a.ExpiresAt)
+		}
+	case api.ApprovalAuto:
+		state = "applied automatically (no action needed approval)"
+	}
+	row("approval", state)
+	if a.RejectReason != nil && *a.RejectReason != "" {
+		row("reason", Truncate(SanitizeLine(*a.RejectReason), 200))
+	}
+	row("sha256", SanitizeLine(a.ProposalSHA256))
+
+	var p api.Proposal
+	if a.Proposal != nil {
+		p = *a.Proposal
+	}
+	if p.Base != nil {
+		base := SanitizeLine(*p.Base)
+		if p.MergeBase != nil {
+			base += " (merge base " + Truncate(SanitizeLine(*p.MergeBase), 13) + ")"
+		}
+		row("base", base)
+	}
+	ds := a.Diffstat
+	if ds == nil {
+		ds = p.Diffstat
+	}
+	if ds != nil {
+		row("changes", fmt.Sprintf("%d files, +%d -%d", ds.FilesChanged, ds.Insertions, ds.Deletions))
+	}
+
+	from := -1
+	if a.ApprovalFrom != nil {
+		from = *a.ApprovalFrom
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "actions:")
+	if len(p.Actions) == 0 {
+		fmt.Fprintln(w, "  (none)")
+	}
+	for i, act := range p.Actions {
+		mode := "automatic"
+		if from >= 0 && i >= from {
+			mode = "needs approval"
+		}
+		fmt.Fprintf(w, "  %d. %s  [%s]\n", i+1, actionLine(act), mode)
+		if act.CommitMessage != "" {
+			indented(w, "commit message", act.CommitMessage)
+		}
+		if act.Body != "" {
+			indented(w, "body", act.Body)
+		}
+	}
+
+	if ds != nil && len(ds.Files) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "files:")
+		for _, f := range ds.Files {
+			change := fmt.Sprintf("+%d -%d", f.Added, f.Deleted)
+			if f.Binary {
+				change = "binary"
+			}
+			fmt.Fprintf(w, "  %-12s %s\n", change, SanitizeLine(f.Path))
+		}
+		if ds.Truncated {
+			fmt.Fprintln(w, "  … (more files than the summary lists)")
+		}
+	}
+
+	fmt.Fprintln(w)
+	if a.HasDiff {
+		fmt.Fprintf(w, "The full diff is stored: nan runs proposal %s --diff\n", id)
+	}
+	if a.DiffMasked {
+		fmt.Fprintln(w, "The diff contains the value of one of your secrets (shown here as [masked]); approving pushes it to your repository.")
+	}
+	if a.State == api.ApprovalPending && run.State == api.StateAwaitingApproval {
+		fmt.Fprintln(w, approveLine(run))
+		fmt.Fprintln(w, rejectLine(run))
+	}
+}
+
+func actionLine(a api.ProposalAction) string {
+	s := SanitizeLine
+	ref := func() string {
+		if a.Number > 0 {
+			return fmt.Sprintf("%s#%d", s(a.Repo), a.Number)
+		}
+		return s(a.Repo)
+	}
+	switch a.Kind {
+	case "git_push":
+		line := "git_push  " + s(a.Branch) + " onto " + s(a.Base)
+		if a.Commit != "" {
+			line += " (commit " + Truncate(s(a.Commit), 13) + ")"
+		}
+		if a.Force {
+			line += " FORCE"
+		}
+		return line
+	case "github_create_pr":
+		line := fmt.Sprintf("github_create_pr  %s  %s -> %s  %q", s(a.Repo), s(a.Head), s(a.Base), Truncate(s(a.Title), 120))
+		if a.Draft {
+			line += " (draft)"
+		}
+		return line
+	case "github_pr_review":
+		return "github_pr_review  " + ref() + "  " + s(a.Event)
+	case "github_add_labels":
+		labels := make([]string, len(a.Labels))
+		for i, l := range a.Labels {
+			labels[i] = s(l)
+		}
+		return "github_add_labels  " + ref() + "  " + strings.Join(labels, ", ")
+	case "github_pr_comment", "github_issue_comment":
+		return s(a.Kind) + "  " + ref()
+	}
+	return s(a.Kind) + "  " + ref()
+}
+
+func indented(w io.Writer, title, text string) {
+	text = strings.TrimRight(Sanitize(text), "\n")
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	fmt.Fprintf(w, "     %s:\n", title)
+	for _, l := range strings.Split(text, "\n") {
+		fmt.Fprintf(w, "       %s\n", l)
+	}
+}
+
+// Diff prints a proposal's diff, sanitised: it is text the agent produced.
+func Diff(w io.Writer, diff string) {
+	text := Sanitize(diff)
+	fmt.Fprint(w, text)
+	if text != "" && !strings.HasSuffix(text, "\n") {
+		fmt.Fprintln(w)
+	}
+}
+
+func localTime(ts string) string {
+	t, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		return SanitizeLine(ts)
+	}
+	return t.Local().Format("2006-01-02 15:04")
 }
