@@ -164,7 +164,7 @@ nan automations ls [--json]
 nan automations show <id|name> [--json]
 nan automations run <id|name> [--input @payload.json | --input - | --input JSON] [--detach] [--json]
 nan automations deliveries <id|name> [--limit 50] [--json]
-nan approvals ls [--state pending|approved|rejected|expired|cancelled|auto|all] [--json]
+nan approvals ls [--state pending|approved|rejected|expired|cancelled|auto|all] [--limit 20] [--json]
 nan approvals show <run-id> [--diff]                        # same as nan runs proposal
 nan secrets ls [--json]                                     # needs nan auth login
 ```

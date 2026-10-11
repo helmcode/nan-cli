@@ -58,11 +58,15 @@ Docs: https://nan.builders/docs/runs`,
 	Annotations: sysexits,
 	Args:        cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if len(args) > 0 && args[0] == "approve" {
-			return usageErrorf("there is no nan runs approve: approve in the portal at %s (approving needs a browser sign-in). Read the proposal first with: nan runs proposal <id>", runs.AutomationsURL)
+		if len(args) > 0 && (args[0] == "approve" || args[0] == "accept") {
+			id := "<id>"
+			if len(args) > 1 && runIDPattern.MatchString(args[1]) {
+				id = args[1]
+			}
+			return usageErrorf("there is no nan runs approve: approve on the run's page in the portal (inbox: %s); approving needs a browser sign-in. Read the proposal and its link with: nan runs proposal %s", runs.ApprovalsURL, id)
 		}
 		if len(args) > 0 {
-			return usageErrorf("unknown command %q for \"nan runs\" — try: nan runs --help", args[0])
+			return usageErrorf("unknown command %q for \"nan runs\"; try: nan runs --help", runs.Truncate(runs.SanitizeLine(args[0]), 64))
 		}
 		return cmd.Help()
 	},
@@ -133,7 +137,7 @@ var runsProposalCmd = &cobra.Command{
 comments, reviews, labels - as plain text: which actions apply automatically,
 which wait for your approval, the files a push changes, and the bodies the
 agent wrote. --diff prints the full diff too, when one is stored (only when
-your approval covers a push).
+your approval covers a push); without one it says so on stderr and exits 0.
 
 Everything here was written by the agent and is shown as text, never run or
 rendered. Values of your secrets are shown as [masked].
@@ -619,6 +623,6 @@ func doRunsReject(ctx context.Context, env *runsEnv, id string) error {
 	if rejectJSON {
 		return printJSON(env.stdout, run, true)
 	}
-	fmt.Fprintf(env.stdout, "rejected: run %s is %s, and none of the actions waiting for approval will be applied\n", id, strings.ReplaceAll(runs.SanitizeLine(run.State), "_", " "))
+	fmt.Fprintf(env.stdout, "rejected: run %s is %s; none of the actions waiting for approval will be applied (actions that applied automatically before it stay applied)\n", id, strings.ReplaceAll(runs.SanitizeLine(run.State), "_", " "))
 	return nil
 }

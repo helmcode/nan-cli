@@ -101,7 +101,7 @@ func TestAwaitingApprovalExitAndOutcome(t *testing.T) {
 func TestRunURLFallsBackWithoutAWorkspaceID(t *testing.T) {
 	run := awaitingRun(t)
 	run.Workspace.ID = "../../evil"
-	if got := RunURL(run); got != AutomationsURL {
+	if got := RunURL(run); got != "https://cloud.nan.builders/automations?tab=approvals" {
 		t.Errorf("RunURL = %q", got)
 	}
 }

@@ -41,7 +41,7 @@ var portalOnlyAutomationVerbs = map[string]bool{
 	"triggers": true, "trigger": true, "rotate": true,
 }
 
-const automationsPortalOnly = "automations are created and edited in the portal: " + runs.AutomationsURL +
+const automationsPortalOnly = "automations are created and edited in the portal: " + runs.AutomationsURL + " (new: " + runs.NewAutomationURL + ")" +
 	". An automation decides which of your secrets an agent receives and which of its actions need your approval, " +
 	"so writing one needs you signed in through the browser. From here you can list, inspect and run them " +
 	"(nan automations --help)"
@@ -111,6 +111,7 @@ approval settings, and stream what it does.
 --input passes a JSON object to the run: @FILE reads it from a file, -
 from stdin, or give the JSON itself. The agent receives it as untrusted data
 next to the automation's instructions, which it never replaces. Up to 48 KiB.
+Do not put secrets in it: the agent reads it; assign secrets in the portal.
 
 When the run proposes actions that need your approval, it stops in
 awaiting_approval and this command exits 10: read the proposal with nan runs
@@ -234,7 +235,7 @@ func doAutomationsLs(ctx context.Context, env *runsEnv) error {
 	if err != nil {
 		var apiErr *api.APIError
 		if errors.As(err, &apiErr) && apiErr.Status == 404 {
-			return usageErrorf("automations are not enabled for your account")
+			return exitf(exitAuth, "automations are not enabled for your account")
 		}
 		return apiExit(err, env.cred)
 	}
@@ -242,7 +243,7 @@ func doAutomationsLs(ctx context.Context, env *runsEnv) error {
 		return printJSON(env.stdout, list, true)
 	}
 	if len(list.Data) == 0 {
-		fmt.Fprintf(env.stderr, "No automations yet. Create one in the portal: %s\n", runs.AutomationsURL)
+		fmt.Fprintf(env.stderr, "No automations yet. Create one in the portal: %s\n", runs.NewAutomationURL)
 		return nil
 	}
 	tw := tabwriter.NewWriter(env.stdout, 0, 0, 2, ' ', 0)
@@ -354,7 +355,7 @@ func doAutomationsShow(ctx context.Context, env *runsEnv, ref string) error {
 	}
 
 	printBlock(env, "instructions", a.Instructions)
-	fmt.Fprintf(env.stdout, "\nrun it: nan automations run %s\nedit it in the portal: %s\n", runs.SanitizeLine(a.ID), runs.AutomationsURL)
+	fmt.Fprintf(env.stdout, "\nrun it: nan automations run %s\nedit it in the portal: %s\n", runs.SanitizeLine(a.ID), runs.AutomationURL(a.ID))
 	return nil
 }
 

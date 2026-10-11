@@ -102,7 +102,7 @@ func doSecretsLs(ctx context.Context, env *runsEnv) error {
 	if err != nil {
 		var apiErr *api.APIError
 		if errors.As(err, &apiErr) && apiErr.Status == 404 {
-			return usageErrorf("secrets are not enabled for your account")
+			return exitf(exitAuth, "secrets are not enabled for your account")
 		}
 		return apiExit(err, env.cred)
 	}

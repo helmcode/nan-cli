@@ -333,15 +333,30 @@ func Outcome(run *api.Run) string {
 // creating or editing automations happen.
 const PortalURL = "https://cloud.nan.builders"
 
-// AutomationsURL is the portal's automations page, with the approvals inbox.
+// AutomationsURL is the portal's list of automations.
 const AutomationsURL = PortalURL + "/automations"
+
+// ApprovalsURL is the portal's approvals inbox, a tab of the automations page.
+const ApprovalsURL = AutomationsURL + "?tab=approvals"
+
+// NewAutomationURL is where an automation is created.
+const NewAutomationURL = AutomationsURL + "/new"
+
+// AutomationURL is one automation's page in the portal, or the list when
+// the id is not well-formed.
+func AutomationURL(id string) string {
+	if !isUUID(id) {
+		return AutomationsURL
+	}
+	return AutomationsURL + "/" + strings.ToLower(id)
+}
 
 // RunURL is a run's page in the portal, where its proposal is approved.
 // The workspace id is part of the path; without a well-formed one this
-// falls back to the automations page.
+// falls back to the approvals inbox.
 func RunURL(run *api.Run) string {
 	if !isUUID(run.ID) || !isUUID(run.Workspace.ID) {
-		return AutomationsURL
+		return ApprovalsURL
 	}
 	return PortalURL + "/workspaces/" + strings.ToLower(run.Workspace.ID) + "/runs/" + strings.ToLower(run.ID)
 }

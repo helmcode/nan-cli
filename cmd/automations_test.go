@@ -204,7 +204,7 @@ func TestAutomationsShowByName(t *testing.T) {
 		"GITHUB_TOKEN ← GITHUB_READ_TOKEN (the agent)", "GITHUB_TOKEN ← GITHUB_WRITE_TOKEN (actions only, never the agent)",
 		"webhook github · nan_whk_AbC1…", "schedule 0 9 * * 1-5 (Europe/Madrid)",
 		"Review for correctness.", "Be brief.",
-		"nan automations run " + testAutoID, "https://cloud.nan.builders/automations",
+		"nan automations run " + testAutoID, "https://cloud.nan.builders/automations/" + testAutoID,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("show lacks %q:\n%s", want, out)
@@ -255,7 +255,7 @@ func TestAutomationsRunExitsTenOnAwaitingApproval(t *testing.T) {
 	h := newPhase2Harness(t, fake)
 	autoRunIdemKey = "retry-1"
 	err := doAutomationsRun(context.Background(), h.env, "PR review", json.RawMessage(`{"pr":42}`))
-	if exitCode(err) != 10 {
+	if exitCode(err) != exitAwaitingApproval || exitAwaitingApproval != 10 {
 		t.Fatalf("exit %d (%v), want 10", exitCode(err), err)
 	}
 	if fake.runIdem != "retry-1" || fmt.Sprint(fake.runBody["input"]) != "map[pr:42]" {
@@ -410,7 +410,7 @@ func TestApprovalsLs(t *testing.T) {
 		t.Errorf("waiting kinds wrong:\n%s", out)
 	}
 	assertNoControls(t, "approvals ls", out)
-	for _, want := range []string{"nan runs proposal <run-id>", "https://cloud.nan.builders/automations", "nan runs reject <run-id>"} {
+	for _, want := range []string{"nan runs proposal <run-id>", "https://cloud.nan.builders/automations?tab=approvals", "nan runs reject <run-id>"} {
 		if !strings.Contains(h.stderr.String(), want) {
 			t.Errorf("hints lack %q:\n%s", want, h.stderr.String())
 		}
@@ -722,5 +722,49 @@ func TestPhase2Help(t *testing.T) {
 	}
 	if secretsLsCmd.Flags().Lookup("token-file") != nil || secretsLsCmd.InheritedFlags().Lookup("token-file") != nil {
 		t.Error("nan secrets ls takes --token-file, which the platform would refuse")
+	}
+}
+
+// nan runs logs -f exits 10 on a run that stops for approval, like nan run.
+func TestRunsLogsFollowExitsTenOnAwaitingApproval(t *testing.T) {
+	resetPhase2Flags()
+	defer resetPhase2Flags()
+	h := newHarness(t, &fakePlatform{finalState: api.StateAwaitingApproval})
+	logsFollow = true
+	err := doRunsLogs(context.Background(), h.env, testRunID)
+	if exitCode(err) != exitAwaitingApproval {
+		t.Fatalf("exit %d (%v)", exitCode(err), err)
+	}
+	if !strings.Contains(h.stderr.String(), "nan runs proposal "+testRunID) {
+		t.Errorf("no hint: %s", h.stderr.String())
+	}
+}
+
+func TestRunsApproveNamesTheRun(t *testing.T) {
+	fakeHome(t, "")
+	for _, verb := range []string{"approve", "accept"} {
+		code, msg := execute(t, "runs", verb, testRunID)
+		if code != exitUsage || !strings.Contains(msg, "nan runs proposal "+testRunID) || !strings.Contains(msg, "?tab=approvals") {
+			t.Errorf("%s: exit %d: %s", verb, code, msg)
+		}
+	}
+	code, msg := execute(t, "runs", "bogus\x1b[2J")
+	if code != exitUsage || strings.Contains(msg, "\x1b") {
+		t.Errorf("unknown verb: exit %d: %q", code, msg)
+	}
+}
+
+func TestNotEnabledIsNotAUsageError(t *testing.T) {
+	resetPhase2Flags()
+	defer resetPhase2Flags()
+	h := newPhase2Harness(t, &fakePhase2{status: http.StatusNotFound, errBody: `{"error":{"message":"not found"}}`})
+	for name, err := range map[string]error{
+		"automations ls": doAutomationsLs(context.Background(), h.env),
+		"approvals ls":   doApprovalsLs(context.Background(), h.env, ""),
+		"secrets ls":     doSecretsLs(context.Background(), h.env),
+	} {
+		if exitCode(err) != exitAuth || !strings.Contains(err.Error(), "not enabled") {
+			t.Errorf("%s: exit %d: %v", name, exitCode(err), err)
+		}
 	}
 }

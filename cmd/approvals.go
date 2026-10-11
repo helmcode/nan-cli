@@ -18,7 +18,7 @@ var (
 	approvalsJSON  bool
 )
 
-const approveInPortal = "there is no approve command in the CLI: approve in the portal at " + runs.AutomationsURL +
+const approveInPortal = "there is no approve command in the CLI: approve in the portal at " + runs.ApprovalsURL +
 	" (approving needs a browser sign-in, so an agent or a CI job that can read this machine's session or tokens can never approve its own actions). " +
 	"Read the proposal with: nan runs proposal <run-id>; reject it with: nan runs reject <run-id>"
 
@@ -29,7 +29,7 @@ var approvalsCmd = &cobra.Command{
 
 Read a proposal with nan approvals show <run-id> (the same as nan runs
 proposal), and reject it with nan runs reject <run-id>. Approving happens
-only in the portal, at ` + runs.AutomationsURL + `: it needs you
+only in the portal, at ` + runs.ApprovalsURL + `: it needs you
 signed in through the browser, so that nothing that can read this machine's
 CLI session or tokens (an agent in a workspace, a CI job) can approve the
 actions an agent proposed.
@@ -111,7 +111,7 @@ func doApprovalsLs(ctx context.Context, env *runsEnv, state string) error {
 	if err != nil {
 		var apiErr *api.APIError
 		if errors.As(err, &apiErr) && apiErr.Status == 404 {
-			return usageErrorf("automations are not enabled for your account")
+			return exitf(exitAuth, "automations are not enabled for your account")
 		}
 		return apiExit(err, env.cred)
 	}
@@ -151,7 +151,7 @@ func doApprovalsLs(ctx context.Context, env *runsEnv, state string) error {
 		fmt.Fprintf(env.stderr, "showing the %d most recent; raise --limit (up to 100) for more\n", len(list.Data))
 	}
 	if state == api.ApprovalPending {
-		fmt.Fprintf(env.stderr, "\nreview one: nan runs proposal <run-id>\napprove:    in the portal, %s (approving needs a browser sign-in)\nreject:     nan runs reject <run-id>\n", runs.AutomationsURL)
+		fmt.Fprintf(env.stderr, "\nreview one: nan runs proposal <run-id>\napprove:    in the portal, %s (approving needs a browser sign-in)\nreject:     nan runs reject <run-id>\n", runs.ApprovalsURL)
 	}
 	return nil
 }
