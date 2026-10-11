@@ -1,0 +1,141 @@
+{
+  "data": [
+    {
+      "agent": "pi",
+      "agent_finished_at": "2026-10-11T09:00:00Z",
+      "apply_run_ids": [
+        "d0000000-0000-4000-8000-000000000004"
+      ],
+      "approval": {
+        "apply_run_id": null,
+        "approval_from": 1,
+        "decided_at": null,
+        "diff_masked": false,
+        "diffstat": {
+          "deletions": 1,
+          "files": [
+            {
+              "added": 3,
+              "binary": false,
+              "deleted": 1,
+              "path": "a.go"
+            }
+          ],
+          "files_changed": 1,
+          "insertions": 3,
+          "truncated": false
+        },
+        "expires_at": "2026-10-14T09:00:00Z",
+        "has_diff": true,
+        "prefix_apply_run_id": "d0000000-0000-4000-8000-000000000004",
+        "proposal": {
+          "actions": [
+            {
+              "base": "main",
+              "branch": "nan-run/6f1c2a9b",
+              "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "commit_message": "fix login",
+              "force": false,
+              "kind": "git_push"
+            },
+            {
+              "body": "\u003cimg onerror=x\u003e looks fine",
+              "kind": "github_pr_comment",
+              "number": 42,
+              "repo": "acme/api"
+            },
+            {
+              "body": "LGTM",
+              "event": "COMMENT",
+              "kind": "github_pr_review",
+              "number": 42,
+              "repo": "acme/api"
+            }
+          ],
+          "base": "main",
+          "bundle_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "diff_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "diffstat": {
+            "deletions": 1,
+            "files": [
+              {
+                "added": 3,
+                "binary": false,
+                "deleted": 1,
+                "path": "a.go"
+              }
+            ],
+            "files_changed": 1,
+            "insertions": 3,
+            "truncated": false
+          },
+          "merge_base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "v": 1
+        },
+        "proposal_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "run_id": "6f1c2a9b-0000-4000-8000-000000000001",
+        "state": "pending"
+      },
+      "approval_kinds": [
+        "github_pr_review"
+      ],
+      "automation_id": "a0000000-0000-4000-8000-000000000001",
+      "cancel_requested": false,
+      "created_at": "2026-10-10T09:00:00Z",
+      "cwd": "/home/nan/projects/api",
+      "error_code": null,
+      "exit_code": null,
+      "finished_at": null,
+      "git_isolation": null,
+      "github_repo": "acme/api",
+      "id": "6f1c2a9b-0000-4000-8000-000000000001",
+      "inference": {
+        "source": "nan"
+      },
+      "last_seq": 42,
+      "model": null,
+      "object": "run",
+      "parent_run_id": "e0000000-0000-4000-8000-000000000005",
+      "phase": "propose",
+      "prompt_preview": "review PR 42",
+      "queue_position": null,
+      "result": {
+        "actions_applied": [
+          {
+            "kind": "github_pr_review",
+            "ok": true,
+            "ref": "https://github.com/acme/api/pull/42#pullrequestreview-1"
+          }
+        ],
+        "artifacts": [],
+        "branch": "nan-run/6f1c2a9b",
+        "changed_files": 3,
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "status": "succeeded",
+        "summary": "done"
+      },
+      "secrets": [
+        {
+          "env": "GITHUB_TOKEN",
+          "exposure": "agent"
+        }
+      ],
+      "started_at": "2026-10-10T09:00:01Z",
+      "state": "awaiting_approval",
+      "timeout_seconds": 1800,
+      "trigger": "webhook",
+      "trigger_depth": 1,
+      "usage": {
+        "source": null,
+        "tokens_in": null,
+        "tokens_out": null
+      },
+      "workspace": {
+        "id": "11111111-2222-4333-8444-555555555555",
+        "name": "develop"
+      }
+    }
+  ],
+  "next_cursor": null,
+  "object": "list"
+}

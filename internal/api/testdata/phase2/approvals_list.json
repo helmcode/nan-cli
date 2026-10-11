@@ -1,0 +1,79 @@
+{
+  "data": [
+    {
+      "apply_run_id": null,
+      "approval_from": 1,
+      "automation_id": "a0000000-0000-4000-8000-000000000001",
+      "decided_at": null,
+      "diff_masked": false,
+      "diffstat": {
+        "deletions": 1,
+        "files": [
+          {
+            "added": 3,
+            "binary": false,
+            "deleted": 1,
+            "path": "a.go"
+          }
+        ],
+        "files_changed": 1,
+        "insertions": 3,
+        "truncated": false
+      },
+      "expires_at": "2026-10-14T09:00:00Z",
+      "has_diff": true,
+      "prefix_apply_run_id": "d0000000-0000-4000-8000-000000000004",
+      "proposal": {
+        "actions": [
+          {
+            "base": "main",
+            "branch": "nan-run/6f1c2a9b",
+            "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "commit_message": "fix login",
+            "force": false,
+            "kind": "git_push"
+          },
+          {
+            "body": "\u003cimg onerror=x\u003e looks fine",
+            "kind": "github_pr_comment",
+            "number": 42,
+            "repo": "acme/api"
+          },
+          {
+            "body": "LGTM",
+            "event": "COMMENT",
+            "kind": "github_pr_review",
+            "number": 42,
+            "repo": "acme/api"
+          }
+        ],
+        "base": "main",
+        "bundle_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "diff_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "diffstat": {
+          "deletions": 1,
+          "files": [
+            {
+              "added": 3,
+              "binary": false,
+              "deleted": 1,
+              "path": "a.go"
+            }
+          ],
+          "files_changed": 1,
+          "insertions": 3,
+          "truncated": false
+        },
+        "merge_base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "v": 1
+      },
+      "proposal_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "run_id": "6f1c2a9b-0000-4000-8000-000000000001",
+      "run_state": "awaiting_approval",
+      "state": "pending",
+      "workspace_id": "11111111-2222-4333-8444-555555555555"
+    }
+  ],
+  "next_cursor": "cursor-2",
+  "object": "list"
+}
