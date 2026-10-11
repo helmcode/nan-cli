@@ -124,6 +124,30 @@ func TestGoldenRender(t *testing.T) {
 	}
 	wantAll(t, "automations ls", out.String(), "PR review api", ws, "enabled", "github_pr_review")
 
+	// With workspaces:read the workspace is named, from one lookup.
+	const workspaces = `[{"workspace_uuid":"` + ws + `","name":"develop","status":"running"}]`
+	env, out, _, seen := goldenEnvWith(t, workspaces)
+	if err := doAutomationsLs(ctx, env); err != nil {
+		t.Fatal(err)
+	}
+	if lines := strings.Split(out.String(), "\n"); len(lines) < 2 || !strings.Contains(lines[1], "develop") || strings.Contains(lines[1], ws) {
+		t.Errorf("automations ls does not name the workspace:\n%s", out.String())
+	}
+	env, out, _, seen = goldenEnvWith(t, workspaces)
+	if err := doAutomationsShow(ctx, env, "PR review api"); err != nil {
+		t.Fatal(err)
+	}
+	wantAll(t, "automations show", out.String(), "develop ("+ws+")")
+	n := 0
+	for _, r := range seen() {
+		if r == "GET /api/workspaces" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("automations show: GET /api/workspaces %d times, want 1: %v", n, seen())
+	}
+
 	env, out, _ = goldenEnv(t)
 	if err := doAutomationsShow(ctx, env, "PR review api"); err != nil {
 		t.Fatal(err)

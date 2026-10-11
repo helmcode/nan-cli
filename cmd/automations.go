@@ -493,7 +493,12 @@ func doAutomationsRun(ctx context.Context, env *runsEnv, ref string, input json.
 		return runExit(run)
 	}
 	if !replayed {
-		name := runs.SanitizeLine(run.Automation.Label())
+		// The platform names the automation by id; what the member typed
+		// (a name, usually) reads better than a UUID they did not.
+		name := ""
+		if run.Automation != nil {
+			name = runs.SanitizeLine(run.Automation.Name)
+		}
 		if name == "" {
 			name = runs.Truncate(runs.SanitizeLine(ref), 64)
 		}

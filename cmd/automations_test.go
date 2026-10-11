@@ -86,7 +86,8 @@ func (f *fakePhase2) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.runIdem = r.Header.Get("Idempotency-Key")
 		_ = json.NewDecoder(r.Body).Decode(&f.runBody)
 		w.WriteHeader(http.StatusCreated)
-		_, _ = io.WriteString(w, f.runs.run(api.StateQueued))
+		// The platform names the automation by id only.
+		_, _ = io.WriteString(w, strings.Replace(f.runs.run(api.StateQueued), `"object":"run",`, `"object":"run","automation_id":"`+testAutoID+`",`, 1))
 	case r.Method == http.MethodGet && p == "/v1/approvals":
 		f.approvalsQ = r.URL.RawQuery
 		_, _ = io.WriteString(w, `{"object":"list","data":[{"run_id":"`+testRunID+`","state":"pending","approval_from":1,
@@ -262,7 +263,7 @@ func TestAutomationsRunExitsTenOnAwaitingApproval(t *testing.T) {
 		t.Errorf("request: idem %q body %v", fake.runIdem, fake.runBody)
 	}
 	out := h.stdout.String() + h.stderr.String()
-	for _, want := range []string{"approval required for: git_push", "awaiting approval", "nan runs proposal " + testRunID, "nan runs reject " + testRunID, "browser sign-in"} {
+	for _, want := range []string{"of PR review queued on develop", "approval required for: git_push", "awaiting approval", "nan runs proposal " + testRunID, "nan runs reject " + testRunID, "browser sign-in"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}

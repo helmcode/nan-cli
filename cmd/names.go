@@ -17,7 +17,7 @@ import (
 
 // nameLookupTimeout bounds each lookup, so a slow answer to a question the
 // command does not need answered cannot hold up the one it does.
-const nameLookupTimeout = 5 * time.Second
+const nameLookupTimeout = 3 * time.Second
 
 // nameCache holds the names a command looked up. The zero value is ready:
 // each list is fetched the first time a name from it is asked for, and
@@ -85,11 +85,17 @@ func (env *runsEnv) nameAutomation(ctx context.Context, r *api.Ref) {
 	}
 }
 
-// nameRun fills in the names a run's text views show.
-func (env *runsEnv) nameRun(ctx context.Context, run *api.Run) {
+// nameRunWorkspace fills in a run's workspace name when it has none (the
+// platform sends it, except for a workspace deleted since).
+func (env *runsEnv) nameRunWorkspace(ctx context.Context, run *api.Run) {
 	if run.Workspace.Name == "" {
 		run.Workspace.Name = env.workspaceName(ctx, run.Workspace.ID)
 	}
+}
+
+// nameRun fills in the names a run's text views show.
+func (env *runsEnv) nameRun(ctx context.Context, run *api.Run) {
+	env.nameRunWorkspace(ctx, run)
 	env.nameAutomation(ctx, run.Automation)
 }
 

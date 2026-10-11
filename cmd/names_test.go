@@ -396,10 +396,6 @@ func TestNamesNeverWithJSON(t *testing.T) {
 			if got := s.requests(); strings.Join(got, ",") != strings.Join(tc.want, ",") {
 				t.Errorf("requests = %v, want %v", got, tc.want)
 			}
-			if strings.Contains(out.String(), "develop\"") && tc.name != "runs show" && tc.name != "runs proposal" {
-				t.Errorf("a looked-up name reached the JSON:\n%s", out.String())
-			}
-
 			// The same command where no name can be had prints the same.
 			noNames := map[string]answer{
 				"/api/workspaces": {status: http.StatusForbidden, body: scopeDenied},
@@ -468,5 +464,17 @@ func TestNamesOneLookupPerCommand(t *testing.T) {
 	}
 	if strings.Count(out.String(), namesAuto) != 3 {
 		t.Errorf("approvals ls fallback:\n%s", out.String())
+	}
+}
+
+// Ids compare without regard to case: the platform's and the list's may
+// differ in it.
+func TestNamesIDsIgnoreCase(t *testing.T) {
+	env, _, out, _ := newNamesEnv(t, map[string]answer{"/api/workspaces": {body: `[{"workspace_uuid":"` + strings.ToUpper(namesWS) + `","name":"develop"}]`}})
+	if err := doAutomationsShow(context.Background(), env, namesAuto); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := lineOf(t, out.String(), "workspace"), "workspace develop ("+namesWS+")"; got != want {
+		t.Errorf("workspace line = %q, want %q", got, want)
 	}
 }

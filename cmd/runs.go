@@ -44,7 +44,8 @@ var runsCmd = &cobra.Command{
 the portal, or by your automations. These commands authenticate the same
 way as nan run: NAN_TOKEN, --token-file PATH, a token saved with nan auth
 login --api-token, or your nan auth login session (the full order is in
-nan run --help).
+nan run --help). Automation names are looked up with automations:read;
+without it the automation's id is shown instead.
 
 A run of an automation can stop in awaiting_approval: the agent is done and
 the actions it proposed (a push, a pull request, a comment) wait for you.
@@ -281,10 +282,7 @@ func doRunsLs(ctx context.Context, env *runsEnv) error {
 		return nil
 	}
 	for i := range list.Data {
-		r := &list.Data[i]
-		if r.Workspace.Name == "" {
-			r.Workspace.Name = env.workspaceName(ctx, r.Workspace.ID)
-		}
+		env.nameRunWorkspace(ctx, &list.Data[i])
 	}
 	tw := tabwriter.NewWriter(env.stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tSTATE\tWORKSPACE\tAGENT\tCREATED\tPROMPT")

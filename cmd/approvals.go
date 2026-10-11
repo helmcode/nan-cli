@@ -35,7 +35,8 @@ CLI session or tokens (an agent in a workspace, a CI job) can approve the
 actions an agent proposed.
 
 Authentication is the same as nan run (see nan run --help); a platform token
-needs the runs scope.
+needs the runs scope. Automation names are looked up with automations:read;
+without it the automation's id is shown instead.
 
 Docs: https://nan.builders/docs/runs`,
 	Annotations: sysexits,
