@@ -126,6 +126,9 @@ func doApprovalsLs(ctx context.Context, env *runsEnv, state string) error {
 		}
 		return nil
 	}
+	for i := range list.Data {
+		env.nameAutomation(ctx, list.Data[i].Automation)
+	}
 	tw := tabwriter.NewWriter(env.stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "RUN\tSTATE\tAUTOMATION\tWAITING FOR APPROVAL\tEXPIRES")
 	for _, a := range list.Data {

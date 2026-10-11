@@ -119,6 +119,20 @@ func Truncate(s string, n int) string {
 	return string(runes[:n-1]) + "…"
 }
 
+// NameAndID shows a named object in a detail view: "name (id)" when the
+// name is known, so the id stays there to copy, and the id alone when it is
+// not. Both are sanitised.
+func NameAndID(name, id string) string {
+	name, id = SanitizeLine(name), SanitizeLine(id)
+	switch {
+	case name == "":
+		return id
+	case id == "" || name == id:
+		return name
+	}
+	return name + " (" + id + ")"
+}
+
 // Renderer prints a run's events as text. It remembers whether the last
 // thing printed left the cursor mid-line, because assistant text arrives in
 // chunks and the next event must not be glued onto the end of one.
@@ -448,7 +462,7 @@ func Proposal(w io.Writer, run *api.Run) {
 
 	row("run", id+" ("+strings.ReplaceAll(SanitizeLine(run.State), "_", " ")+")")
 	if run.Automation != nil {
-		row("automation", SanitizeLine(run.Automation.Label()))
+		row("automation", NameAndID(run.Automation.Name, run.Automation.ID))
 	}
 	state := SanitizeLine(a.State)
 	switch a.State {

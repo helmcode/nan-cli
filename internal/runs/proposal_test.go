@@ -129,3 +129,18 @@ func TestDiffIsSanitised(t *testing.T) {
 		t.Errorf("%q", b.String())
 	}
 }
+
+func TestNameAndID(t *testing.T) {
+	const id = "a0000000-0000-4000-8000-000000000001"
+	for _, tc := range []struct{ name, id, want string }{
+		{"PR review", id, "PR review (" + id + ")"},
+		{"", id, id},
+		{"PR review", "", "PR review"},
+		{id, id, id},
+		{"bad\x1b[2Jname", id, "badname (" + id + ")"},
+	} {
+		if got := NameAndID(tc.name, tc.id); got != tc.want {
+			t.Errorf("NameAndID(%q, %q) = %q, want %q", tc.name, tc.id, got, tc.want)
+		}
+	}
+}
