@@ -214,7 +214,8 @@ JSON object per line): <https://nan.builders/docs/runs>.
    `nan auth login --api-token`).
 
 Create platform tokens in **Settings > Tokens** at
-<https://cloud.nan.builders>. A token works for runs and for listing your
+<https://cloud.nan.builders>. A token works for runs, for automations (with the
+`automations:read` and `automations:run` scopes) and for listing your
 workspaces, and nothing else: it is not an inference key, and `nan me`,
 `nan metrics` and the dashboard still need `nan auth login`.
 
