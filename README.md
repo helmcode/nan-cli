@@ -149,11 +149,37 @@ nan runs ls [--ws NAME] [--state S] [--limit 20] [--json]   # newest first
 nan runs show <id> [--json]                                 # state, result, prompt
 nan runs logs <id> [-f] [--after N] [--json]                # -f follows until it ends
 nan runs cancel <id> [--json]
+nan runs proposal <id> [--diff] [--json]                    # what an automation run proposed
+nan runs reject <id> [--reason R]                           # turn the proposal down
 ```
+
+### Automations, approvals and secrets
+
+Automations are created and edited in the portal. From the CLI you can list,
+inspect and run them, read their webhook deliveries, see what waits for your
+approval, and list your secrets (names and metadata, never values):
+
+```bash
+nan automations ls [--json]
+nan automations show <id|name> [--json]
+nan automations run <id|name> [--input @payload.json | --input - | --input JSON] [--detach] [--json]
+nan automations deliveries <id|name> [--limit 50] [--json]
+nan approvals ls [--state pending|approved|rejected|expired|cancelled|auto|all] [--json]
+nan approvals show <run-id> [--diff]                        # same as nan runs proposal
+nan secrets ls [--json]                                     # needs nan auth login
+```
+
+Approving a proposal, writing a secret and creating or editing an automation
+happen only in the portal at <https://cloud.nan.builders>, signed in through
+the browser. Each of them can hand a secret to an agent or let it act on your
+repository without asking, so none is possible with a credential an agent or
+a CI job could read: this machine's CLI session, a platform token or an API
+key. A platform token needs the `automations:read` scope to list and inspect
+automations and `automations:run` to start one.
 
 ### Exit codes
 
-`nan run` and `nan runs logs -f` exit with the run's outcome, so a script can
+`nan run`, `nan runs logs -f` and `nan automations run` exit with the run's outcome, so a script can
 branch on it without parsing text:
 
 | Code | Meaning |
@@ -163,6 +189,7 @@ branch on it without parsing text:
 | 2 | timed out |
 | 3 | cancelled (after a double Ctrl-C: cancel requested — `nan runs show` has the final state) |
 | 4 | the workspace is not set up for it: agent not installed, no inference key, bad configuration |
+| 10 | awaiting approval: an automation run whose proposed actions wait for you (`nan runs proposal <id>`, approve in the portal) |
 | 64 | usage error (also: more than one workspace and no `--ws`) |
 | 65 | not signed in, session expired, or not allowed |
 | 69 | nan.builders unavailable, or the stream was lost after retries (the run goes on; the id is printed) |

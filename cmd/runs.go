@@ -544,7 +544,7 @@ func doRunsProposal(ctx context.Context, env *runsEnv, id string, withDiff, asJS
 		if asJSON {
 			return usageErrorf("run %s has no proposal", id)
 		}
-		return usageErrorf("run %s has no proposal — only automation runs that proposed actions have one (state: %s)", id, runs.SanitizeLine(run.State))
+		return usageErrorf("run %s has no proposal: only automation runs that proposed actions have one (state: %s)", id, runs.SanitizeLine(run.State))
 	}
 	if asJSON {
 		return printJSON(env.stdout, run.Approval, true)
@@ -596,7 +596,7 @@ func doRunsReject(ctx context.Context, env *runsEnv, id string) error {
 	if err != nil {
 		var apiErr *api.APIError
 		if errors.As(err, &apiErr) && apiErr.Code == "not_awaiting_approval" {
-			return usageErrorf("run %s is not awaiting approval — see its state with: nan runs show %s", id, id)
+			return usageErrorf("run %s is not awaiting approval; see its state with: nan runs show %s", id, id)
 		}
 		return notFound(err, id, env.cred)
 	}

@@ -99,17 +99,17 @@ func apiExit(err error, cred credential) *ExitError {
 	case "browser_session_required":
 		return exitf(exitAuth, "%s", browserOnly)
 	case "token_scope_denied":
-		return exitf(exitAuth, "%s — %s", msg, scopeHint(cred))
+		return exitf(exitAuth, "%s: %s", msg, scopeHint(cred))
 	case "automation_disabled":
-		return exitf(exitConfig, "that automation is disabled — enable it in the portal at %s", runs.AutomationsURL)
+		return exitf(exitConfig, "that automation is disabled: enable it in the portal at %s", runs.AutomationsURL)
 	case "automation_rate_limited":
-		return exitf(exitUnavailable, "that automation has started as many runs as its hourly limit allows — try again later (%s)", msg)
+		return exitf(exitUnavailable, "that automation has started as many runs as its hourly limit allows; try again later (%s)", msg)
 	case "skipped_active":
 		return exitf(exitUnavailable, "that automation already has a run in progress, and it is set to skip a new one while one is active")
 	case "not_awaiting_approval":
-		return usageErrorf("that run is not awaiting approval — see its state with: nan runs show <id>")
+		return usageErrorf("that run is not awaiting approval; see its state with: nan runs show <id>")
 	case "secrets_unavailable":
-		return exitf(exitUnavailable, "the secrets store is unavailable right now — try again in a few minutes")
+		return exitf(exitUnavailable, "the secrets store is unavailable right now; try again in a few minutes")
 	}
 	switch {
 	case apiErr.Status == 400:

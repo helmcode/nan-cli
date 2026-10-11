@@ -45,7 +45,7 @@ Docs: https://nan.builders/docs/runs`,
 			return usageErrorf("%s", approveInPortal)
 		}
 		if len(args) > 0 {
-			return usageErrorf("unknown command %q for \"nan approvals\" — try: nan approvals --help", runs.Truncate(runs.SanitizeLine(args[0]), 64))
+			return usageErrorf("unknown command %q for \"nan approvals\"; try: nan approvals --help", runs.Truncate(runs.SanitizeLine(args[0]), 64))
 		}
 		return cmd.Help()
 	},
@@ -148,7 +148,7 @@ func doApprovalsLs(ctx context.Context, env *runsEnv, state string) error {
 		return err
 	}
 	if list.NextCursor != nil {
-		fmt.Fprintf(env.stderr, "showing the %d most recent — raise --limit (up to 100) for more\n", len(list.Data))
+		fmt.Fprintf(env.stderr, "showing the %d most recent; raise --limit (up to 100) for more\n", len(list.Data))
 	}
 	if state == api.ApprovalPending {
 		fmt.Fprintf(env.stderr, "\nreview one: nan runs proposal <run-id>\napprove:    in the portal, %s (approving needs a browser sign-in)\nreject:     nan runs reject <run-id>\n", runs.AutomationsURL)

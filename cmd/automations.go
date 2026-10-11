@@ -76,7 +76,7 @@ Docs: https://nan.builders/docs/runs`,
 			return usageErrorf("%s", automationsPortalOnly)
 		}
 		if len(args) > 0 {
-			return usageErrorf("unknown command %q for \"nan automations\" — try: nan automations --help", runs.Truncate(runs.SanitizeLine(args[0]), 64))
+			return usageErrorf("unknown command %q for \"nan automations\"; try: nan automations --help", runs.Truncate(runs.SanitizeLine(args[0]), 64))
 		}
 		return cmd.Help()
 	},
@@ -185,11 +185,11 @@ func init() {
 func oneAutomation(cmd *cobra.Command, args []string) error {
 	switch {
 	case len(args) == 0:
-		return usageErrorf("missing automation id or name — see: nan automations ls")
+		return usageErrorf("missing automation id or name; see: nan automations ls")
 	case len(args) > 1:
 		return usageErrorf("one automation at a time (quote a name with spaces)")
 	case strings.TrimSpace(args[0]) == "":
-		return usageErrorf("empty automation name — see: nan automations ls")
+		return usageErrorf("empty automation name; see: nan automations ls")
 	}
 	return nil
 }
@@ -215,9 +215,9 @@ func resolveAutomation(ctx context.Context, env *runsEnv, ref string) (string, e
 	}
 	shown := runs.Truncate(runs.SanitizeLine(ref), 64)
 	if len(folded) == 1 {
-		return "", usageErrorf("no automation named %q — did you mean %q? See: nan automations ls", shown, runs.SanitizeLine(folded[0]))
+		return "", usageErrorf("no automation named %q; did you mean %q? See: nan automations ls", shown, runs.SanitizeLine(folded[0]))
 	}
-	return "", usageErrorf("no automation named %q — see: nan automations ls", shown)
+	return "", usageErrorf("no automation named %q; see: nan automations ls", shown)
 }
 
 // automationExit is apiExit with a 404 that names the automation.
@@ -409,7 +409,7 @@ func readAutomationInput(in promptInput, flag string) (json.RawMessage, error) {
 	switch {
 	case flag == "-":
 		if in.tty && in.notice != nil {
-			fmt.Fprintln(in.notice, "reading the input from stdin — end it with Ctrl-D")
+			fmt.Fprintln(in.notice, "reading the input from stdin; end it with Ctrl-D")
 		}
 		if in.r == nil {
 			return nil, usageErrorf("no stdin to read the input from")
@@ -462,7 +462,7 @@ func doAutomationsRun(ctx context.Context, env *runsEnv, ref string, input json.
 	if err != nil {
 		var apiErr *api.APIError
 		if errors.As(err, &apiErr) && apiErr.Code == "workspace_not_running" {
-			return exitf(exitUnavailable, "the automation's workspace is not running — start it at %s and try again", runs.PortalURL)
+			return exitf(exitUnavailable, "the automation's workspace is not running; start it at %s and try again", runs.PortalURL)
 		}
 		return automationExit(err, ref, env.cred)
 	}
@@ -489,7 +489,7 @@ func doAutomationsRun(ctx context.Context, env *runsEnv, ref string, input json.
 		if name == "" {
 			name = runs.Truncate(runs.SanitizeLine(ref), 64)
 		}
-		fmt.Fprintf(env.stderr, "run %s of %s queued on %s — Ctrl-C to detach\n", run.ID, name, runs.SanitizeLine(run.Workspace.Name))
+		fmt.Fprintf(env.stderr, "run %s of %s queued on %s; Ctrl-C to detach\n", run.ID, name, runs.SanitizeLine(run.Workspace.Name))
 	}
 	return follow(ctx, env, run.ID, 0, autoRunJSON, true)
 }

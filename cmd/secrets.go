@@ -55,7 +55,7 @@ Docs: https://nan.builders/docs/runs`,
 			return usageErrorf("%s", secretsPortalOnly)
 		}
 		if len(args) > 0 {
-			return usageErrorf("unknown command %q for \"nan secrets\" — try: nan secrets --help", runs.Truncate(runs.SanitizeLine(args[0]), 64))
+			return usageErrorf("unknown command %q for \"nan secrets\"; try: nan secrets --help", runs.Truncate(runs.SanitizeLine(args[0]), 64))
 		}
 		return cmd.Help()
 	},
