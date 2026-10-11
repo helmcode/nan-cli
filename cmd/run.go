@@ -104,6 +104,8 @@ Exit codes:
   3   the run was cancelled (after a double Ctrl-C: cancel requested)
   4   the workspace is not set up for it (agent not installed, no inference
       key, bad configuration)
+  10  awaiting approval: an automation run whose proposed actions wait for
+      you (nan runs proposal <id>; approve in the portal)
   64  usage error
   65  not signed in, or not allowed
   69  nan.builders unavailable, or the stream was lost (the run goes on)

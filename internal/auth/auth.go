@@ -21,7 +21,6 @@ import (
 
 const (
 	loginRequestURL = "https://cloud-api.nan.builders/api/auth/login/request"
-	loginVerifyURL  = "https://cloud-api.nan.builders/api/auth/login/verify"
 	sessionCookie   = "nan_session"
 	// The domain the platform sends its sign-in links from. Subdomains count:
 	// the link lands on the web app, the API lives next door.
@@ -34,6 +33,21 @@ const (
 	// up dead, and the paste prompt cannot tell anybody that.
 	LinkValidity = "15 minutes"
 )
+
+// loginVerifyURL is a variable so a test can point the exchange at a server
+// of its own.
+var loginVerifyURL = "https://cloud-api.nan.builders/api/auth/login/verify"
+
+// clientKind is what this CLI declares on the verify POST, so the platform
+// records the session it hands back as a CLI session. A CLI session can
+// read, start runs and reject proposals; approving a proposal, writing a
+// secret and editing an automation need a session signed in through the
+// browser. The session file this CLI keeps is readable by anything running
+// as the member - an agent in a workspace included - and must never be able
+// to do those. The platform never takes a client's word for "browser": that
+// kind is proven by the browser flow itself, so declaring "cli" here only
+// ever narrows what the session can do.
+const clientKind = "cli"
 
 // A timeout, because http.DefaultClient has none: a connection that is
 // accepted and then never answered - a captive portal, a hotel network, a
@@ -112,7 +126,7 @@ func ExchangeToken(token string) (string, error) {
 			return http.ErrUseLastResponse
 		},
 	}
-	form := url.Values{"token": {token}}
+	form := url.Values{"token": {token}, "client": {clientKind}}
 	resp, err := client.PostForm(loginVerifyURL, form)
 	if err != nil {
 		return "", fmt.Errorf("could not reach nan.builders: %w", err)

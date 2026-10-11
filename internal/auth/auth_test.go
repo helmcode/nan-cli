@@ -1,6 +1,9 @@
 package auth
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -91,5 +94,30 @@ func TestRefusedLinkSaysWhatToDoAboutIt(t *testing.T) {
 				t.Errorf("linkReasonMessage(%q) = %q, want it to mention %q", c.reason, got, c.want)
 			}
 		})
+	}
+}
+
+// The verify POST declares this client as the CLI (AGENT-AUTOMATIONS-PHASE2
+// §11.3), so the session is recorded as a CLI session, never as a browser
+// one.
+func TestExchangeTokenDeclaresTheCLI(t *testing.T) {
+	var form url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		form = r.PostForm
+		http.SetCookie(w, &http.Cookie{Name: "nan_session", Value: "sess"})
+		http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+	}))
+	defer srv.Close()
+	old := loginVerifyURL
+	loginVerifyURL = srv.URL
+	defer func() { loginVerifyURL = old }()
+
+	got, err := ExchangeToken("tok")
+	if err != nil || got != "sess" {
+		t.Fatalf("%q %v", got, err)
+	}
+	if form.Get("token") != "tok" || form.Get("client") != "cli" || form.Has("flow") {
+		t.Errorf("form = %v", form)
 	}
 }

@@ -31,6 +31,12 @@ const (
 	StateFailed    = "failed"
 	StateCancelled = "cancelled"
 	StateTimedOut  = "timed_out"
+
+	// StateAwaitingApproval is a run whose agent finished and proposed
+	// actions that wait for the member's decision. It is not terminal: the
+	// run goes on to succeeded (approved, in the portal), cancelled
+	// (rejected or expired) or failed (an earlier automatic action failed).
+	StateAwaitingApproval = "awaiting_approval"
 )
 
 // Terminal reports whether a run in this state will never change again.
@@ -53,13 +59,21 @@ type RunArtifact struct {
 	SHA256 string `json:"sha256"`
 }
 
+// ActionApplied is the outcome of one action of an apply run.
+type ActionApplied struct {
+	Kind string `json:"kind"`
+	OK   bool   `json:"ok"`
+	Ref  string `json:"ref,omitempty"`
+}
+
 type RunResult struct {
-	Status       string        `json:"status"`
-	Summary      string        `json:"summary"`
-	Branch       string        `json:"branch"`
-	Commit       string        `json:"commit"`
-	ChangedFiles int           `json:"changed_files"`
-	Artifacts    []RunArtifact `json:"artifacts"`
+	ActionsApplied []ActionApplied `json:"actions_applied,omitempty"`
+	Status         string          `json:"status"`
+	Summary        string          `json:"summary"`
+	Branch         string          `json:"branch"`
+	Commit         string          `json:"commit"`
+	ChangedFiles   int             `json:"changed_files"`
+	Artifacts      []RunArtifact   `json:"artifacts"`
 }
 
 type RunUsage struct {
@@ -94,6 +108,48 @@ type Run struct {
 	CreatedAt       string       `json:"created_at"`
 	StartedAt       *string      `json:"started_at"`
 	FinishedAt      *string      `json:"finished_at"`
+
+	// Phase 2 (automations). Absent on an ad-hoc run of an older platform.
+	Phase         string      `json:"phase,omitempty"` // run | propose | apply
+	Inference     *Inference  `json:"inference,omitempty"`
+	Automation    *Ref        `json:"automation,omitempty"`
+	ParentRunID   *string     `json:"parent_run_id,omitempty"`
+	Approval      *Approval   `json:"approval,omitempty"`
+	ApplyRunID    *string     `json:"apply_run_id,omitempty"`
+	ApplyRunIDs   []string    `json:"apply_run_ids,omitempty"`
+	ApprovalKinds []string    `json:"approval_kinds,omitempty"`
+	GitHubRepo    *string     `json:"github_repo,omitempty"`
+	TriggerDepth  int         `json:"trigger_depth,omitempty"`
+	Secrets       []RunSecret `json:"secrets,omitempty"`
+}
+
+// RunSecret is a secret a run received: its env name and who saw it.
+type RunSecret struct {
+	Env      string `json:"env"`
+	Exposure string `json:"exposure"`
+}
+
+// UnmarshalJSON reads a run, accepting the older spellings of two Phase 2
+// fields: inference_source for inference.source, and automation_id for
+// automation.
+func (r *Run) UnmarshalJSON(b []byte) error {
+	type plain Run
+	var aux struct {
+		*plain
+		InferenceSource string `json:"inference_source"`
+		AutomationID    string `json:"automation_id"`
+	}
+	aux.plain = (*plain)(r)
+	if err := json.Unmarshal(b, &aux); err != nil {
+		return err
+	}
+	if r.Inference == nil && aux.InferenceSource != "" {
+		r.Inference = &Inference{Source: aux.InferenceSource}
+	}
+	if r.Automation == nil && aux.AutomationID != "" {
+		r.Automation = &Ref{ID: aux.AutomationID}
+	}
+	return nil
 }
 
 // CreateRunRequest is the body of POST /v1/runs. Pointers are the fields the
@@ -316,7 +372,9 @@ func (c *RunsClient) statusError(status int, body []byte) error {
 		} `json:"error"`
 	}
 	var bare struct {
-		Error string `json:"error"`
+		Error   string  `json:"error"`
+		Message string  `json:"message"`
+		Param   *string `json:"param"`
 	}
 	switch {
 	case json.Unmarshal(body, &openai) == nil && (openai.Error.Message != "" || openai.Error.Code != nil):
@@ -332,7 +390,16 @@ func (c *RunsClient) statusError(status int, body []byte) error {
 			apiErr.Code = strconv.Itoa(int(code))
 		}
 	case json.Unmarshal(body, &bare) == nil && bare.Error != "":
+		// /api answers {"error":"text"} on older routes and
+		// {"error":"code","message":"text"} on newer ones (secrets).
 		apiErr.Message = bare.Error
+		if bare.Message != "" {
+			apiErr.Code = bare.Error
+			apiErr.Message = bare.Message
+		}
+		if bare.Param != nil {
+			apiErr.Param = *bare.Param
+		}
 	}
 	return apiErr
 }
