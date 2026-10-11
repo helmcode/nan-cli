@@ -3559,7 +3559,7 @@ func (m model) renderSetup(l layout) string {
 
 // ── about renderer ───────────────────────────────────────────────────────────
 
-const Version = "0.1.25"
+const Version = "0.1.26"
 
 func renderAbout(l layout) string {
 	var b strings.Builder
