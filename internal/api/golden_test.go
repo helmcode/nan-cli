@@ -30,8 +30,8 @@ const (
 
 func checkGoldenApproval(t *testing.T, a *Approval) {
 	t.Helper()
-	if a == nil || a.RunID != goldenRun || a.State != ApprovalPending || a.ApprovalFrom == nil || *a.ApprovalFrom != 1 ||
-		!a.HasDiff || a.DiffMasked || a.ProposalSHA256 == "" || a.ExpiresAt == nil ||
+	if a == nil || a.RunID != goldenRun || a.State != ApprovalPending || a.ApprovalFrom == nil || *a.ApprovalFrom != 2 ||
+		a.HasDiff || a.DiffMasked || a.ProposalSHA256 == "" || a.ExpiresAt == nil ||
 		a.PrefixApplyRunID == nil || *a.PrefixApplyRunID != goldenApplyRun || a.ApplyRunID != nil {
 		t.Fatalf("approval = %+v", a)
 	}

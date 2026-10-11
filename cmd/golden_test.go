@@ -75,14 +75,23 @@ func TestGoldenRender(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantAll(t, "runs proposal", out.String(), "waiting for your approval", "[automatic]", "[needs approval]",
-		"github_pr_comment  acme/api#42", "<img onerror=x> looks fine", "github_pr_review  acme/api#42  COMMENT",
-		"+3 -1", "a.go", "--diff", "/workspaces/"+ws+"/runs/"+run)
+		"2. github_pr_comment  acme/api#42  [automatic]", "<img onerror=x> looks fine",
+		"3. github_pr_review  acme/api#42  COMMENT  [needs approval]",
+		"+3 -1", "a.go", "/workspaces/"+ws+"/runs/"+run)
+	// approval_from 2: only the review waits, the push is automatic, so no
+	// diff is stored and none is offered.
+	if strings.Contains(out.String(), "--diff") {
+		t.Errorf("runs proposal offers a diff that is not stored:\n%s", out.String())
+	}
 
 	env, out, _ = goldenEnv(t)
 	if err := doApprovalsLs(ctx, env, api.ApprovalPending); err != nil {
 		t.Fatal(err)
 	}
-	wantAll(t, "approvals ls", out.String(), run, "pending", "a0000000-0000-4000-8000-000000000001", "github_pr_comment, github_pr_review")
+	wantAll(t, "approvals ls", out.String(), run, "pending", "a0000000-0000-4000-8000-000000000001", "github_pr_review")
+	if strings.Contains(out.String(), "github_pr_comment") {
+		t.Errorf("approvals ls lists an action that applied automatically:\n%s", out.String())
+	}
 
 	env, out, _ = goldenEnv(t)
 	if err := doAutomationsLs(ctx, env); err != nil {

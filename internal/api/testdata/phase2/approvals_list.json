@@ -2,7 +2,7 @@
   "data": [
     {
       "apply_run_id": null,
-      "approval_from": 1,
+      "approval_from": 2,
       "automation_id": "a0000000-0000-4000-8000-000000000001",
       "decided_at": null,
       "diff_masked": false,
@@ -21,7 +21,7 @@
         "truncated": false
       },
       "expires_at": "2026-10-14T09:00:00Z",
-      "has_diff": true,
+      "has_diff": false,
       "prefix_apply_run_id": "d0000000-0000-4000-8000-000000000004",
       "proposal": {
         "actions": [
