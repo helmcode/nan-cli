@@ -354,6 +354,12 @@ func doRunsShow(ctx context.Context, env *runsEnv, id string) error {
 	if run.Automation != nil {
 		row("automation", runs.SanitizeLine(run.Automation.Label()))
 	}
+	if run.GitHubRepo != nil {
+		row("repository", runs.SanitizeLine(*run.GitHubRepo))
+	}
+	for _, sec := range run.Secrets {
+		row("secret", runs.SanitizeLine(sec.Env)+" ("+exposureNote(sec.Exposure)+")")
+	}
 	if run.ParentRunID != nil {
 		row("parent run", runs.SanitizeLine(*run.ParentRunID))
 	}
@@ -394,6 +400,16 @@ func doRunsShow(ctx context.Context, env *runsEnv, id string) error {
 		}
 		for _, a := range res.Artifacts {
 			row("artifact", fmt.Sprintf("%s (%d bytes)", runs.SanitizeLine(a.Path), a.Bytes))
+		}
+		for i, a := range res.ActionsApplied {
+			outcome := "ok"
+			if !a.OK {
+				outcome = "failed"
+			}
+			if a.Ref != "" {
+				outcome += " · " + runs.Truncate(runs.SanitizeLine(a.Ref), 80)
+			}
+			row("action", fmt.Sprintf("%d. %s %s", i+1, runs.SanitizeLine(a.Kind), outcome))
 		}
 	}
 	if u := run.Usage; u != nil && (u.TokensIn != nil || u.TokensOut != nil) {

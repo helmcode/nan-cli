@@ -128,6 +128,28 @@ type Approval struct {
 	Automation *Ref   `json:"automation,omitempty"`
 }
 
+// UnmarshalJSON reads an approval, accepting workspace_id and automation_id
+// where the platform sends ids instead of {id,name} objects.
+func (a *Approval) UnmarshalJSON(b []byte) error {
+	type plain Approval
+	var aux struct {
+		*plain
+		WorkspaceID  string `json:"workspace_id"`
+		AutomationID string `json:"automation_id"`
+	}
+	aux.plain = (*plain)(a)
+	if err := json.Unmarshal(b, &aux); err != nil {
+		return err
+	}
+	if a.Workspace == nil && aux.WorkspaceID != "" {
+		a.Workspace = &Ref{ID: aux.WorkspaceID}
+	}
+	if a.Automation == nil && aux.AutomationID != "" {
+		a.Automation = &Ref{ID: aux.AutomationID}
+	}
+	return nil
+}
+
 type ApprovalList struct {
 	Object     string     `json:"object"`
 	Data       []Approval `json:"data"`

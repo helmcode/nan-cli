@@ -25,7 +25,7 @@ func TestRunDecodesPhase2Fields(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &run); err != nil {
 		t.Fatal(err)
 	}
-	if run.Phase != "propose" || run.InferenceSource != "nan" || run.Automation.Label() != "PR review" || len(run.ApplyRunIDs) != 2 {
+	if run.Phase != "propose" || run.Inference.Source != "nan" || run.Automation.Label() != "PR review" || len(run.ApplyRunIDs) != 2 {
 		t.Errorf("run = %+v", run)
 	}
 	a := run.Approval
@@ -35,6 +35,25 @@ func TestRunDecodesPhase2Fields(t *testing.T) {
 	p := a.Proposal
 	if len(p.Actions) != 2 || !p.Actions[0].Force || p.Actions[1].Labels[0] != "bug" || p.Diffstat.Files[0].Added != 3 {
 		t.Errorf("proposal = %+v", p)
+	}
+}
+
+// The contract's spellings, and the older ones, decode to the same fields.
+func TestRunAndApprovalAcceptBothSpellings(t *testing.T) {
+	var run Run
+	if err := json.Unmarshal([]byte(`{"id":"r","inference":{"source":"nan"},"automation":null,"automation_id":"a9",
+	"secrets":[{"env":"GITHUB_TOKEN","exposure":"agent"}],"result":{"status":"ok","actions_applied":[{"kind":"git_push","ok":true,"ref":"abc"}]}}`), &run); err != nil {
+		t.Fatal(err)
+	}
+	if run.Inference.Source != "nan" || run.Automation.ID != "a9" || run.Secrets[0].Env != "GITHUB_TOKEN" || !run.Result.ActionsApplied[0].OK {
+		t.Errorf("%+v", run)
+	}
+	var a Approval
+	if err := json.Unmarshal([]byte(`{"run_id":"r","state":"pending","workspace_id":"w1","automation_id":"a1"}`), &a); err != nil {
+		t.Fatal(err)
+	}
+	if a.Workspace.ID != "w1" || a.Automation.ID != "a1" || a.RunID != "r" {
+		t.Errorf("%+v", a)
 	}
 }
 

@@ -432,7 +432,8 @@ func TestApprovalsStateFlag(t *testing.T) {
 func awaitingRunJSON() string {
 	return `{"id":"` + testRunID + `","object":"run","state":"awaiting_approval","phase":"propose","workspace":{"id":"` + testWSID + `","name":"develop"},
 	"agent":"pi","trigger":"webhook","automation":{"id":"` + testAutoID + `","name":"PR review"},"created_at":"2026-10-10T12:00:00Z",
-	"apply_run_ids":["` + testRunID[:35] + `2"],
+	"apply_run_ids":["` + testRunID[:35] + `2"],"github_repo":"acme/api","secrets":[{"env":"GITHUB_TOKEN","exposure":"agent"}],
+	"result":{"status":"ok","summary":"","branch":"","commit":"","changed_files":0,"artifacts":[],"actions_applied":[{"kind":"github_pr_comment","ok":true,"ref":"https://github.com/acme/api/pull/4#c1"}]},
 	"approval":{"run_id":"` + testRunID + `","state":"pending","approval_from":0,"expires_at":"2026-10-14T12:00:00Z",
 	"proposal":{"v":1,"actions":[{"kind":"git_push","base":"main","branch":"fix/x","commit":"0123456789abcdef","commit_message":"fix\u001b[2J it"}],
 	"base":"main","merge_base":"m","diffstat":{"files":[{"path":"a.go","added":1,"deleted":0,"binary":false}],"files_changed":1,"insertions":1,"deletions":0,"truncated":false}},
@@ -500,7 +501,8 @@ func TestRunsShowPhase2(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := h.stdout.String()
-	for _, want := range []string{"phase", "propose", "automation", "PR review", "approval", "pending", "1 actions (nan runs proposal", "apply run", testRunID[:35] + "2", "awaiting your approval", "nan runs reject " + testRunID} {
+	for _, want := range []string{"phase", "propose", "automation", "PR review", "approval", "pending", "1 actions (nan runs proposal", "apply run", testRunID[:35] + "2", "awaiting your approval", "nan runs reject " + testRunID,
+		"repository", "acme/api", "GITHUB_TOKEN (the agent)", "1. github_pr_comment ok · https://github.com/acme/api/pull/4#c1"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("show lacks %q:\n%s", want, out)
 		}

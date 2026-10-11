@@ -70,6 +70,8 @@ type Trigger struct {
 	NextFireAt      *string `json:"next_fire_at,omitempty"`
 	LastFiredAt     *string `json:"last_fired_at,omitempty"`
 	LastOutcome     *string `json:"last_outcome,omitempty"`
+	PrevSecretUntil *string `json:"prev_secret_until,omitempty"`
+	CreatedAt       string  `json:"created_at,omitempty"`
 }
 
 type TriggerList struct {

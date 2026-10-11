@@ -59,13 +59,21 @@ type RunArtifact struct {
 	SHA256 string `json:"sha256"`
 }
 
+// ActionApplied is the outcome of one action of an apply run.
+type ActionApplied struct {
+	Kind string `json:"kind"`
+	OK   bool   `json:"ok"`
+	Ref  string `json:"ref,omitempty"`
+}
+
 type RunResult struct {
-	Status       string        `json:"status"`
-	Summary      string        `json:"summary"`
-	Branch       string        `json:"branch"`
-	Commit       string        `json:"commit"`
-	ChangedFiles int           `json:"changed_files"`
-	Artifacts    []RunArtifact `json:"artifacts"`
+	ActionsApplied []ActionApplied `json:"actions_applied,omitempty"`
+	Status         string          `json:"status"`
+	Summary        string          `json:"summary"`
+	Branch         string          `json:"branch"`
+	Commit         string          `json:"commit"`
+	ChangedFiles   int             `json:"changed_files"`
+	Artifacts      []RunArtifact   `json:"artifacts"`
 }
 
 type RunUsage struct {
@@ -102,13 +110,46 @@ type Run struct {
 	FinishedAt      *string      `json:"finished_at"`
 
 	// Phase 2 (automations). Absent on an ad-hoc run of an older platform.
-	Phase           string    `json:"phase,omitempty"` // run | propose | apply
-	InferenceSource string    `json:"inference_source,omitempty"`
-	Automation      *Ref      `json:"automation,omitempty"`
-	ParentRunID     *string   `json:"parent_run_id,omitempty"`
-	Approval        *Approval `json:"approval,omitempty"`
-	ApplyRunID      *string   `json:"apply_run_id,omitempty"`
-	ApplyRunIDs     []string  `json:"apply_run_ids,omitempty"`
+	Phase         string      `json:"phase,omitempty"` // run | propose | apply
+	Inference     *Inference  `json:"inference,omitempty"`
+	Automation    *Ref        `json:"automation,omitempty"`
+	ParentRunID   *string     `json:"parent_run_id,omitempty"`
+	Approval      *Approval   `json:"approval,omitempty"`
+	ApplyRunID    *string     `json:"apply_run_id,omitempty"`
+	ApplyRunIDs   []string    `json:"apply_run_ids,omitempty"`
+	ApprovalKinds []string    `json:"approval_kinds,omitempty"`
+	GitHubRepo    *string     `json:"github_repo,omitempty"`
+	TriggerDepth  int         `json:"trigger_depth,omitempty"`
+	Secrets       []RunSecret `json:"secrets,omitempty"`
+}
+
+// RunSecret is a secret a run received: its env name and who saw it.
+type RunSecret struct {
+	Env      string `json:"env"`
+	Exposure string `json:"exposure"`
+}
+
+// UnmarshalJSON reads a run, accepting the older spellings of two Phase 2
+// fields: inference_source for inference.source, and automation_id for
+// automation.
+func (r *Run) UnmarshalJSON(b []byte) error {
+	type plain Run
+	var aux struct {
+		*plain
+		InferenceSource string `json:"inference_source"`
+		AutomationID    string `json:"automation_id"`
+	}
+	aux.plain = (*plain)(r)
+	if err := json.Unmarshal(b, &aux); err != nil {
+		return err
+	}
+	if r.Inference == nil && aux.InferenceSource != "" {
+		r.Inference = &Inference{Source: aux.InferenceSource}
+	}
+	if r.Automation == nil && aux.AutomationID != "" {
+		r.Automation = &Ref{ID: aux.AutomationID}
+	}
+	return nil
 }
 
 // CreateRunRequest is the body of POST /v1/runs. Pointers are the fields the
