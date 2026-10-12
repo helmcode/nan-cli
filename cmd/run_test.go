@@ -525,6 +525,37 @@ func TestRunFlagsShapeTheRequest(t *testing.T) {
 	}
 }
 
+// --agent takes every agent the platform runs: pi, pi_gentle (Pi with
+// gentle-shell) and hermes, sent as given. Anything else is a usage error.
+func TestRunAgentValues(t *testing.T) {
+	for _, agent := range []string{"pi", "pi_gentle", "hermes"} {
+		h := newHarness(t, &fakePlatform{})
+		opts := defaultOpts()
+		opts.agent = agent
+		if err := doRun(context.Background(), h.env, opts, []string{"x"}); err != nil {
+			t.Fatalf("%s: %v", agent, err)
+		}
+		if h.fake.created["agent"] != agent {
+			t.Errorf("%s: created with %v", agent, h.fake.created["agent"])
+		}
+	}
+	for _, bad := range []string{"gentle_shell", "pi-gentle", "Pi", ""} {
+		h := newHarness(t, &fakePlatform{})
+		opts := defaultOpts()
+		opts.agent = bad
+		err := doRun(context.Background(), h.env, opts, []string{"x"})
+		if exitCode(err) != exitUsage || h.fake.created != nil {
+			t.Errorf("%q: exit %d, sent %v", bad, exitCode(err), h.fake.created)
+		}
+		if err != nil && !strings.Contains(err.Error(), "pi, pi_gentle or hermes") {
+			t.Errorf("%q: the error does not list the agents: %v", bad, err)
+		}
+	}
+	if f := runCmd.Flags().Lookup("agent"); f == nil || !strings.Contains(f.Usage, "pi_gentle") {
+		t.Errorf("--agent help does not mention pi_gentle")
+	}
+}
+
 func TestRunUsageErrorsExit64BeforeSendingAnything(t *testing.T) {
 	long := strings.Repeat("a", maxPromptBytes+1)
 	file := filepath.Join(t.TempDir(), "prompt.md")
