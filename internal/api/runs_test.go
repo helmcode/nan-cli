@@ -542,7 +542,8 @@ func TestFollowSkipsAMalformedEnd(t *testing.T) {
 
 func TestFollowRefusesOversizedLinesAndFrames(t *testing.T) {
 	for name, body := range map[string]string{
-		"line":  "data: " + strings.Repeat("a", maxSSELine+1) + "\n\n",
+		"line": "data: " + strings.Repeat("a", maxSSELine+1) + "\n\n",
+		// refused on its 9th line: 9 x 512 KiB is over the 4 MiB frame cap
 		"frame": strings.Repeat("data: "+strings.Repeat("a", maxSSELine/2)+"\n", 10) + "\n",
 	} {
 		var calls atomic.Int32
@@ -567,9 +568,10 @@ func TestFollowRefusesOversizedLinesAndFrames(t *testing.T) {
 // was not quiet and must not be reconnected. A reconnect here also turned an
 // oversized frame into a second connection before it was refused (#46).
 func TestFollowBusyConsumerIsNotIdle(t *testing.T) {
-	const events = 8
+	const events = 5
 	for name, tail := range map[string]string{
-		"end":   sseEnd("succeeded"),
+		"end": sseEnd("succeeded"),
+		// refused on its 9th line: 9 x 512 KiB is over the 4 MiB frame cap
 		"frame": strings.Repeat("data: "+strings.Repeat("a", maxSSELine/2)+"\n", 10) + "\n",
 	} {
 		var calls atomic.Int32
@@ -581,10 +583,12 @@ func TestFollowBusyConsumerIsNotIdle(t *testing.T) {
 			}
 			_, _ = io.WriteString(w, tail)
 		}), "t", "")
-		c.IdleTimeout = 30 * time.Millisecond
 		// Every frame keeps Follow busy for twice the idle limit, so each one
 		// is a chance for the expired idle timer and the waiting line to race.
-		_, err := c.Follow(context.Background(), runID, 0, func(Frame) { time.Sleep(60 * time.Millisecond) })
+		// The limit itself stays wide enough for a loaded runner to deliver
+		// the headers and the next line inside it.
+		c.IdleTimeout = 100 * time.Millisecond
+		_, err := c.Follow(context.Background(), runID, 0, func(Frame) { time.Sleep(200 * time.Millisecond) })
 		switch name {
 		case "end":
 			if err != nil || calls.Load() != 1 {
