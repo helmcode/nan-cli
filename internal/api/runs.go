@@ -698,72 +698,79 @@ func (c *RunsClient) followOnce(ctx context.Context, id string, lastSeq *int64, 
 		return nil, healthy(), err
 	}
 	for {
+		var line string
 		select {
 		case <-ctx.Done():
 			return nil, healthy(), ctx.Err()
 		case <-timer.C:
-			// A read that already ended decides the outcome, whichever of
-			// the two select happened to pick.
+			// A read that already ended, or a line already read and waiting
+			// for us, decides the outcome whichever case select happened to
+			// pick: the timer also expires while we are busy (in onFrame, or
+			// descheduled), and a reader blocked handing us a line has
+			// stopped reading because of us, not because the connection went
+			// quiet. Calling that idle reconnected a working stream, and
+			// turned an oversized frame into a second connection (#46).
 			select {
 			case err := <-readErr:
 				return readEnded(err)
+			case line = <-lines:
 			default:
-			}
-			if quiet := time.Since(time.Unix(0, lastRead.Load())); quiet < idle {
-				timer.Reset(idle - quiet)
-				continue
-			}
-			return nil, healthy(), errIdle
-		case err := <-readErr:
-			return readEnded(err)
-		case line := <-lines:
-			heard = true
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			timer.Reset(idle)
-
-			line = strings.TrimSuffix(line, "\r")
-			if line == "" {
-				if len(data) == 0 && eventName == "" {
+				if quiet := time.Since(time.Unix(0, lastRead.Load())); quiet < idle {
+					timer.Reset(idle - quiet)
 					continue
 				}
-				payload := strings.Join(data, "\n")
-				name := eventName
-				frameID := eventID
-				eventName, eventID, data, dataBytes = "", "", nil, 0
-				run, delivered := dispatchFrame(name, frameID, payload, lastSeq, onFrame)
-				if run != nil {
-					if run.ID != id {
-						return nil, true, &fatalStreamError{errors.New("the event stream ended with a different run")}
-					}
-					return run, true, nil
-				}
-				if delivered {
-					progressed = true
-				}
+				return nil, healthy(), errIdle
+			}
+		case err := <-readErr:
+			return readEnded(err)
+		case line = <-lines:
+		}
+		heard = true
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(idle)
+
+		line = strings.TrimSuffix(line, "\r")
+		if line == "" {
+			if len(data) == 0 && eventName == "" {
 				continue
 			}
-			if strings.HasPrefix(line, ":") {
-				continue
-			}
-			field, value, _ := strings.Cut(line, ":")
-			value = strings.TrimPrefix(value, " ")
-			switch field {
-			case "event":
-				eventName = value
-			case "id":
-				eventID = value
-			case "data":
-				dataBytes += len(value)
-				if dataBytes > maxSSEFrame {
-					return nil, healthy(), &fatalStreamError{fmt.Errorf("the platform sent a stream frame over %d bytes", maxSSEFrame)}
+			payload := strings.Join(data, "\n")
+			name := eventName
+			frameID := eventID
+			eventName, eventID, data, dataBytes = "", "", nil, 0
+			run, delivered := dispatchFrame(name, frameID, payload, lastSeq, onFrame)
+			if run != nil {
+				if run.ID != id {
+					return nil, true, &fatalStreamError{errors.New("the event stream ended with a different run")}
 				}
-				data = append(data, value)
+				return run, true, nil
 			}
+			if delivered {
+				progressed = true
+			}
+			continue
+		}
+		if strings.HasPrefix(line, ":") {
+			continue
+		}
+		field, value, _ := strings.Cut(line, ":")
+		value = strings.TrimPrefix(value, " ")
+		switch field {
+		case "event":
+			eventName = value
+		case "id":
+			eventID = value
+		case "data":
+			dataBytes += len(value)
+			if dataBytes > maxSSEFrame {
+				return nil, healthy(), &fatalStreamError{fmt.Errorf("the platform sent a stream frame over %d bytes", maxSSEFrame)}
+			}
+			data = append(data, value)
 		}
 	}
 }
