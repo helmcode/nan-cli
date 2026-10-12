@@ -200,7 +200,20 @@ func flagValue(value string) (string, error) {
 	return value, nil
 }
 
+// logoutWarnings is where `nan auth logout` says the platform did not confirm
+// the sign-out. A variable so the tests can read it.
+var logoutWarnings io.Writer = os.Stderr
+
 func runLogout(cmd *cobra.Command, args []string) error {
+	// End the session on the platform first, while session.json still holds
+	// the token: deleting the file alone leaves any copy of the token working
+	// until it expires. A platform that cannot be reached does not keep the
+	// member signed in here; the file still goes, and they are told.
+	if current, err := session.Load(); err == nil && current.Token != "" {
+		if err := api.New(current.Token).WithBaseURL(apiBaseURL).Logout(); err != nil {
+			fmt.Fprintf(logoutWarnings, "Could not end the session on the platform (%v); it stays valid until it expires. To end it now: cloud.nan.builders, Settings > Account > Sign out other sessions.\n", err)
+		}
+	}
 	if err := session.Delete(); err != nil {
 		return err
 	}

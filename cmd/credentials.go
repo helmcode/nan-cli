@@ -26,6 +26,10 @@ const maxTokenLen = 512
 // tests can point it at a server of their own.
 var runsBaseURL = api.RunsBaseURL
 
+// apiBaseURL is where the session endpoints (logout) are sent. A variable so
+// the tests can point it at a server of their own.
+var apiBaseURL = api.BaseURL
+
 // tokenFileFlag is --token-file on `nan run` and `nan runs`.
 var tokenFileFlag string
 
