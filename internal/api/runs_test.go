@@ -542,7 +542,8 @@ func TestFollowSkipsAMalformedEnd(t *testing.T) {
 
 func TestFollowRefusesOversizedLinesAndFrames(t *testing.T) {
 	for name, body := range map[string]string{
-		"line":  "data: " + strings.Repeat("a", maxSSELine+1) + "\n\n",
+		"line": "data: " + strings.Repeat("a", maxSSELine+1) + "\n\n",
+		// refused on its 9th line: 9 x 512 KiB is over the 4 MiB frame cap
 		"frame": strings.Repeat("data: "+strings.Repeat("a", maxSSELine/2)+"\n", 10) + "\n",
 	} {
 		var calls atomic.Int32
@@ -551,9 +552,52 @@ func TestFollowRefusesOversizedLinesAndFrames(t *testing.T) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = io.WriteString(w, body)
 		}), "t", "")
+		// Not a test of the idle limit: a runner stalled for longer than the
+		// helper's 200ms must not turn into a reconnect here (#46).
+		c.IdleTimeout = 30 * time.Second
 		_, err := c.Follow(context.Background(), runID, 0, func(Frame) {})
 		if err == nil || errors.Is(err, ErrStreamLost) || calls.Load() != 1 {
 			t.Errorf("%s: err=%v calls=%d (want a fatal error, no retry)", name, err, calls.Load())
+		}
+	}
+}
+
+// The idle limit is about the connection, not about us: when the caller (or
+// the scheduler, on a loaded CI runner) keeps Follow busy for longer than
+// IdleTimeout while the next line is already read and waiting, the stream
+// was not quiet and must not be reconnected. A reconnect here also turned an
+// oversized frame into a second connection before it was refused (#46).
+func TestFollowBusyConsumerIsNotIdle(t *testing.T) {
+	const events = 5
+	for name, tail := range map[string]string{
+		"end": sseEnd("succeeded"),
+		// refused on its 9th line: 9 x 512 KiB is over the 4 MiB frame cap
+		"frame": strings.Repeat("data: "+strings.Repeat("a", maxSSELine/2)+"\n", 10) + "\n",
+	} {
+		var calls atomic.Int32
+		c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			w.Header().Set("Content-Type", "text/event-stream")
+			for seq := int64(1); seq <= events; seq++ {
+				_, _ = io.WriteString(w, sseEvent(seq, "log", `{}`))
+			}
+			_, _ = io.WriteString(w, tail)
+		}), "t", "")
+		// Every frame keeps Follow busy for twice the idle limit, so each one
+		// is a chance for the expired idle timer and the waiting line to race.
+		// The limit itself stays wide enough for a loaded runner to deliver
+		// the headers and the next line inside it.
+		c.IdleTimeout = 100 * time.Millisecond
+		_, err := c.Follow(context.Background(), runID, 0, func(Frame) { time.Sleep(200 * time.Millisecond) })
+		switch name {
+		case "end":
+			if err != nil || calls.Load() != 1 {
+				t.Errorf("%s: err=%v calls=%d (want the run, one connection)", name, err, calls.Load())
+			}
+		case "frame":
+			if err == nil || errors.Is(err, ErrStreamLost) || !strings.Contains(err.Error(), "stream frame over") || calls.Load() != 1 {
+				t.Errorf("%s: err=%v calls=%d (want the fatal oversize error, no retry)", name, err, calls.Load())
+			}
 		}
 	}
 }
@@ -569,7 +613,7 @@ func TestFollowOversizedLineArrivingSlowlyIsNotIdle(t *testing.T) {
 		calls.Add(1)
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, "data: ")
-		chunk := strings.Repeat("a", 128<<10)
+		chunk := strings.Repeat("a", 32<<10)
 		for sent := 0; sent <= maxSSELine; sent += len(chunk) {
 			if _, err := io.WriteString(w, chunk); err != nil {
 				return
@@ -582,7 +626,9 @@ func TestFollowOversizedLineArrivingSlowlyIsNotIdle(t *testing.T) {
 			}
 		}
 	}), "t", "")
-	c.IdleTimeout = 60 * time.Millisecond
+	// The line takes ~33 chunks x 20ms to arrive, well over the idle limit,
+	// while no single gap comes near it, so a loaded runner is not idle.
+	c.IdleTimeout = 250 * time.Millisecond
 	_, err := c.Follow(context.Background(), runID, 0, func(Frame) {})
 	if err == nil || errors.Is(err, ErrStreamLost) || !strings.Contains(err.Error(), "stream line over") || calls.Load() != 1 {
 		t.Errorf("err=%v calls=%d (want the fatal oversize error, no retry)", err, calls.Load())
