@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -140,7 +141,7 @@ func init() {
 	rootCmd.AddCommand(runCmd)
 	f := runCmd.Flags()
 	f.StringVar(&runOpts.workspace, "ws", "", "Workspace to run in (default: your only workspace)")
-	f.StringVar(&runOpts.agent, "agent", "pi", "Agent to run: pi or hermes")
+	f.StringVar(&runOpts.agent, "agent", "pi", "Agent to run: pi, pi_gentle (Pi + Gentle Shell) or hermes, if the workspace has it installed")
 	f.StringVar(&runOpts.model, "model", "", "Model for the agent (default: the agent's own)")
 	f.StringVar(&runOpts.cwd, "cwd", "", "Folder in the workspace to run in (default: /home/nan)")
 	f.BoolVar(&runOpts.worktree, "worktree", false, "Always work on a separate branch, nan-run/<id> (fails outside a git repository)")
@@ -397,9 +398,14 @@ func isTerminal(f *os.File) bool {
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
+// runAgents are the agents a run can use (the platform's runs.agent set):
+// pi_gentle is Pi with gentle-shell. The workspace must have the agent
+// installed; the platform answers agent_not_installed otherwise.
+var runAgents = []string{"pi", "pi_gentle", "hermes"}
+
 func buildRunRequest(in promptInput, opts runOptions, args []string) (*api.CreateRunRequest, error) {
-	if opts.agent != "pi" && opts.agent != "hermes" {
-		return nil, usageErrorf("--agent must be pi or hermes, not %q", opts.agent)
+	if !slices.Contains(runAgents, opts.agent) {
+		return nil, usageErrorf("--agent must be pi, pi_gentle or hermes, not %q", opts.agent)
 	}
 	if opts.worktree && opts.noWorktree {
 		return nil, usageErrorf("--worktree and --no-worktree contradict each other; pick one")

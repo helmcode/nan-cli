@@ -88,7 +88,7 @@ inside each tool later.
 
 ## Agent runs
 
-`nan run` starts an agent (Pi or Hermes) in one of your
+`nan run` starts an agent (Pi, Pi + Gentle Shell or Hermes) in one of your
 [workspaces](https://cloud.nan.builders) and streams what it does. The run
 happens in the workspace, not on your machine: it keeps going if the command
 stops, and its log stays on nan.builders.
@@ -103,7 +103,7 @@ id=$(nan run --detach "upgrade the dependencies")
 | Flag | Default | |
 |---|---|---|
 | `--ws NAME` | your only workspace | Workspace to run in. Required when you have more than one. |
-| `--agent pi\|hermes` | `pi` | Agent to run. |
+| `--agent pi\|pi_gentle\|hermes` | `pi` | Agent to run: `pi_gentle` is Pi with Gentle Shell. The workspace must have it installed. |
 | `--model M` | the agent's own | Model for the agent. |
 | `--cwd PATH` | `/home/nan` | Folder in the workspace. |
 | `--worktree` / `--no-worktree` | auto | Work on a separate branch, or in the folder itself. See below. |
