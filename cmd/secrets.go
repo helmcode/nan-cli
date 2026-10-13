@@ -38,6 +38,11 @@ var secretsCmd = &cobra.Command{
 characters as a hint, and which automations use each one. Values are never
 shown, here or anywhere else, after they are saved.
 
+Kinds: generic (a value an automation hands to its runs) and provider_key
+(your own key for Anthropic, OpenAI, Google Gemini or an OpenAI-compatible
+endpoint, with its base URL). Run on a provider key with:
+  nan run --byok-secret NAME --model ID "<prompt>"
+
 Portal-only, and why: adding, replacing and deleting secrets happen in the
 portal, Settings > Secrets at ` + runs.PortalURL + `, signed in
 through the browser. A secret written from a credential an agent or a CI job
@@ -113,16 +118,28 @@ func doSecretsLs(ctx context.Context, env *runsEnv) error {
 		fmt.Fprintf(env.stderr, "No secrets yet. Add them in the portal: Settings > Secrets at %s\n", secretsURL)
 		return nil
 	}
+	// The base URL column only when there is one: it is set on
+	// OpenAI-compatible provider keys only.
+	withURL := false
+	for _, s := range list.Data {
+		if s.BaseURL != nil && *s.BaseURL != "" {
+			withURL = true
+		}
+	}
 	tw := tabwriter.NewWriter(env.stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tKIND\tHINT\tUSED BY\tLAST USED\tUPDATED")
+	header := "NAME\tKIND\tPROVIDER\tHINT\tUSED BY\tLAST USED\tUPDATED"
+	if withURL {
+		header += "\tBASE URL"
+	}
+	fmt.Fprintln(tw, header)
 	for _, s := range list.Data {
 		hint := "-"
 		if s.Hint != nil && *s.Hint != "" {
 			hint = runs.Truncate(runs.SanitizeLine(*s.Hint), 12)
 		}
-		kind := runs.SanitizeLine(s.Kind)
+		provider := "-"
 		if s.Provider != nil && *s.Provider != "" {
-			kind += " (" + runs.SanitizeLine(*s.Provider) + ")"
+			provider = runs.Truncate(runs.SanitizeLine(*s.Provider), 24)
 		}
 		used := make([]string, 0, len(s.UsedBy))
 		for _, u := range s.UsedBy {
@@ -136,9 +153,17 @@ func doSecretsLs(ctx context.Context, env *runsEnv) error {
 		if s.LastUsedAt != nil {
 			lastUsed = localTime(*s.LastUsedAt)
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+		line := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\t%s",
 			runs.Truncate(runs.SanitizeLine(s.Name), 64),
-			kind, hint, usedBy, lastUsed, localTime(s.UpdatedAt))
+			runs.SanitizeLine(s.Kind), provider, hint, usedBy, lastUsed, localTime(s.UpdatedAt))
+		if withURL {
+			baseURL := "-"
+			if s.BaseURL != nil && *s.BaseURL != "" {
+				baseURL = runs.Truncate(runs.SanitizeLine(*s.BaseURL), 60)
+			}
+			line += "\t" + baseURL
+		}
+		fmt.Fprintln(tw, line)
 	}
 	if err := tw.Flush(); err != nil {
 		return err

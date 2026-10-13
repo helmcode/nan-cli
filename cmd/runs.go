@@ -285,13 +285,14 @@ func doRunsLs(ctx context.Context, env *runsEnv) error {
 		env.nameRunWorkspace(ctx, &list.Data[i])
 	}
 	tw := tabwriter.NewWriter(env.stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tSTATE\tWORKSPACE\tAGENT\tCREATED\tPROMPT")
+	fmt.Fprintln(tw, "ID\tSTATE\tWORKSPACE\tAGENT\tINFERENCE\tCREATED\tPROMPT")
 	for _, r := range list.Data {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			runs.SanitizeLine(r.ID),
 			runs.SanitizeLine(r.State),
 			runs.Truncate(runs.SanitizeLine(refLabel(r.Workspace.Name, r.Workspace.ID)), 40),
 			runs.SanitizeLine(r.Agent),
+			inferenceShort(r.Inference),
 			localTime(r.CreatedAt),
 			runs.Truncate(runs.SanitizeLine(r.PromptPreview), 60))
 	}
@@ -356,6 +357,7 @@ func doRunsShow(ctx context.Context, env *runsEnv, id string) error {
 		agent += " · model " + runs.SanitizeLine(*run.Model)
 	}
 	row("agent", agent)
+	row("inference", inferenceLabel(run.Inference))
 	row("trigger", runs.SanitizeLine(run.Trigger))
 	if run.Phase != "" && run.Phase != "run" {
 		row("phase", runs.SanitizeLine(run.Phase)+phaseNote(run.Phase))
@@ -422,7 +424,11 @@ func doRunsShow(ctx context.Context, env *runsEnv, id string) error {
 		}
 	}
 	if u := run.Usage; u != nil && (u.TokensIn != nil || u.TokensOut != nil) {
-		row("tokens", fmt.Sprintf("%s in, %s out", optInt(u.TokensIn), optInt(u.TokensOut)))
+		tokens := fmt.Sprintf("%s in, %s out", optInt(u.TokensIn), optInt(u.TokensOut))
+		if u.Source != nil && *u.Source == api.InferenceBYOK {
+			tokens += " (as the agent reported them; your provider's bill is the reference)"
+		}
+		row("tokens", tokens)
 	}
 	if err := tw.Flush(); err != nil {
 		return err

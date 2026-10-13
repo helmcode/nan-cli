@@ -104,7 +104,8 @@ id=$(nan run --detach "upgrade the dependencies")
 |---|---|---|
 | `--ws NAME` | your only workspace | Workspace to run in. Required when you have more than one. |
 | `--agent pi\|pi_gentle\|hermes` | `pi` | Agent to run: `pi_gentle` is Pi with Gentle Shell. The workspace must have it installed. |
-| `--model M` | the agent's own | Model for the agent. |
+| `--model M` | the agent's own | Model for the agent. Required with `--byok-secret`. |
+| `--byok-secret NAME` | NaN inference | Run on your own provider key: the name of a provider key secret saved in the portal. See below. |
 | `--cwd PATH` | `/home/nan` | Folder in the workspace. |
 | `--worktree` / `--no-worktree` | auto | Work on a separate branch, or in the folder itself. See below. |
 | `--timeout D` | `30m` | Stop the run after this long, `1m` to `2h`. |
@@ -119,6 +120,22 @@ own branch, `nan-run/<first 8 chars of the run id>`, and commits there. It
 never pushes, and your checkout is untouched. Outside a repository it works in
 the folder itself. `--worktree` forces a branch (and fails outside a
 repository); `--no-worktree` works in the folder even inside a repository.
+
+**Your own provider key (BYOK).** `--byok-secret NAME --model ID` runs the
+agent on your own key instead of NaN inference. `NAME` is a secret of kind
+`provider_key` you saved in the portal (Settings > Secrets > Provider key:
+Anthropic, OpenAI, Google Gemini or any OpenAI-compatible endpoint), never the
+key itself; `ID` is a model your provider serves. Your provider bills the run
+and NaN does not meter it. Without a NaN inference plan, an active workspace
+of your own is enough. These runs need your `nan auth login` session: a
+platform token or an API key cannot start them (a prompt can make the agent
+print the key it holds), but can trigger an automation that uses your key.
+Hermes cannot use an Anthropic key yet. Docs: <https://nan.builders/docs/runs>.
+
+```bash
+nan secrets ls                                               # KIND provider_key, PROVIDER, BASE URL
+nan run --byok-secret ANTHROPIC_KEY --model claude-sonnet-4-5 "fix the flaky test"
+```
 
 **Queue.** If the workspace is already running as many runs as its size
 allows, the run waits as `queued` and starts when one of them ends.

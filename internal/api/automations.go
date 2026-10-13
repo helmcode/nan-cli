@@ -17,9 +17,25 @@ type SecretAssignment struct {
 	Exposure string `json:"exposure"`
 }
 
+// Inference is where a run's or an automation's model calls go: NaN's own
+// inference ({"source":"nan"}), or the member's provider key
+// ({"source":"byok"}, BYOK) with the key's provider, the secret's name and
+// the model. The key itself is never part of it.
 type Inference struct {
-	Source string `json:"source"`
+	Source   string  `json:"source"`
+	Provider *string `json:"provider,omitempty"`
+	Secret   *string `json:"secret,omitempty"`
+	Model    *string `json:"model,omitempty"`
 }
+
+// Inference sources, as the platform names them.
+const (
+	InferenceNaN  = "nan"
+	InferenceBYOK = "byok"
+)
+
+// BYOK reports whether the inference is the member's own provider key.
+func (in *Inference) BYOK() bool { return in != nil && in.Source == InferenceBYOK }
 
 // Automation mirrors the automation object of /v1/automations. It is the
 // member's own configuration, read here and never written: creating and
