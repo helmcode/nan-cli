@@ -12,7 +12,8 @@ import (
 // Every management TUI people keep open - lazygit, lazydocker, k9s - answers
 // "what is there, and where" the same way: the list of places is the
 // navigation, it is always visible, and each place has a number. So here:
-// seven areas down the left, 1 to 7, and whatever is selected on the right.
+// seven areas in a row of tabs across the top, 1 to 7, as nan has always
+// had them, and whatever is selected underneath.
 
 type area int
 
@@ -192,7 +193,7 @@ func areaOf(t target) area {
 	return areaHome
 }
 
-// count is the number shown beside an area in the navigation.
+// count is the number shown beside an area in its tab.
 func (m model) count(a area) string {
 	s := m.snap
 	switch a {

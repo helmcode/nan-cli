@@ -117,7 +117,6 @@ type (
 const (
 	animFPS   = 60
 	flashFor  = 6 * time.Second
-	navWidth  = 20
 	cardWidth = 88
 )
 

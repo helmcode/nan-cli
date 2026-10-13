@@ -33,9 +33,9 @@ func (m model) View() tea.View {
 
 func pad() string { return strings.Repeat(" ", margin) }
 
-// contentWidth is the right-hand side: the terminal minus the margins, the
-// navigation and the rule after it.
-func (m model) contentWidth() int { return max(m.w-2*margin-navWidth-3, 20) }
+// contentWidth is the terminal minus the margins: the areas are a row of
+// tabs over the content, not a column beside it.
+func (m model) contentWidth() int { return max(m.w-2*margin, 20) }
 
 func (m model) render() string {
 	if m.quitting || m.w == 0 {
@@ -61,11 +61,11 @@ func (m model) render() string {
 	case !m.loaded:
 		body = "\n" + pad() + m.loader.View()
 	default:
-		t := ui.Current()
-		rule := lipgloss.NewStyle().Foreground(t.Line).Render(strings.TrimRight(strings.Repeat("│\n", room), "\n"))
-		body = lipgloss.JoinHorizontal(lipgloss.Top,
-			pad(), fit(m.renderNav(room), room, navWidth), " ", rule, "  ",
-			fit(m.renderContent(room), room, m.contentWidth()))
+		// The tabs, then the area under them; every area opens on a blank
+		// line, which is the gap between the two.
+		room := room - 1
+		content := fit(m.renderContent(room), room, m.contentWidth())
+		body = m.renderTabs() + "\n" + indent(content)
 	}
 	return header + "\n" + fit(body, room, m.w) + m.renderFlash() + footer
 }
@@ -121,39 +121,46 @@ func (m model) renderHeader() string {
 	return line + "\n" + pad() + lipgloss.NewStyle().Foreground(t.Line).Render(strings.Repeat("─", m.w-2*margin))
 }
 
-// navTips are pinned to the foot of the navigation: the three ways around,
-// said where the eye already is. tab is the one nobody guesses.
-var navTips = [][2]string{{"tab", "next area"}, {"1-7", "jump"}, {"/", "find"}}
-
-func (m model) renderNav(room int) string {
-	list := m.renderAreas()
-	if rows := room - len(navTips) - 1; rows > int(areaCount)+1 {
-		var tips strings.Builder
-		for _, tip := range navTips {
-			tips.WriteString("  " + ui.Value(ui.Pad(tip[0], 4)) + ui.Faint(tip[1]) + "\n")
+// renderTabs is the areas in a row, the way nan has always shown them: the
+// one you are on filled in, each with the number that jumps to it and a count
+// where it has one. A terminal too narrow for all of that drops the counts
+// first, then the numbers, so the row never wraps.
+func (m model) renderTabs() string {
+	t := ui.Current()
+	room := m.w - 2*margin
+	for _, detail := range []struct{ num, count bool }{{true, true}, {true, false}, {false, false}} {
+		parts := make([]string, 0, areaCount)
+		for a := area(0); a < areaCount; a++ {
+			label := a.title()
+			if detail.num {
+				label = fmt.Sprintf("%d %s", a+1, label)
+			}
+			if c := m.count(a); detail.count && c != "" {
+				label += " " + c
+			}
+			style := lipgloss.NewStyle().Padding(0, 1)
+			if a == m.area {
+				style = style.Foreground(lipgloss.Color("#FFFFFF")).Background(t.Accent).Bold(true)
+			} else {
+				style = style.Foreground(t.TextDim)
+			}
+			parts = append(parts, style.Render(label))
 		}
-		list = fit(list, rows, navWidth) + "\n\n" + tips.String()
+		row := strings.Join(parts, " ")
+		if lipgloss.Width(row) <= room || !detail.num {
+			return pad() + ansi.Truncate(row, room, "…")
+		}
 	}
-	return list
+	return ""
 }
 
-func (m model) renderAreas() string {
-	t := ui.Current()
-	var b strings.Builder
-	b.WriteString("\n")
-	for a := area(0); a < areaCount; a++ {
-		num := fmt.Sprintf("%d ", a+1)
-		count := m.count(a)
-		width := navWidth - 2 - len(num) - len([]rune(count))
-		if a == m.area {
-			b.WriteString(lipgloss.NewStyle().Foreground(t.Accent).Render("▌") + " " +
-				lipgloss.NewStyle().Foreground(t.AccentText).Bold(true).Render(num+ui.Pad(a.title(), width)) +
-				ui.Faint(count) + "\n")
-		} else {
-			b.WriteString("  " + ui.Faint(num) + lipgloss.NewStyle().Foreground(t.TextDim).Render(ui.Pad(a.title(), width)) + ui.Faint(count) + "\n")
-		}
+// indent puts the margin in front of every line of a block.
+func indent(block string) string {
+	lines := strings.Split(block, "\n")
+	for i := range lines {
+		lines[i] = pad() + lines[i]
 	}
-	return b.String()
+	return strings.Join(lines, "\n")
 }
 
 // renderFlash is the result of the last action, or a blank line.
