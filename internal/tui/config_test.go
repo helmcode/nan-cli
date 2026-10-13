@@ -160,6 +160,43 @@ func TestOpencodeConfigRepairsAnEntryWrittenByAnOlderVersion(t *testing.T) {
 	}
 }
 
+// mimo-v2.5 left the cluster for mimo-v2.6-flash. A merge that only ever adds
+// kept it in the picker of everyone already configured, where choosing it
+// answers 401 "does not have access to the requested model".
+func TestOpencodeConfigTakesOutARetiredModel(t *testing.T) {
+	path := tempConfig(t, "opencode.json")
+	old := `{
+	  "provider": {
+	    "nan": {
+	      "npm": "@ai-sdk/openai-compatible",
+	      "options": { "baseURL": "https://api.nan.builders/v1", "apiKey": "sk-old" },
+	      "models": {
+	        "mimo-v2.5": { "name": "Xiaomi MiMo V2.5" },
+	        "gemma4": { "name": "my own name for it" }
+	      }
+	    }
+	  }
+	}`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeOpencodeConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	models := readJSON(t, path)["provider"].(map[string]any)["nan"].(map[string]any)["models"].(map[string]any)
+	for _, id := range catalog.Retired {
+		if _, ok := models[id]; ok {
+			t.Errorf("%s is still offered, and the cluster no longer serves it", id)
+		}
+	}
+	if _, ok := models["mimo-v2.6-flash"]; !ok {
+		t.Error("mimo-v2.6-flash was not added")
+	}
+	if models["gemma4"].(map[string]any)["name"] != "my own name for it" {
+		t.Error("taking out the retired model touched an entry the member owns")
+	}
+}
+
 func TestOpencodeConfigKeepsWhatItDoesNotOwn(t *testing.T) {
 	path := tempConfig(t, "opencode.json")
 	if err := os.WriteFile(path, []byte(`{"theme":"tokyonight","provider":{}}`), 0o600); err != nil {
@@ -223,7 +260,7 @@ func TestPiConfigWritesOnlyTheModalitiesPiAccepts(t *testing.T) {
 	}
 	// Pi's schema is `("text" | "image")[]`. A third value fails validation and
 	// Pi then refuses the whole file, every other provider in it included, so
-	// mimo-v2.5 goes in without its audio.
+	// mimo-v2.6-flash goes in without its audio.
 	for id, entry := range piModels(t, path) {
 		for _, raw := range entry["input"].([]any) {
 			if in := raw.(string); in != "text" && in != "image" {
@@ -551,6 +588,27 @@ func TestCodexProfilesGiveEveryModelItsOwnWindow(t *testing.T) {
 	}
 }
 
+func TestCodexProfilesOfARetiredModelGoAway(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	home := filepath.Dir(path)
+	stale := filepath.Join(home, "nan-mimo-v25.config.toml")
+	mine := filepath.Join(home, "work.config.toml")
+	for _, f := range []string{stale, mine} {
+		if err := os.WriteFile(f, []byte("model = \"x\"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Error("nan-mimo-v25 is still there, and `--profile nan-mimo-v25` answers 401")
+	}
+	if _, err := os.Stat(mine); err != nil {
+		t.Errorf("a profile the member wrote was removed: %v", err)
+	}
+}
+
 // Codex refuses a --profile with a dot in it ("pass a plain name such as
 // `work`"), which is every id on the cluster that carries a version number.
 // With the sub-agent namespace or web_search in the request, /responses
@@ -816,6 +874,42 @@ func TestFactoryConfigMarksWhatCannotSeeImages(t *testing.T) {
 	if defaultModel != catalog.Default {
 		t.Errorf("default is %q, want %q, the model the quickstart recommends",
 			defaultModel, catalog.Default)
+	}
+}
+
+func TestFactoryConfigTakesOutARetiredModel(t *testing.T) {
+	path := tempConfig(t, "settings.json")
+	old := `{"customModels":[
+	  {"model":"glm5.3-flash","id":"custom:GLM-5.3-Flash-(NaN)-0","index":0,"baseUrl":"https://api.nan.builders/v1","displayName":"GLM 5.3 Flash (NaN)","provider":"openai"},
+	  {"model":"mimo-v2.5","id":"custom:Xiaomi-MiMo-V2.5-(NaN)-1","index":1,"baseUrl":"https://api.nan.builders/v1","displayName":"Xiaomi MiMo V2.5 (NaN)","provider":"openai"},
+	  {"model":"gpt-6.1-sol","id":"custom:mine-2","index":2,"baseUrl":"https://api.openai.com/v1","displayName":"mine","provider":"openai"}
+	]}`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFactoryConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	indexes := map[float64]string{}
+	for _, raw := range readJSON(t, path)["customModels"].([]any) {
+		entry := raw.(map[string]any)
+		id := entry["model"].(string)
+		seen[id] = true
+		i := entry["index"].(float64)
+		if other, dup := indexes[i]; dup {
+			t.Errorf("%s and %s share index %v", id, other, i)
+		}
+		indexes[i] = id
+	}
+	if seen["mimo-v2.5"] {
+		t.Error("mimo-v2.5 is still offered, and the cluster no longer serves it")
+	}
+	if !seen["mimo-v2.6-flash"] {
+		t.Error("mimo-v2.6-flash was not added")
+	}
+	if !seen["gpt-6.1-sol"] {
+		t.Error("a model the member added themselves was removed")
 	}
 }
 
