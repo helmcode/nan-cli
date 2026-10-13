@@ -74,10 +74,13 @@ var All = []Model{
 		Reasoning: true,
 	},
 	{
-		ID:        "qwen3.8-flash",
-		Kind:      Chat,
-		Name:      "Qwen 3.8 Flash",
-		Context:   262_144,
+		ID:   "qwen3.8-flash",
+		Kind: Chat,
+		Name: "Qwen 3.8 Flash",
+		// Served at 1,048,576 since 2026-09-29 (nan.builders/docs/models). It
+		// said 262,144 here, the model's native window, so every tool compacted
+		// it at a quarter of what the API takes.
+		Context:   1_048_576,
 		Output:    32_768,
 		Inputs:    []string{InputText, InputImage},
 		Reasoning: true,
@@ -149,6 +152,13 @@ func ChatModels() []Model {
 // setup run.
 var Retired = []string{
 	"mimo-v2.5", // replaced by mimo-v2.6-flash on 2026-10
+}
+
+// StaleContexts are windows this CLI once wrote for a model and has since
+// corrected. opencode keeps a `limit` that is already there, since it may be
+// the member's own, but one that matches a figure we wrote is ours to fix.
+var StaleContexts = map[string][]int{
+	"qwen3.8-flash": {262_144},
 }
 
 func IsRetired(id string) bool {
