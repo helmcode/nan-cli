@@ -48,6 +48,7 @@ type runOptions struct {
 	json           bool
 	idempotencyKey string
 	file           string
+	byokSecret     string
 }
 
 var runOpts runOptions
@@ -73,6 +74,19 @@ Queue:
   If the workspace is already running as many runs as its size allows, the
   run waits as queued and starts when one of them ends.
 
+Your own provider key (BYOK):
+  --byok-secret NAME --model ID runs the agent on your own provider key
+  instead of NaN inference: NAME is a secret of kind provider_key that you
+  saved in the portal (Settings > Secrets > Provider key: Anthropic, OpenAI,
+  Google Gemini or any OpenAI-compatible endpoint), ID a model your provider
+  serves. Your provider bills the run; NaN does not meter it. Without a NaN
+  inference plan, a workspace of your own is enough. List your keys with:
+  nan secrets ls.
+  These runs need your session (nan auth login): a platform token or an API
+  key cannot start them, because a prompt can make the agent print the key
+  it holds. A token can trigger an automation that uses your key instead.
+  Hermes cannot use an Anthropic key yet: use pi or pi_gentle with it.
+
 In the portal:
   Folder = --cwd, Separate branch = --worktree/--no-worktree,
   Time limit = --timeout, Task = the prompt.
@@ -88,6 +102,7 @@ Authentication (the first one found is used):
                          saved with nan auth login --api-token
   Create platform tokens in Settings > Tokens at https://cloud.nan.builders.
   Never pass a token as an argument: it would end up in your shell history.
+  A run with --byok-secret uses your session (4) and nothing else.
 
 Detaching:
   Ctrl-C detaches and leaves the run going. A second Ctrl-C within 2
@@ -104,11 +119,11 @@ Exit codes:
   2   the run timed out
   3   the run was cancelled (after a double Ctrl-C: cancel requested)
   4   the workspace is not set up for it (agent not installed, no inference
-      key, bad configuration)
+      key, bad configuration, an agent that cannot use your provider key)
   10  awaiting approval: an automation run whose proposed actions wait for
       you (nan runs proposal <id>; approve in the portal)
   64  usage error
-  65  not signed in, or not allowed
+  65  not signed in, or not allowed (a token for a run with your own key)
   69  nan.builders unavailable, or the stream was lost (the run goes on)
   75  detached: the run was accepted and is still going
 
@@ -117,7 +132,8 @@ Docs: https://nan.builders/docs/runs`,
   nan run --ws develop --cwd /home/nan/projects/api -f task.md
   git diff | nan run -
   id=$(nan run --detach "upgrade the dependencies")
-  nan run --ws ci -f task.md    # in CI, with NAN_TOKEN set from a secret`,
+  nan run --ws ci -f task.md    # in CI, with NAN_TOKEN set from a secret
+  nan run --byok-secret ANTHROPIC_KEY --model claude-sonnet-4-5 "fix the flaky test"`,
 	Args:        cobra.ArbitraryArgs,
 	Annotations: sysexits,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -129,7 +145,12 @@ Docs: https://nan.builders/docs/runs`,
 		if err != nil {
 			return err
 		}
-		env, err := newRunsEnv()
+		var env *runsEnv
+		if opts.byokSecret != "" {
+			env, err = newBYOKRunsEnv()
+		} else {
+			env, err = newRunsEnv()
+		}
 		if err != nil {
 			return err
 		}
@@ -142,7 +163,8 @@ func init() {
 	f := runCmd.Flags()
 	f.StringVar(&runOpts.workspace, "ws", "", "Workspace to run in (default: your only workspace)")
 	f.StringVar(&runOpts.agent, "agent", "pi", "Agent to run: pi, pi_gentle (Pi + Gentle Shell) or hermes, if the workspace has it installed")
-	f.StringVar(&runOpts.model, "model", "", "Model for the agent (default: the agent's own)")
+	f.StringVar(&runOpts.model, "model", "", "Model for the agent (default: the agent's own; required with --byok-secret)")
+	f.StringVar(&runOpts.byokSecret, "byok-secret", "", "Run on your own provider key: the `NAME` of a provider key secret saved in the portal (never the key itself); needs --model")
 	f.StringVar(&runOpts.cwd, "cwd", "", "Folder in the workspace to run in (default: /home/nan)")
 	f.BoolVar(&runOpts.worktree, "worktree", false, "Always work on a separate branch, nan-run/<id> (fails outside a git repository)")
 	f.BoolVar(&runOpts.noWorktree, "no-worktree", false, "Work in the folder itself, even inside a git repository")
@@ -170,6 +192,16 @@ type runsEnv struct {
 	names nameCache
 }
 
+// newBYOKRunsEnv is newRunsEnv for a run with the member's own provider
+// key, which only the session can start (byokCredential).
+func newBYOKRunsEnv() (*runsEnv, error) {
+	cred, err := byokCredential(os.Getenv, tokenFileFlag)
+	if err != nil {
+		return nil, err
+	}
+	return &runsEnv{client: cred.client(), cred: cred, stdout: os.Stdout, stderr: os.Stderr}, nil
+}
+
 func newRunsEnv() (*runsEnv, error) {
 	cred, err := resolveCredential(os.Getenv, tokenFileFlag)
 	if err != nil {
@@ -195,6 +227,11 @@ func startRun(ctx context.Context, env *runsEnv, opts runOptions, req *api.Creat
 	run, replayed, err := env.client.CreateRun(ctx, *req, opts.idempotencyKey)
 	if err != nil {
 		var apiErr *api.APIError
+		if errors.As(err, &apiErr) {
+			if exit := byokRefusal(apiErr, req); exit != nil {
+				return exit
+			}
+		}
 		if errors.As(err, &apiErr) && apiErr.Status == 404 {
 			return usageErrorf("workspace %q not found (or runs are not enabled for your account)", runs.SanitizeLine(req.Workspace))
 		}
@@ -230,7 +267,11 @@ func startRun(ctx context.Context, env *runsEnv, opts runOptions, req *api.Creat
 		if where == "" {
 			where = runs.SanitizeLine(req.Workspace)
 		}
-		fmt.Fprintf(env.stderr, "run %s queued on %s (%s) — Ctrl-C to detach\n", id, where, runs.SanitizeLine(run.Agent))
+		agent := runs.SanitizeLine(run.Agent)
+		if in := req.Inference; in != nil && in.Source == api.InferenceBYOK {
+			agent += ", your key " + runs.SanitizeLine(in.Secret) + ", model " + runs.SanitizeLine(in.Model)
+		}
+		fmt.Fprintf(env.stderr, "run %s queued on %s (%s) — Ctrl-C to detach\n", id, where, agent)
 	}
 	return follow(ctx, env, run.ID, 0, opts.json, true)
 }
@@ -413,6 +454,11 @@ func buildRunRequest(in promptInput, opts runOptions, args []string) (*api.Creat
 	if opts.model != "" && !modelPattern.MatchString(opts.model) {
 		return nil, usageErrorf("--model %q is not a model name (letters, digits and . _ : / -, up to 128)", opts.model)
 	}
+	if opts.byokSecret != "" {
+		if err := checkBYOKFlags(opts); err != nil {
+			return nil, err
+		}
+	}
 	if opts.idempotencyKey != "" && !idempotencyPattern.MatchString(opts.idempotencyKey) {
 		return nil, usageErrorf("--idempotency-key must be 1-128 of letters, digits and . _ : -")
 	}
@@ -432,7 +478,11 @@ func buildRunRequest(in promptInput, opts runOptions, args []string) (*api.Creat
 		cwd := opts.cwd
 		req.Cwd = &cwd
 	}
-	if opts.model != "" {
+	switch {
+	case opts.byokSecret != "":
+		// With BYOK the model is inference.model; a top-level one is a 400.
+		req.Inference = &api.RunInference{Source: api.InferenceBYOK, Secret: opts.byokSecret, Model: opts.model}
+	case opts.model != "":
 		model := opts.model
 		req.Model = &model
 	}

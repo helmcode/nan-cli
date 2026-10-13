@@ -163,6 +163,18 @@ type CreateRunRequest struct {
 	TimeoutSeconds *int    `json:"timeout_seconds,omitempty"`
 	Model          *string `json:"model,omitempty"`
 	Trigger        string  `json:"trigger,omitempty"`
+
+	// Inference is left out for NaN inference (the platform's default).
+	// With BYOK the model goes here, never in Model.
+	Inference *RunInference `json:"inference,omitempty"`
+}
+
+// RunInference is the inference choice of POST /v1/runs: {"source":"byok"}
+// names the provider key by its secret NAME, never by its value.
+type RunInference struct {
+	Source string `json:"source"`
+	Secret string `json:"secret,omitempty"`
+	Model  string `json:"model,omitempty"`
 }
 
 type RunList struct {

@@ -323,6 +323,7 @@ func doAutomationsShow(ctx context.Context, env *runsEnv, ref string) error {
 		agent += " · model " + runs.SanitizeLine(*a.Model)
 	}
 	row("agent", agent)
+	row("inference", inferenceLabel(a.Inference))
 	row("cwd", runs.SanitizeLine(a.Cwd))
 	worktree := "auto"
 	if a.GitIsolation != nil {
@@ -361,9 +362,23 @@ func doAutomationsShow(ctx context.Context, env *runsEnv, ref string) error {
 		fmt.Fprintf(env.stderr, "could not read the triggers: %s\n", runs.SanitizeLine(apiExit(trigErr, env.cred).Error()))
 	}
 
+	if a.Inference.BYOK() && trigErr == nil && hasWebhook(triggers.Data) {
+		fmt.Fprintln(env.stdout, "\nnote: this automation runs on your own key, and a webhook starts it: what a delivery "+
+			"carries is untrusted input to an agent that holds your key in its environment")
+	}
+
 	printBlock(env, "instructions", a.Instructions)
 	fmt.Fprintf(env.stdout, "\nrun it: nan automations run %s\nedit it in the portal: %s\n", runs.SanitizeLine(a.ID), runs.AutomationURL(a.ID))
 	return nil
+}
+
+func hasWebhook(ts []api.Trigger) bool {
+	for _, t := range ts {
+		if t.Kind == "webhook" && t.Enabled {
+			return true
+		}
+	}
+	return false
 }
 
 func exposureNote(exposure string) string {

@@ -1,0 +1,27 @@
+id             a0000000-0000-4000-8000-000000000001
+name           PR review api
+description    reviews
+status         enabled
+template       pr_review
+workspace      11111111-2222-4333-8444-555555555555
+agent          pi · model qwen/qwen3-coder
+inference      your key TOGETHER_KEY (OpenAI-compatible): billed by your provider, not metered by NaN
+cwd            /home/nan/projects/api
+worktree       yes
+timeout        30m0s
+repository     acme/api
+approval       github_pr_review
+approval ttl   72h0m0s
+concurrency    skip if active
+runs per hour  up to 30
+secret         GITHUB_TOKEN ← GITHUB_WRITE_TOKEN (actions only, never the agent)
+trigger        webhook github · nan_whk_AbC1…
+updated        2026-10-11 09:00
+
+note: this automation runs on your own key, and a webhook starts it: what a delivery carries is untrusted input to an agent that holds your key in its environment
+
+instructions:
+  Review for correctness.
+
+run it: nan automations run a0000000-0000-4000-8000-000000000001
+edit it in the portal: https://cloud.nan.builders/automations/a0000000-0000-4000-8000-000000000001

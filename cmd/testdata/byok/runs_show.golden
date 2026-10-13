@@ -1,0 +1,21 @@
+id             6f1c2a9b-0000-4000-8000-000000000001
+state          succeeded
+workspace      develop (11111111-2222-4333-8444-555555555555)
+agent          pi · model claude-sonnet-4-5
+inference      your key ANTHROPIC_KEY (Anthropic): billed by your provider, not metered by NaN
+trigger        cli
+cwd            /home/nan/projects/api
+worktree       auto
+timeout        30m0s
+created        2026-10-10 09:00
+started        2026-10-10 09:00
+branch         nan-run/6f1c2a9b
+commit         aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+changed files  3
+tokens         12840 in, 1630 out (as the agent reported them; your provider's bill is the reference)
+
+prompt:
+  review PR 42 in full
+
+summary:
+  done

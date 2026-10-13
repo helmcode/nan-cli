@@ -1,0 +1,42 @@
+{
+  "agent": "pi",
+  "approval_kinds": [
+    "github_pr_review"
+  ],
+  "approval_ttl_seconds": 259200,
+  "checkout": "workspace",
+  "checkout_untrusted_heads": false,
+  "concurrency_policy": "skip_if_active",
+  "created_at": "2026-10-11T09:00:00Z",
+  "cwd": "/home/nan/projects/api",
+  "description": "reviews",
+  "disabled_reason": null,
+  "enabled": true,
+  "git_isolation": true,
+  "github_repo": "acme/api",
+  "id": "a0000000-0000-4000-8000-000000000001",
+  "inference": {
+    "model": "qwen/qwen3-coder",
+    "provider": "openai_compatible",
+    "secret": "TOGETHER_KEY",
+    "source": "byok"
+  },
+  "instructions": "Review for correctness.",
+  "max_runs_per_hour": 30,
+  "max_trigger_depth": 2,
+  "model": "qwen/qwen3-coder",
+  "name": "PR review api",
+  "object": "automation",
+  "secrets": [
+    {
+      "env": "GITHUB_TOKEN",
+      "exposure": "actions",
+      "secret": "GITHUB_WRITE_TOKEN"
+    }
+  ],
+  "sticky_pr_comment": false,
+  "template": "pr_review",
+  "timeout_seconds": 1800,
+  "updated_at": "2026-10-11T09:00:00Z",
+  "workspace": "11111111-2222-4333-8444-555555555555"
+}
