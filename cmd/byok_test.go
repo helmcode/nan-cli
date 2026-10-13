@@ -64,10 +64,12 @@ func TestBYOKFlagMistakesAreUsageErrors(t *testing.T) {
 		mutate func(*runOptions)
 		wants  []string
 	}{
-		"no model":              {func(o *runOptions) { o.model = "" }, []string{"--model", "your provider"}},
-		"model starting with -": {func(o *runOptions) { o.model = "-x" }, []string{"--model"}},
-		"lower case name":       {func(o *runOptions) { o.byokSecret = "anthropic_key" }, []string{"NAME", "ANTHROPIC_KEY", "nan secrets ls"}},
-		"the key itself":        {func(o *runOptions) { o.byokSecret = pasted }, []string{"NAME", "shell history", "revoke"}},
+		"no model":               {func(o *runOptions) { o.model = "" }, []string{"--model", "your provider"}},
+		"model starting with -":  {func(o *runOptions) { o.model = "-x" }, []string{"--model"}},
+		"lower case name":        {func(o *runOptions) { o.byokSecret = "anthropic_key" }, []string{"NAME", "ANTHROPIC_KEY", "nan secrets ls"}},
+		"the key itself":         {func(o *runOptions) { o.byokSecret = pasted }, []string{"NAME", "shell history", "revoke"}},
+		"the key as the model":   {func(o *runOptions) { o.model = pasted }, []string{"--model", "shell history", "revoke"}},
+		"a long lower case name": {func(o *runOptions) { o.byokSecret = "my_very_long_lower_case_name_x" }, []string{"NAME"}},
 	} {
 		h := newHarness(t, &fakePlatform{})
 		opts := byokOpts()
@@ -78,6 +80,9 @@ func TestBYOKFlagMistakesAreUsageErrors(t *testing.T) {
 			continue
 		}
 		wantAll(t, name, err.Error(), tc.wants...)
+		if strings.Contains(err.Error(), "MY_VERY_LONG") {
+			t.Errorf("%s: suggested a name for a long value: %v", name, err)
+		}
 		if strings.Contains(err.Error(), "PastedTheKey") {
 			t.Errorf("%s: the error repeats what may be a key: %v", name, err)
 		}
@@ -247,6 +252,48 @@ func TestBYOKGoldenViews(t *testing.T) {
 		if strings.Contains(out.String(), "GoldenValue") {
 			t.Errorf("%s shows a secret value", tc.name)
 		}
+	}
+}
+
+// A long model id is a model id, and the BASE URL column and the webhook
+// note only show when they apply.
+func TestBYOKOnlyWhenItApplies(t *testing.T) {
+	h := newHarness(t, &fakePlatform{})
+	opts := byokOpts()
+	opts.model = "meta-llama/Llama-3.3-70B-Instruct-Turbo-with-a-long-name"
+	if err := doRun(context.Background(), h.env, opts, []string{"x"}); err != nil {
+		t.Fatal(err)
+	}
+
+	resetPhase2Flags()
+	defer resetPhase2Flags()
+	ph := newPhase2Harness(t, &fakePhase2{})
+	if err := doSecretsLs(context.Background(), ph.env); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(ph.stdout.String(), "BASE URL") || !strings.Contains(ph.stdout.String(), "PROVIDER") {
+		t.Errorf("secrets ls without base URLs:\n%s", ph.stdout.String())
+	}
+
+	for name, trig := range map[string][]api.Trigger{
+		"no trigger":       nil,
+		"schedule only":    {{Kind: "schedule", Enabled: true}},
+		"disabled webhook": {{Kind: "webhook", Enabled: false}},
+	} {
+		if hasWebhook(trig) {
+			t.Errorf("%s: counted as a webhook", name)
+		}
+	}
+	if !hasWebhook([]api.Trigger{{Kind: "schedule", Enabled: true}, {Kind: "webhook", Enabled: true}}) {
+		t.Error("an enabled webhook is not seen")
+	}
+}
+
+func TestBYOKCorruptSession(t *testing.T) {
+	fakeHome(t, `{not json`)
+	_, err := byokCredential(os.Getenv, "")
+	if exitCode(err) != exitAuth || !strings.Contains(err.Error(), "nan auth login") {
+		t.Fatalf("exit %d: %v", exitCode(err), err)
 	}
 }
 

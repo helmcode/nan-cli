@@ -451,13 +451,13 @@ func buildRunRequest(in promptInput, opts runOptions, args []string) (*api.Creat
 	if opts.worktree && opts.noWorktree {
 		return nil, usageErrorf("--worktree and --no-worktree contradict each other; pick one")
 	}
-	if opts.model != "" && !modelPattern.MatchString(opts.model) {
-		return nil, usageErrorf("--model %q is not a model name (letters, digits and . _ : / -, up to 128)", opts.model)
-	}
 	if opts.byokSecret != "" {
 		if err := checkBYOKFlags(opts); err != nil {
 			return nil, err
 		}
+	}
+	if opts.model != "" && !modelPattern.MatchString(opts.model) {
+		return nil, usageErrorf("--model %q is not a model name (letters, digits and . _ : / -, up to 128)", opts.model)
 	}
 	if opts.idempotencyKey != "" && !idempotencyPattern.MatchString(opts.idempotencyKey) {
 		return nil, usageErrorf("--idempotency-key must be 1-128 of letters, digits and . _ : -")

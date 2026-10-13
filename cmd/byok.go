@@ -32,14 +32,22 @@ const byokSessionRequired = "runs with your own provider key need your session: 
 // starts like one is probably the key itself, pasted by mistake.
 var keyPrefixes = []string{"sk-", "sk_", "AIza", "gsk_", "xai-", "pk-", "key-", "nan_pat_"}
 
-func looksLikeAKey(v string) bool {
+func hasKeyPrefix(v string) bool {
 	for _, p := range keyPrefixes {
 		if strings.HasPrefix(v, p) {
 			return true
 		}
 	}
-	return len(v) >= 32
+	return false
 }
+
+// looksLikeAKey is a secret name that is probably the key itself. A model id
+// is checked by its prefix only: model ids can be long.
+func looksLikeAKey(v string) bool { return hasKeyPrefix(v) || len(v) >= 32 }
+
+// pastedKeyHint is what to do about a key typed on the command line.
+const pastedKeyHint = "If that was the key, it is now in your shell history: revoke it at your provider, " +
+	"then save the new one in the portal, Settings > Secrets at " + secretsURL
 
 // checkBYOKFlags checks --byok-secret and its --model. The value is never
 // repeated in an error when it is not a secret name: it may be the key.
@@ -50,9 +58,8 @@ func checkBYOKFlags(opts runOptions) error {
 			"capital letters, digits and _), never the key itself; your names are in: nan secrets ls"
 		switch upper := strings.ToUpper(name); {
 		case looksLikeAKey(name):
-			return usageErrorf("%s. If that was the key, it is now in your shell history: revoke it at your provider, "+
-				"then save the new one in the portal, Settings > Secrets at %s", what, secretsURL)
-		case secretNamePattern.MatchString(upper):
+			return usageErrorf("%s. %s", what, pastedKeyHint)
+		case len(name) <= 24 && secretNamePattern.MatchString(upper):
 			return usageErrorf("%s. Did you mean %s?", what, upper)
 		}
 		return usageErrorf("%s", what)
@@ -60,6 +67,9 @@ func checkBYOKFlags(opts runOptions) error {
 	if opts.model == "" {
 		return usageErrorf("--byok-secret needs --model: the id of a model your provider serves (like claude-sonnet-4-5); " +
 			"NaN does not pick one for your key")
+	}
+	if hasKeyPrefix(opts.model) {
+		return usageErrorf("--model takes the id of a model (like claude-sonnet-4-5), never a key. %s", pastedKeyHint)
 	}
 	if strings.HasPrefix(opts.model, "-") {
 		return usageErrorf("--model must not start with -")
