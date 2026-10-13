@@ -83,9 +83,9 @@ var All = []Model{
 		Reasoning: true,
 	},
 	{
-		ID:        "mimo-v2.5",
+		ID:        "mimo-v2.6-flash",
 		Kind:      Chat,
-		Name:      "Xiaomi MiMo V2.5",
+		Name:      "Xiaomi MiMo V2.6 Flash",
 		Context:   1_048_576,
 		Output:    32_768,
 		Inputs:    []string{InputText, InputImage, InputAudio},
@@ -139,6 +139,25 @@ func ChatModels() []Model {
 		}
 	}
 	return out
+}
+
+// Retired are ids the cluster served once and no longer does. Asking for one
+// gets `401 This API key does not have access to the requested model`, which
+// reads like a problem with the key and is not. The writers that merge into a
+// config rather than rewrite it - opencode, droid, the Codex profiles - would
+// otherwise keep offering them forever, so they take these out on the next
+// setup run.
+var Retired = []string{
+	"mimo-v2.5", // replaced by mimo-v2.6-flash on 2026-10
+}
+
+func IsRetired(id string) bool {
+	for _, r := range Retired {
+		if r == id {
+			return true
+		}
+	}
+	return false
 }
 
 // Default is what a tool is left pointing at when it has no preference of its

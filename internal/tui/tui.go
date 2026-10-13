@@ -2280,21 +2280,41 @@ func writeFactoryConfig(cfgPath, apiKey string) error {
 		}
 	}
 
-	// Index NaN model IDs already present
+	// Index NaN model IDs already present, dropping the ones the cluster no
+	// longer serves.
 	existingIDs := map[string]bool{}
+	changed := false
+	kept := models[:0]
+	nextIndex := 0
 	for _, m := range models {
 		if base, _ := m["baseUrl"].(string); strings.Contains(base, "api.nan.builders") {
-			if id, _ := m["model"].(string); id != "" {
+			id, _ := m["model"].(string)
+			if catalog.IsRetired(id) {
+				changed = true
+				continue
+			}
+			if id != "" {
 				existingIDs[id] = true
 			}
 		}
+		// JSON numbers come back as float64. The next index goes past the
+		// highest one, not at len(models): with an entry taken out, len lands
+		// on an index someone already holds.
+		if i, ok := m["index"].(float64); ok && int(i) >= nextIndex {
+			nextIndex = int(i) + 1
+		}
+		kept = append(kept, m)
+	}
+	models = kept
+	if len(models) > nextIndex {
+		nextIndex = len(models)
 	}
 
 	// Append only missing models
-	added := false
 	for _, nm := range catalog.ChatModels() {
 		if !existingIDs[nm.ID] {
-			idx := len(models)
+			idx := nextIndex
+			nextIndex++
 			display := nm.Name + " (NaN)"
 			models = append(models, map[string]any{
 				"model":          nm.ID,
@@ -2306,10 +2326,10 @@ func writeFactoryConfig(cfgPath, apiKey string) error {
 				"noImageSupport": !nm.Accepts(catalog.InputImage),
 				"provider":       "openai",
 			})
-			added = true
+			changed = true
 		}
 	}
-	if !added {
+	if !changed {
 		return nil
 	}
 	cfg["customModels"] = models
@@ -2376,6 +2396,12 @@ func writeOpencodeConfig(cfgPath, apiKey string) error {
 					existing = map[string]any{}
 				}
 				changed := false
+				for id := range existing {
+					if catalog.IsRetired(id) {
+						delete(existing, id)
+						changed = true
+					}
+				}
 				for id, m := range nanModels {
 					found, ok := existing[id].(map[string]any)
 					if !ok {
@@ -2513,7 +2539,7 @@ func piSettingsPath(cfgPath string) string {
 	return filepath.Join(filepath.Dir(cfgPath), "settings.json")
 }
 
-// Pi's schema takes "text" and "image" and nothing else, so mimo-v2.5 goes in
+// Pi's schema takes "text" and "image" and nothing else, so mimo-v2.6-flash goes in
 // without its audio: a third value fails validation, and Pi then refuses the
 // whole file with every other provider in it.
 func piInputs(m catalog.Model) []string {
@@ -2681,6 +2707,11 @@ wire_api = "responses"
 // and leave with the disconnect - a web_search = "disabled" at the root
 // would stay behind and take search from the member's OpenAI sessions too.
 func writeCodexProfiles(codexHome string) error {
+	// Starting from none, so a model the cluster retired does not leave its
+	// profile behind to answer 401 on `--profile`.
+	if err := removeCodexProfiles(codexHome); err != nil {
+		return err
+	}
 	for _, m := range catalog.ChatModels() {
 		body := fmt.Sprintf(`# Written by the NaN CLI. Disconnecting Codex removes it.
 model = %q
@@ -3610,7 +3641,7 @@ func (m model) renderSetup(l layout) string {
 
 // ── about renderer ───────────────────────────────────────────────────────────
 
-const Version = "0.1.29"
+const Version = "0.1.30"
 
 func renderAbout(l layout) string {
 	var b strings.Builder
