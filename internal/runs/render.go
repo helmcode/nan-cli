@@ -143,14 +143,14 @@ type Renderer struct {
 
 func (r *Renderer) newline() {
 	if r.midLine {
-		fmt.Fprintln(r.Out)
+		_, _ = fmt.Fprintln(r.Out)
 		r.midLine = false
 	}
 }
 
 func (r *Renderer) line(format string, args ...any) {
 	r.newline()
-	fmt.Fprintf(r.Out, format+"\n", args...)
+	_, _ = fmt.Fprintf(r.Out, format+"\n", args...)
 }
 
 // prefixed prints text one line at a time, each behind the same label, so a
@@ -159,7 +159,7 @@ func (r *Renderer) prefixed(label, text string) {
 	r.newline()
 	text = strings.TrimRight(Sanitize(text), "\n")
 	for _, l := range strings.Split(text, "\n") {
-		fmt.Fprintf(r.Out, "%s │ %s\n", label, l)
+		_, _ = fmt.Fprintf(r.Out, "%s │ %s\n", label, l)
 	}
 }
 
@@ -212,7 +212,7 @@ func (r *Renderer) Event(ev api.Event) {
 		_ = json.Unmarshal(ev.Data, &d)
 		text := Sanitize(d.Text)
 		if text != "" {
-			fmt.Fprint(r.Out, text)
+			_, _ = fmt.Fprint(r.Out, text)
 			r.midLine = !strings.HasSuffix(text, "\n")
 		}
 		if d.Final {
@@ -387,7 +387,7 @@ func isUUID(s string) bool {
 				return false
 			}
 		default:
-			if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
 				return false
 			}
 		}
@@ -458,7 +458,7 @@ func SafeJSON(v any, indent bool) ([]byte, error) {
 func Proposal(w io.Writer, run *api.Run) {
 	a := run.Approval
 	id := SanitizeLine(run.ID)
-	row := func(k, v string) { fmt.Fprintf(w, "%-12s%s\n", k, v) }
+	row := func(k, v string) { _, _ = fmt.Fprintf(w, "%-12s%s\n", k, v) }
 
 	row("run", id+" ("+strings.ReplaceAll(SanitizeLine(run.State), "_", " ")+")")
 	if run.Automation != nil {
@@ -503,17 +503,17 @@ func Proposal(w io.Writer, run *api.Run) {
 	if a.ApprovalFrom != nil {
 		from = *a.ApprovalFrom
 	}
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "actions:")
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "actions:")
 	if len(p.Actions) == 0 {
-		fmt.Fprintln(w, "  (none)")
+		_, _ = fmt.Fprintln(w, "  (none)")
 	}
 	for i, act := range p.Actions {
 		mode := "automatic"
 		if from >= 0 && i >= from {
 			mode = "needs approval"
 		}
-		fmt.Fprintf(w, "  %d. %s  [%s]\n", i+1, actionLine(act), mode)
+		_, _ = fmt.Fprintf(w, "  %d. %s  [%s]\n", i+1, actionLine(act), mode)
 		if act.CommitMessage != "" {
 			indented(w, "commit message", act.CommitMessage)
 		}
@@ -523,30 +523,30 @@ func Proposal(w io.Writer, run *api.Run) {
 	}
 
 	if ds != nil && len(ds.Files) > 0 {
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "files:")
+		_, _ = fmt.Fprintln(w)
+		_, _ = fmt.Fprintln(w, "files:")
 		for _, f := range ds.Files {
 			change := fmt.Sprintf("+%d -%d", f.Added, f.Deleted)
 			if f.Binary {
 				change = "binary"
 			}
-			fmt.Fprintf(w, "  %-12s %s\n", change, SanitizeLine(f.Path))
+			_, _ = fmt.Fprintf(w, "  %-12s %s\n", change, SanitizeLine(f.Path))
 		}
 		if ds.Truncated {
-			fmt.Fprintln(w, "  … (more files than the summary lists)")
+			_, _ = fmt.Fprintln(w, "  … (more files than the summary lists)")
 		}
 	}
 
-	fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w)
 	if a.HasDiff {
-		fmt.Fprintf(w, "The full diff is stored: nan runs proposal %s --diff\n", id)
+		_, _ = fmt.Fprintf(w, "The full diff is stored: nan runs proposal %s --diff\n", id)
 	}
 	if a.DiffMasked {
-		fmt.Fprintln(w, "The diff contains the value of one of your secrets (shown here as [masked]); approving pushes it to your repository.")
+		_, _ = fmt.Fprintln(w, "The diff contains the value of one of your secrets (shown here as [masked]); approving pushes it to your repository.")
 	}
 	if a.State == api.ApprovalPending && run.State == api.StateAwaitingApproval {
-		fmt.Fprintln(w, approveLine(run))
-		fmt.Fprintln(w, rejectLine(run))
+		_, _ = fmt.Fprintln(w, approveLine(run))
+		_, _ = fmt.Fprintln(w, rejectLine(run))
 	}
 }
 
@@ -593,18 +593,18 @@ func indented(w io.Writer, title, text string) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
-	fmt.Fprintf(w, "     %s:\n", title)
+	_, _ = fmt.Fprintf(w, "     %s:\n", title)
 	for _, l := range strings.Split(text, "\n") {
-		fmt.Fprintf(w, "       %s\n", l)
+		_, _ = fmt.Fprintf(w, "       %s\n", l)
 	}
 }
 
 // Diff prints a proposal's diff, sanitised: it is text the agent produced.
 func Diff(w io.Writer, diff string) {
 	text := Sanitize(diff)
-	fmt.Fprint(w, text)
+	_, _ = fmt.Fprint(w, text)
 	if text != "" && !strings.HasSuffix(text, "\n") {
-		fmt.Fprintln(w)
+		_, _ = fmt.Fprintln(w)
 	}
 }
 

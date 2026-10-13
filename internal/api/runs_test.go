@@ -63,7 +63,7 @@ func TestRunsClientFallsBackToTheAPIKey(t *testing.T) {
 }
 
 func TestRunsClient401IsAnExpiredSession(t *testing.T) {
-	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = io.WriteString(w, `{"error":{"message":"invalid session","type":"auth_error","code":"invalid_api_key"}}`)
 	}), "stale", "")
@@ -80,7 +80,7 @@ func TestRunsClientParsesBothErrorEnvelopes(t *testing.T) {
 		{`{"error":{"message":"bad timeout","type":"invalid_request_error","param":"timeout_seconds","code":"invalid_request"}}`, "invalid_request", "bad timeout", "timeout_seconds"},
 		{`{"error":"workspaces are not enabled"}`, "", "workspaces are not enabled", ""},
 	} {
-		c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusConflict)
 			_, _ = io.WriteString(w, tc.body)
 		}), "t", "")
@@ -289,7 +289,7 @@ func TestFollowReconnectsWithLastEventID(t *testing.T) {
 	if run.State != StateFailed {
 		t.Errorf("state = %s", run.State)
 	}
-	var seqs []int64
+	seqs := make([]int64, 0, len(frames))
 	for _, f := range frames {
 		seqs = append(seqs, f.Event.Seq)
 	}
@@ -304,7 +304,7 @@ func TestFollowReconnectsWithLastEventID(t *testing.T) {
 func TestFollowGivesUpAfterFiveFailuresInARow(t *testing.T) {
 	var mu sync.Mutex
 	calls := 0
-	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		mu.Lock()
 		calls++
 		mu.Unlock()
@@ -376,7 +376,7 @@ func TestFollowDoesNotRetryAuthOrNotFound(t *testing.T) {
 		{http.StatusNotFound, func(err error) bool { var e *APIError; return errors.As(err, &e) && e.Status == 404 }},
 	} {
 		calls := 0
-		c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			calls++
 			w.WriteHeader(tc.status)
 		}), "t", "")
@@ -404,7 +404,7 @@ func TestFollowStopsWhenTheContextIsCancelled(t *testing.T) {
 // A connection that is accepted and never answered must not hang the CLI:
 // the idle limit covers the wait for the headers as well.
 func TestFollowTimesOutWaitingForHeaders(t *testing.T) {
-	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	c := testRunsClient(t, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 	}), "t", "")
 	c.IdleTimeout = 30 * time.Millisecond
@@ -425,11 +425,11 @@ func TestFollowTimesOutWaitingForHeaders(t *testing.T) {
 // hang-up - must count as a failure, or the client reconnects forever.
 func TestFollowGivesUpOnStreamsThatNeverWork(t *testing.T) {
 	for name, h := range map[string]http.HandlerFunc{
-		"not an event stream": func(w http.ResponseWriter, r *http.Request) {
+		"not an event stream": func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"data":[]}`)
 		},
-		"heartbeat and hang up": func(w http.ResponseWriter, r *http.Request) {
+		"heartbeat and hang up": func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = io.WriteString(w, ": hb\n\n")
 		},
@@ -464,16 +464,16 @@ func TestFollowRetryBudgetResetsOnWorkingConnections(t *testing.T) {
 	t.Run("frames", func(t *testing.T) {
 		var mu sync.Mutex
 		calls := 0
-		c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			mu.Lock()
 			calls++
 			n := calls
 			mu.Unlock()
-			switch {
-			case n == 4:
+			switch n {
+			case 4:
 				w.Header().Set("Content-Type", "text/event-stream")
 				_, _ = io.WriteString(w, sseEvent(1, "log", `{}`))
-			case n == 8:
+			case 8:
 				w.Header().Set("Content-Type", "text/event-stream")
 				_, _ = io.WriteString(w, sseEnd("succeeded"))
 			default:
@@ -487,7 +487,7 @@ func TestFollowRetryBudgetResetsOnWorkingConnections(t *testing.T) {
 	t.Run("long-lived heartbeats", func(t *testing.T) {
 		var mu sync.Mutex
 		calls := 0
-		c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			mu.Lock()
 			calls++
 			n := calls
@@ -510,7 +510,7 @@ func TestFollowRetryBudgetResetsOnWorkingConnections(t *testing.T) {
 
 func TestFollowRetriesTooManyRequests(t *testing.T) {
 	var calls atomic.Int32
-	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if calls.Add(1) == 1 {
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
@@ -525,7 +525,7 @@ func TestFollowRetriesTooManyRequests(t *testing.T) {
 
 func TestFollowSkipsAMalformedEnd(t *testing.T) {
 	var calls atomic.Int32
-	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		n := calls.Add(1)
 		w.Header().Set("Content-Type", "text/event-stream")
 		if n == 1 {
@@ -547,7 +547,7 @@ func TestFollowRefusesOversizedLinesAndFrames(t *testing.T) {
 		"frame": strings.Repeat("data: "+strings.Repeat("a", maxSSELine/2)+"\n", 10) + "\n",
 	} {
 		var calls atomic.Int32
-		c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			calls.Add(1)
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = io.WriteString(w, body)
@@ -575,7 +575,7 @@ func TestFollowBusyConsumerIsNotIdle(t *testing.T) {
 		"frame": strings.Repeat("data: "+strings.Repeat("a", maxSSELine/2)+"\n", 10) + "\n",
 	} {
 		var calls atomic.Int32
-		c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			calls.Add(1)
 			w.Header().Set("Content-Type", "text/event-stream")
 			for seq := int64(1); seq <= events; seq++ {
@@ -639,7 +639,7 @@ func TestFollowOversizedLineArrivingSlowlyIsNotIdle(t *testing.T) {
 // wherever it points.
 func TestRunsClientDoesNotFollowRedirects(t *testing.T) {
 	hit := false
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true }))
+	target := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { hit = true }))
 	defer target.Close()
 	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusFound)
@@ -663,7 +663,7 @@ func TestTerminal(t *testing.T) {
 // up has shown nothing new: that is not a working connection.
 func TestFollowReplaysAloneDoNotRefillTheBudget(t *testing.T) {
 	var calls atomic.Int32
-	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, sseEvent(1, "log", `{}`))
@@ -683,7 +683,7 @@ func TestFollowReplaysAloneDoNotRefillTheBudget(t *testing.T) {
 }
 
 func TestFollowRefusesAnEndForAnotherRun(t *testing.T) {
-	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, sseEnd("succeeded"))
 	}), "t", "")
@@ -693,11 +693,11 @@ func TestFollowRefusesAnEndForAnotherRun(t *testing.T) {
 }
 
 func TestOnRetryHearsEachReconnect(t *testing.T) {
-	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 	}), "t", "")
 	var attempts []int
-	c.OnRetry = func(attempt, max int, err error) { attempts = append(attempts, attempt) }
+	c.OnRetry = func(attempt, _ int, _ error) { attempts = append(attempts, attempt) }
 	_, _ = c.Follow(context.Background(), runID, 0, func(Frame) {})
 	if fmt.Sprint(attempts) != "[1 2 3 4 5]" {
 		t.Errorf("attempts = %v", attempts)

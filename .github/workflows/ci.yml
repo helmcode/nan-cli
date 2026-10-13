@@ -14,6 +14,39 @@ on:
     branches: [main]
 
 jobs:
+  # The same lint and the same checks as the Helmcode CLI, so the two repos
+  # are held to one standard and a fix in either reads the same in both.
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9.3.0
+        with:
+          # Pinned, not "latest": a release of the linter should not turn
+          # this repo's CI red on a morning nobody touched it.
+          version: v2.14.0
+          args: --timeout=5m
+
+      # `go fmt ./...` rewrites the files and exits 0 either way, so as a CI
+      # step it cannot fail. This one exits non-zero on a difference.
+      - name: Formatting
+        run: golangci-lint fmt --diff
+
+      # THIRD-PARTY-NOTICES.txt has to match what the binary actually links,
+      # or the file rots the first time somebody adds a dependency and the
+      # Apache-2.0 obligation quietly stops being met.
+      - name: Third-party notices
+        run: |
+          go run scripts/gen-notices.go
+          git diff --exit-code THIRD-PARTY-NOTICES.txt
+
   test:
     # Everything here ran on ubuntu only, so darwin was a platform we shipped
     # binaries for and had never executed a line on: it cross-compiled, and
@@ -66,7 +99,7 @@ jobs:
             os="${target%/*}"
             arch="${target#*/}"
             echo "building $os/$arch"
-            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -o /dev/null .
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -o /dev/null ./cmd/nan
           done
 
       # The installers are the one thing here that is not Go and is not tested

@@ -25,7 +25,7 @@ func TestSanitizeStripsEscapesAndControls(t *testing.T) {
 		{"backspace and bell", "ab\x08\x07c", "abc"},
 		{"NUL and DEL", "a\x00b\x7fc", "abc"},
 		{"C1 CSI", "a\u009b31mb", "a31mb"},
-		{"bidi override", "a‮b⁦c", "abc"},
+		{"bidi override", "a\u202eb\u2066c", "abc"},
 		{"invalid UTF-8", "a\xffb", "a�b"},
 		{"non-ASCII text survives", "¡Hola, señor! 日本 🚀", "¡Hola, señor! 日本 🚀"},
 	} {
@@ -115,15 +115,15 @@ func TestExitCodeFollowsTheTable(t *testing.T) {
 }
 
 func TestSafeJSONEscapesWhatTerminalsActOn(t *testing.T) {
-	out, err := SafeJSON(map[string]string{"t": "a\x1b[31m\u009b‮b"}, false)
+	out, err := SafeJSON(map[string]string{"t": "a\x1b[31m\u009b\u202eb"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.ContainsAny(string(out), "\x1b\u009b‮") {
+	if strings.ContainsAny(string(out), "\x1b\u009b\u202e") {
 		t.Errorf("raw control in JSON: %q", out)
 	}
 	var back map[string]string
-	if err := json.Unmarshal(out, &back); err != nil || back["t"] != "a\x1b[31m\u009b‮b" {
+	if err := json.Unmarshal(out, &back); err != nil || back["t"] != "a\x1b[31m\u009b\u202eb" {
 		t.Errorf("did not round-trip: %v %q", err, back["t"])
 	}
 }
