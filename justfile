@@ -24,6 +24,14 @@ dev:
 local api="http://127.0.0.1:8080" *args="":
     NAN_API_URL={{api}} NAN_APP_URL={{api}} NAN_INFERENCE_URL={{api}}/v1 go run ./cmd/nan {{args}}
 
+# Run against production as a first-time member, with every file it writes
+# kept in a throwaway HOME. See scripts/fresh.sh.
+#   just fresh
+#   just fresh --keep
+#   just fresh --show
+fresh *args="":
+    scripts/fresh.sh {{args}}
+
 # Regenerate THIRD-PARTY-NOTICES.txt from what is actually linked into the
 # binary. Run it after adding, removing or bumping a dependency: one of them
 # is Apache-2.0, which requires the notice to travel with a redistribution.
