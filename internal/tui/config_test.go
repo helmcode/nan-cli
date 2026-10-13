@@ -2564,3 +2564,133 @@ func TestARefusedKeyOpensTheFieldAgain(t *testing.T) {
 		t.Errorf("the refusal is gone: %q", after.keyCheck)
 	}
 }
+
+func TestCodexProfilesPointAtACatalogOfTheClustersModels(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Dir(path)
+
+	var cat struct {
+		Models []map[string]any `json:"models"`
+	}
+	data, err := os.ReadFile(filepath.Join(home, codexCatalogFile))
+	if err != nil {
+		t.Fatalf("no catalogue, so /model offers only gpt-* models the cluster answers with a 401: %v", err)
+	}
+	if err := json.Unmarshal(data, &cat); err != nil {
+		t.Fatal(err)
+	}
+	bySlug := map[string]map[string]any{}
+	for _, e := range cat.Models {
+		bySlug[e["slug"].(string)] = e
+	}
+	for _, m := range catalog.ChatModels() {
+		e, ok := bySlug[m.ID]
+		if !ok {
+			t.Errorf("%s is not in the catalogue, so /model cannot reach it", m.ID)
+			continue
+		}
+		if got := int(e["context_window"].(float64)); got != m.Context {
+			t.Errorf("%s: context_window %d, want %d", m.ID, got, m.Context)
+		}
+		if e["base_instructions"] != codexBaseInstructions {
+			t.Errorf("%s: the entry does not carry Codex's own prompt", m.ID)
+		}
+		// Codex refuses the whole file over a field it cannot parse, so the
+		// modalities it does not know must not get in.
+		for _, in := range e["input_modalities"].([]any) {
+			if in != "text" && in != "image" {
+				t.Errorf("%s: input_modalities has %q", m.ID, in)
+			}
+		}
+
+		body := readFile(t, filepath.Join(home, codexProfileName(m.ID)+".config.toml"))
+		want := fmt.Sprintf("model_catalog_json = %q", codexCatalogPath(home))
+		at := strings.Index(body, want)
+		if at < 0 {
+			t.Errorf("%s: the profile does not point at the catalogue:\n%s", m.ID, body)
+			continue
+		}
+		// A key under [features] belongs to that table and Codex would not
+		// read it as the catalogue.
+		if features := strings.Index(body, "[features]"); features >= 0 && at > features {
+			t.Errorf("%s: model_catalog_json landed inside [features]:\n%s", m.ID, body)
+		}
+		if strings.Contains(want, `\`) {
+			t.Errorf("%s: a backslash in a TOML basic string is an escape: %s", m.ID, want)
+		}
+	}
+	// Only the profiles point at it. In config.toml it would take OpenAI's
+	// models out of the member's own sessions.
+	if strings.Contains(readFile(t, path), "model_catalog_json") {
+		t.Error("config.toml points at the catalogue, so OpenAI sessions lose their models")
+	}
+}
+
+// What a NaN model is told must not change because a picker appeared: the
+// prompt is the one Codex sends a model it has no metadata for.
+func TestCodexCatalogPromptIsTheOneCodexAlreadySent(t *testing.T) {
+	if !strings.HasPrefix(codexBaseInstructions, "You are a coding agent running in the Codex CLI") {
+		t.Errorf("not Codex's default prompt: %.80q", codexBaseInstructions)
+	}
+	// Codex drops these when update_plan is not offered, and it is not.
+	for _, section := range []string{"## Planning", "## `update_plan`"} {
+		if strings.Contains(codexBaseInstructions, section) {
+			t.Errorf("the prompt still has %q, which Codex leaves out", section)
+		}
+	}
+	// A checkout that turned the file to CRLF would change every byte of the
+	// prompt on that machine's builds.
+	if strings.Contains(codexBaseInstructions, "\r") {
+		t.Error("the embedded prompt has carriage returns")
+	}
+}
+
+func TestCodexRemovalTakesTheCatalog(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCodexConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(path), codexCatalogFile)); !os.IsNotExist(err) {
+		t.Error("the catalogue outlived the disconnect")
+	}
+}
+
+// qwen3.8-flash went out at 262,144 when it is served at 1,048,576. An
+// existing opencode entry with that exact figure is one this CLI wrote.
+func TestOpencodeConfigCorrectsAWindowWeGotWrong(t *testing.T) {
+	path := tempConfig(t, "opencode.json")
+	old := `{
+	  "provider": {
+	    "nan": {
+	      "npm": "@ai-sdk/openai-compatible",
+	      "options": { "baseURL": "https://api.nan.builders/v1", "apiKey": "sk-old" },
+	      "models": {
+	        "qwen3.8-flash": { "name": "Qwen 3.8 Flash", "limit": { "context": 262144, "output": 32768 } },
+	        "gemma4": { "name": "Gemma 4", "limit": { "context": 100000, "output": 65536 } }
+	      }
+	    }
+	  }
+	}`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeOpencodeConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	models := readJSON(t, path)["provider"].(map[string]any)["nan"].(map[string]any)["models"].(map[string]any)
+	limit := func(id string) int {
+		return int(models[id].(map[string]any)["limit"].(map[string]any)["context"].(float64))
+	}
+	if got := limit("qwen3.8-flash"); got != 1_048_576 {
+		t.Errorf("qwen3.8-flash context %d, still compacting at a quarter of the window", got)
+	}
+	if got := limit("gemma4"); got != 100_000 {
+		t.Errorf("gemma4 context %d, a window the member set was overwritten", got)
+	}
+}

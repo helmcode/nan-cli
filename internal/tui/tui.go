@@ -2419,6 +2419,16 @@ func writeOpencodeConfig(cfgPath, apiKey string) error {
 							changed = true
 						}
 					}
+					if limit, ok := found["limit"].(map[string]any); ok {
+						if ctx, ok := limit["context"].(float64); ok {
+							for _, stale := range catalog.StaleContexts[id] {
+								if int(ctx) == stale {
+									limit["context"] = m.(map[string]any)["limit"].(map[string]any)["context"]
+									changed = true
+								}
+							}
+						}
+					}
 				}
 				if !changed {
 					return nil
@@ -2712,16 +2722,24 @@ func writeCodexProfiles(codexHome string) error {
 	if err := removeCodexProfiles(codexHome); err != nil {
 		return err
 	}
+	models, err := codexCatalog()
+	if err != nil {
+		return err
+	}
+	if err := writeConfigFile(filepath.Join(codexHome, codexCatalogFile), models); err != nil {
+		return err
+	}
 	for _, m := range catalog.ChatModels() {
 		body := fmt.Sprintf(`# Written by the NaN CLI. Disconnecting Codex removes it.
 model = %q
 model_provider = "nan"
 model_context_window = %d
+model_catalog_json = %q
 web_search = "disabled"
 
 [features]
 multi_agent = false
-`, m.ID, m.Context)
+`, m.ID, m.Context, codexCatalogPath(codexHome))
 		path := filepath.Join(codexHome, codexProfileName(m.ID)+".config.toml")
 		if err := writeConfigFile(path, []byte(body)); err != nil {
 			return err
@@ -2739,7 +2757,8 @@ func codexProfileName(id string) string {
 	return "nan-" + strings.ReplaceAll(id, ".", "")
 }
 
-// Takes back only the files this CLI wrote, by the prefix it wrote them under.
+// Takes back only the files this CLI wrote: the profiles, by the prefix it
+// wrote them under, and the catalogue they point at.
 func removeCodexProfiles(codexHome string) error {
 	entries, err := os.ReadDir(codexHome)
 	if err != nil {
@@ -2747,7 +2766,8 @@ func removeCodexProfiles(codexHome string) error {
 	}
 	for _, e := range entries {
 		name := e.Name()
-		if !e.IsDir() && strings.HasPrefix(name, "nan-") && strings.HasSuffix(name, ".config.toml") {
+		ours := strings.HasPrefix(name, "nan-") && strings.HasSuffix(name, ".config.toml")
+		if !e.IsDir() && (ours || name == codexCatalogFile) {
 			if err := os.Remove(filepath.Join(codexHome, name)); err != nil && !os.IsNotExist(err) {
 				return err
 			}
@@ -3641,7 +3661,7 @@ func (m model) renderSetup(l layout) string {
 
 // ── about renderer ───────────────────────────────────────────────────────────
 
-const Version = "0.1.30"
+const Version = "0.1.31"
 
 func renderAbout(l layout) string {
 	var b strings.Builder
