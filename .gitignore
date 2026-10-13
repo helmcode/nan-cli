@@ -1,5 +1,5 @@
 # Binaries
-nan
+/nan
 *.exe
 *.exe~
 *.dll
@@ -45,4 +45,4 @@ vendor/
 tmp/
 temp/
 *.log
-nan.exe
+/nan.exe
