@@ -236,14 +236,7 @@ func TestJSONOutputNeutralisesALoneC1Byte(t *testing.T) {
 
 func TestContradictoryWorktreeFlagsSayWhatIsWrong(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	rootCmd.SetArgs([]string{"run", "--worktree", "--no-worktree", "x"})
-	rootCmd.SetOut(io.Discard)
-	rootCmd.SetErr(io.Discard)
-	cmd, err := rootCmd.ExecuteC()
-	code, msg := exitCodeFor(cmd, err)
-	runOpts = runOptions{agent: "pi", timeout: 30 * time.Minute}
-	_ = runCmd.Flags().Set("worktree", "false")
-	_ = runCmd.Flags().Set("no-worktree", "false")
+	code, msg := execute(t, "run", "--worktree", "--no-worktree", "x")
 	if code != exitUsage || !strings.Contains(msg, "pick one") {
 		t.Errorf("exit %d: %s", code, msg)
 	}

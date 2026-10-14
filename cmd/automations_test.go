@@ -617,9 +617,18 @@ func TestBrowserSessionRequiredSaysWhy(t *testing.T) {
 }
 
 // execute runs the real command tree, as main does, and returns how it
-// would exit.
+// would exit. The tree is package state: its flags start at their defaults
+// and go back to them when the test ends, so no test sees what another one
+// parsed, whatever order they run in.
 func execute(t *testing.T, args ...string) (int, string) {
 	t.Helper()
+	resetCommandFlags(rootCmd)
+	t.Cleanup(func() {
+		resetCommandFlags(rootCmd)
+		rootCmd.SetArgs(nil)
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+	})
 	var out bytes.Buffer
 	rootCmd.SetArgs(args)
 	rootCmd.SetOut(&out)
