@@ -436,7 +436,7 @@ func TestSecretsSetRefusals(t *testing.T) {
 		"empty value":           {writeSetup{session: cliSession, stdin: "\n"}, []string{"secrets", "set", "X_TOKEN", "--value-stdin"}, []string{"empty"}},
 		"unknown kind":          {writeSetup{session: cliSession}, []string{"secrets", "set", "X_TOKEN", "--value-file", file, "--kind", "other"}, []string{"generic or provider_key"}},
 		"provider_key no prov":  {writeSetup{session: cliSession}, []string{"secrets", "set", "X_TOKEN", "--value-file", file, "--kind", "provider_key"}, []string{"--provider"}},
-		"provider google":       {writeSetup{session: cliSession}, []string{"secrets", "set", "X_TOKEN", "--value-file", file, "--provider", "google"}, []string{"gemini"}},
+		"provider google":       {writeSetup{session: cliSession}, []string{"secrets", "set", "X_TOKEN", "--value-file", file, "--provider", "google"}, []string{"Google's API is gemini"}},
 		"provider unknown":      {writeSetup{session: cliSession}, []string{"secrets", "set", "X_TOKEN", "--value-file", file, "--provider", "mistral"}, []string{"anthropic, openai, gemini or openai_compatible"}},
 		"provider with generic": {writeSetup{session: cliSession}, []string{"secrets", "set", "X_TOKEN", "--value-file", file, "--kind", "generic", "--provider", "openai"}, []string{"provider_key"}},
 		"missing file":          {writeSetup{session: cliSession}, []string{"secrets", "set", "X_TOKEN", "--value-file", "/nonexistent/v"}, []string{"could not read"}},
@@ -489,6 +489,23 @@ func TestSecretsSetProviderKey(t *testing.T) {
 	_ = json.Unmarshal([]byte(fake.sent("POST", "/v1/secrets")[0].Body), &body)
 	if body["kind"] != "provider_key" || body["provider"] != "openai_compatible" || body["base_url"] != "https://llm.example.com/v1" {
 		t.Errorf("body %v", body)
+	}
+}
+
+// Every provider cloud-api accepts goes through as sent.
+func TestSecretsSetEachProvider(t *testing.T) {
+	file := writeValueFile(t, testValue)
+	for _, p := range []string{"anthropic", "openai", "gemini"} {
+		fake := newFakeWrite()
+		r := runWrite(t, fake, writeSetup{session: cliSession}, "secrets", "set", "LLM_KEY", "--value-file", file, "--provider", p)
+		if r.code != 0 {
+			t.Fatalf("%s: exit %d: %s", p, r.code, r.msg)
+		}
+		var body map[string]any
+		_ = json.Unmarshal([]byte(fake.sent("POST", "/v1/secrets")[0].Body), &body)
+		if body["kind"] != "provider_key" || body["provider"] != p {
+			t.Errorf("%s: body %v", p, body)
+		}
 	}
 }
 

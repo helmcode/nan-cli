@@ -322,7 +322,7 @@ func buildSecretSet(cmd *cobra.Command, name string) (*secretSet, error) {
 }
 
 // secretProviders are the provider names cloud-api accepts on a provider_key
-// secret (internal/secrets/service.go). Anything else would be a 400 after the
+// secret (protocol.Providers in cloud-api's internal/runs/protocol/byok.go). Anything else would be a 400 after the
 // value was already read and sent.
 var secretProviders = map[string]bool{
 	"anthropic": true, "openai": true, "gemini": true, "openai_compatible": true,
