@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/nxssie/nan-cli/internal/api"
 )
@@ -237,9 +236,6 @@ func checkGolden(t *testing.T, rel, got string) {
 func TestBYOKGoldenViews(t *testing.T) {
 	resetPhase2Flags()
 	defer resetPhase2Flags()
-	loc := time.Local
-	time.Local = time.UTC
-	defer func() { time.Local = loc }()
 	ctx := context.Background()
 
 	for _, tc := range []struct {

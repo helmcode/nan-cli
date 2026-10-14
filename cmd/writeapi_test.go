@@ -14,7 +14,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/nxssie/nan-cli/internal/api"
 
@@ -313,21 +312,13 @@ func runWrite(t *testing.T, fake *fakeWrite, setup writeSetup, args ...string) w
 	home := fakeHome(t, setup.session)
 	t.Setenv(tokenEnvVar, setup.env)
 
-	oldBase, oldIn, oldTTY, oldOut, oldErr, oldAttempts := runsBaseURL, writeStdin, writeStdinTTY, writeStdout, writeStderr, createAttempts
-	t.Cleanup(func() {
-		runsBaseURL, writeStdin, writeStdinTTY, writeStdout, writeStderr, createAttempts = oldBase, oldIn, oldTTY, oldOut, oldErr, oldAttempts
-		resetCommandFlags(rootCmd)
-	})
-	runsBaseURL = srv.URL
-	loc := time.Local
-	time.Local = time.UTC
-	t.Cleanup(func() { time.Local = loc })
-	writeStdin = strings.NewReader(setup.stdin)
+	swap(t, &runsBaseURL, srv.URL)
+	swap(t, &writeStdin, io.Reader(strings.NewReader(setup.stdin)))
 	tty := setup.tty
-	writeStdinTTY = func() bool { return tty }
+	swap(t, &writeStdinTTY, func() bool { return tty })
 	var out, errOut bytes.Buffer
-	writeStdout, writeStderr = &out, &errOut
-	resetCommandFlags(rootCmd)
+	swap(t, &writeStdout, io.Writer(&out))
+	swap(t, &writeStderr, io.Writer(&errOut))
 
 	code, msg := execute(t, args...)
 	return writeRun{code: code, msg: msg, stdout: out.String(), stderr: errOut.String(), home: home}
@@ -434,14 +425,13 @@ func TestSecretsSetReadsTheValueExactly(t *testing.T) {
 		"abc":       "abc",
 		" a b c \n": " a b c ",
 	} {
-		writeStdin = strings.NewReader(in)
-		writeStdinTTY = func() bool { return false }
+		swap(t, &writeStdin, io.Reader(strings.NewReader(in)))
+		swap(t, &writeStdinTTY, func() bool { return false })
 		got, err := readSecretValue("", true)
 		if err != nil || got != want {
 			t.Errorf("%q: got %q, %v", in, got, err)
 		}
 	}
-	writeStdin, writeStdinTTY = os.Stdin, func() bool { return isTerminal(os.Stdin) }
 }
 
 func TestSecretsSetRefusals(t *testing.T) {
@@ -803,8 +793,7 @@ func TestReadBodyFile(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	writeStdinTTY = func() bool { return true }
-	defer func() { writeStdinTTY = func() bool { return isTerminal(os.Stdin) } }()
+	swap(t, &writeStdinTTY, func() bool { return true })
 	if _, err := readBodyFile("-"); exitCode(err) != exitUsage || !strings.Contains(err.Error(), "terminal") {
 		t.Errorf("tty stdin: %v", err)
 	}
@@ -1051,7 +1040,7 @@ func TestSecretsSetWithoutRetryFailsOnALostAnswer(t *testing.T) {
 	fake := newFakeWrite()
 	fake.dropFirstCreate = true
 	file := writeValueFile(t, testValue)
-	createAttempts = 1
+	swap(t, &createAttempts, 1)
 	r := runWrite(t, fake, writeSetup{session: cliSession}, "secrets", "set", "NEW_TOKEN", "--value-file", file)
 	if r.code == 0 || len(fake.sent("POST", "/v1/secrets")) != 1 {
 		t.Fatalf("exit %d, posts %v", r.code, fake.sent("POST", "/v1/secrets"))
@@ -1144,9 +1133,8 @@ func TestSecretWriteNotFound(t *testing.T) {
 }
 
 func TestSecretValueSizeLimit(t *testing.T) {
-	defer func() { writeStdin, writeStdinTTY = os.Stdin, func() bool { return isTerminal(os.Stdin) } }()
-	writeStdinTTY = func() bool { return false }
-	writeStdin = strings.NewReader(strings.Repeat("a", maxSecretValue) + "\n")
+	swap(t, &writeStdinTTY, func() bool { return false })
+	swap(t, &writeStdin, io.Reader(strings.NewReader(strings.Repeat("a", maxSecretValue)+"\n")))
 	if v, err := readSecretValue("", true); err != nil || len(v) != maxSecretValue {
 		t.Errorf("16 KiB: %d %v", len(v), err)
 	}
