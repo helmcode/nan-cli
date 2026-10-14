@@ -33,6 +33,7 @@ const testValue = "ghp_TESTVALUEdoNotLeak0123456789abcdef"
 
 type writeReq struct {
 	Method, Path, Cookie, Authz, IdemKey, Body string
+	Query                                      string
 }
 
 type fakeWrite struct {
@@ -51,6 +52,11 @@ type fakeWrite struct {
 	dropFirstCreate bool
 	dropped         bool
 	automationPatch map[string]any
+	// Notification channels (notifications_test.go): notifOff answers
+	// features.notifications=false and 404 on every channel route;
+	// channels nil loads cloud-api's golden list.
+	notifOff bool
+	channels []map[string]any
 }
 
 func newFakeWrite() *fakeWrite {
@@ -92,7 +98,7 @@ func (f *fakeWrite) handler(t *testing.T) http.Handler {
 		body, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		f.reqs = append(f.reqs, writeReq{r.Method, r.URL.Path, r.Header.Get("Cookie"), r.Header.Get("Authorization"), r.Header.Get("Idempotency-Key"), string(body)})
+		f.reqs = append(f.reqs, writeReq{r.Method, r.URL.Path, r.Header.Get("Cookie"), r.Header.Get("Authorization"), r.Header.Get("Idempotency-Key"), string(body), r.URL.RawQuery})
 		w.Header().Set("Content-Type", "application/json")
 		if f.dropFirstCreate {
 			// A fresh connection per request: net/http only retries a
@@ -102,6 +108,10 @@ func (f *fakeWrite) handler(t *testing.T) http.Handler {
 		}
 		route := r.Method + " " + r.URL.Path
 		if fe, ok := f.fail[route]; ok {
+			if fe.status == 204 {
+				w.WriteHeader(204)
+				return
+			}
 			w.WriteHeader(fe.status)
 			_, _ = io.WriteString(w, fe.body)
 			return
@@ -111,9 +121,13 @@ func (f *fakeWrite) handler(t *testing.T) http.Handler {
 			_ = json.NewEncoder(w).Encode(v)
 		}
 		const triggerID = "b0000000-0000-4000-8000-000000000002"
+		if strings.HasPrefix(r.URL.Path, "/v1/notification-channels") {
+			f.serveNotifications(t, w, r, body)
+			return
+		}
 		switch {
 		case route == "GET /api/auth/me":
-			writeJSON(200, map[string]any{"features": map[string]bool{"write_api": f.writeAPI, "secrets": true, "automations": true}})
+			writeJSON(200, map[string]any{"features": map[string]bool{"write_api": f.writeAPI, "secrets": true, "automations": true, "notifications": !f.notifOff}})
 		case route == "GET /api/account/secrets", route == "GET /v1/secrets":
 			if route == "GET /v1/secrets" && !f.writeAPI {
 				writeJSON(404, map[string]any{"error": map[string]any{"message": "Not found", "type": "invalid_request_error", "code": "not_found"}})
@@ -276,6 +290,12 @@ const triggerUUID = "b0000000-0000-4000-8000-000000000002"
 // unchanged, so one execute does not leak into the next.
 func resetCommandFlags(c *cobra.Command) {
 	reset := func(f *pflag.Flag) {
+		if sv, ok := f.Value.(pflag.SliceValue); ok {
+			// Set("[]") would append a literal "[]" to a slice flag.
+			_ = sv.Replace(nil)
+			f.Changed = false
+			return
+		}
 		_ = f.Value.Set(f.DefValue)
 		f.Changed = false
 	}

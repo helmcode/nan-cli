@@ -51,6 +51,12 @@ var hintFragments = []string{
 	"already exists",
 	"showing the",
 	"the next runs",
+	notifSecretNote,
+	"Store it now",
+	"previous secret keeps working",
+	"send a test",
+	"nan notifications",
+	"turned off",
 }
 
 // jsonFixtures writes the files the write commands read.
@@ -74,6 +80,10 @@ func jsonFixtures(t *testing.T) (automation, trigger, value string) {
 
 func jsonCases(t *testing.T) map[string][]jsonCase {
 	automation, trigger, value := jsonFixtures(t)
+	hook := filepath.Join(t.TempDir(), "hook-url")
+	if err := os.WriteFile(hook, []byte(testHookURL+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	return map[string][]jsonCase{
 		"nan approvals ls":   {{args: []string{"approvals", "ls", "--json"}}},
 		"nan approvals show": {{args: []string{"approvals", "show", testRunID, "--json"}}},
@@ -102,6 +112,25 @@ func jsonCases(t *testing.T) map[string][]jsonCase {
 			{args: []string{"automations", "triggers", "rotate", testAutoID, triggerUUID, "--json"}},
 			{args: []string{"automations", "triggers", "rotate", testAutoID, triggerUUID, "--url", "--secret", "--no-grace", "--json"}},
 		},
+		"nan notifications add": {
+			{args: []string{"notifications", "add", "deploys", "--kind", "slack", "--url-file", hook, "--json"}},
+			// The one-time signing secret is in the JSON; the note about it
+			// goes to stderr only.
+			{args: []string{"notifications", "add", "ci", "--kind", "https", "--url-stdin", "--event", "run.failed", "--json"}, stdin: testHookHTTPS},
+		},
+		"nan notifications deliveries": {{args: []string{"notifications", "deliveries", "ci receiver", "--limit", "3", "--json"}}},
+		"nan notifications edit": {
+			{args: []string{"notifications", "edit", "team alerts", "--disable", "--json"}},
+			{args: []string{"notifications", "edit", "ci receiver", "--url-file", hook, "--json"}},
+		},
+		"nan notifications ls":     {{args: []string{"notifications", "ls", "--json"}}},
+		"nan notifications rotate": {{args: []string{"notifications", "rotate", "ci receiver", "--json"}}},
+		"nan notifications show":   {{args: []string{"notifications", "show", "ci receiver", "--json"}}},
+		"nan notifications subscriptions": {
+			{args: []string{"notifications", "subscriptions", "ci receiver", "--json"}},
+			{args: []string{"notifications", "subscriptions", "team alerts", "--add", "run.finished", "--json"}},
+		},
+		"nan notifications test": {{args: []string{"notifications", "test", "team alerts", "--json"}}},
 		"nan run": {
 			{args: []string{"run", "review", "--json"}, lines: true},
 			{args: []string{"run", "review", "--detach", "--json"}, code: exitDetached},
@@ -182,6 +211,9 @@ func TestJSONStdoutIsOnlyJSON(t *testing.T) {
 						t.Errorf("stdout carries the hint %q:\n%s", h, stdout)
 					}
 				}
+				if strings.Contains(stdout+stderr+msg, "HOOKSECRET") {
+					t.Error("the webhook URL was printed")
+				}
 				if strings.Contains(stdout+stderr+msg, testValue) {
 					t.Error("the secret value was printed")
 				}
@@ -259,6 +291,7 @@ func runJSONCase(t *testing.T, c jsonCase) (code int, msg, stdout, stderr string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
 		toWrite := p == "/api/auth/me" || p == "/api/account/secrets" || strings.HasPrefix(p, "/v1/secrets") ||
+			strings.HasPrefix(p, "/v1/notification-channels") ||
 			strings.HasSuffix(p, "/triggers") || strings.Contains(p, "/triggers/") ||
 			(strings.HasPrefix(p, "/v1/automations") && r.Method != http.MethodGet && !strings.HasSuffix(p, "/runs"))
 		if toWrite {

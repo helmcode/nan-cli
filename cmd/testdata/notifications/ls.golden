@@ -1,0 +1,3 @@
+NAME         KIND   DESTINATION             STATUS        EVENTS                     LAST DELIVERY               CHANGED FROM
+team alerts  slack  hooks.slack.com/…/abcd  on            4 events, all automations  2026-10-14 10:00 delivered  Browser
+ci receiver  https  hooks.example.com       off: failing  1 event, 1 automation      2026-10-14 11:30 failed     CLI
