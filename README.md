@@ -186,7 +186,8 @@ nan automations rm <id|name> [--yes]
 nan automations triggers ls <id|name> [--json]
 nan automations triggers add <id|name> -f trigger.yaml [--json]   # webhook URL + secret shown ONCE
 nan automations triggers edit <id|name> <trigger-id> -f changes.yaml
-nan automations triggers rotate <id|name> <trigger-id> [--url] [--secret] [--no-grace] [--json]
+nan automations triggers rotate <id|name> <trigger-id> [--url] [--secret] [--no-grace]
+                               [--signing-secret-file PATH | --signing-secret-stdin] [--json]
 nan automations triggers rm <id|name> <trigger-id> [--yes]
 nan automations run <id|name> [--input @payload.json | --input - | --input JSON] [--detach] [--json]
 nan automations deliveries <id|name> [--limit 50] [--json]
@@ -203,6 +204,10 @@ A secret's value is never an argument (it would stay in your shell history):
 it comes from `--value-file` or a pipe into `--value-stdin`, and is never
 shown again. A webhook's URL and signing secret are printed once, to stdout,
 when the trigger is added or rotated: store them in the sender right away.
+A Stripe webhook is the exception: Stripe issues its signing secret, so it
+goes in the `-f` file when you add the trigger (pipe the file with `-f -`),
+and on rotate you roll it in the Stripe dashboard and pass the new `whsec_`
+with `--signing-secret-file` or `--signing-secret-stdin`.
 
 Writes need your session from `nan auth login`, or a platform token with the
 scope of what it does: `secrets:read` to list secrets, `secrets:write` to

@@ -18,14 +18,16 @@ import (
 // every field, exactly as for the portal.
 
 var (
-	autoWriteFile  string
-	autoWriteJSON  bool
-	autoRmYes      bool
-	trigLsJSON     bool
-	trigRmYes      bool
-	trigRotateURL  bool
-	trigRotateSec  bool
-	trigRotateHard bool
+	autoWriteFile        string
+	autoWriteJSON        bool
+	autoRmYes            bool
+	trigLsJSON           bool
+	trigRmYes            bool
+	trigRotateURL        bool
+	trigRotateSec        bool
+	trigRotateHard       bool
+	trigRotateWhsecFile  string
+	trigRotateWhsecStdin bool
 )
 
 const automationFileHelp = `The file is YAML or JSON (- reads it from stdin) with the fields of the
@@ -139,6 +141,8 @@ Docs: ` + writeDocs,
 	},
 }
 
+var signingSecretFlags = secretInputFlags{"--signing-secret-file", "--signing-secret-stdin", "pbpaste | nan automations triggers rotate NAME ID --signing-secret-stdin"}
+
 const oneTimeNote = "Store these now: they are never shown again. Lost them? Issue new ones with: nan automations triggers rotate"
 
 var automationsTriggersCmd = &cobra.Command{
@@ -229,7 +233,7 @@ Docs: https://nan.builders/docs/webhooks`,
 }
 
 var triggersRotateCmd = &cobra.Command{
-	Use:   "rotate <automation id|name> <trigger id> [--url] [--secret] [--no-grace]",
+	Use:   "rotate <automation id|name> <trigger id> [--url] [--secret] [--no-grace] [--signing-secret-file PATH | --signing-secret-stdin]",
 	Short: "Issue a new webhook URL and/or signing secret, shown once",
 	Long: `Issue a new webhook URL, a new signing secret, or both (the default). The new
 values are printed once, to stdout. ` + oneTimeNote + `.
@@ -238,16 +242,32 @@ With --secret, the previous signing secret keeps working for 24 hours so
 the sender can be updated; --no-grace ends it at once (for a leaked secret).
 A new URL replaces the old one at once.
 
+A Stripe webhook's signing secret is issued by Stripe, not by NaN: roll it
+in the Stripe dashboard, then hand the new whsec_ over with
+--signing-secret-file PATH or --signing-secret-stdin (a pipe, never typed
+or passed as an argument). It replaces the stored one and is not printed.
+
 Docs: https://nan.builders/docs/webhooks`,
 	Args:        automationAndTrigger,
 	Annotations: sysexits,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		in := api.RotateRequest{Grace: !trigRotateHard}
-		if trigRotateURL || !trigRotateSec {
+		rotateSecret := trigRotateSec || trigRotateWhsecFile != "" || trigRotateWhsecStdin
+		if trigRotateURL || !rotateSecret {
 			in.Rotate = append(in.Rotate, "url")
 		}
-		if trigRotateSec || !trigRotateURL {
+		if rotateSecret || !trigRotateURL {
 			in.Rotate = append(in.Rotate, "secret")
+		}
+		if trigRotateWhsecFile != "" || trigRotateWhsecStdin {
+			if trigRotateWhsecFile != "" && trigRotateWhsecStdin {
+				return usageErrorf("give --signing-secret-file or --signing-secret-stdin, not both")
+			}
+			whsec, err := readSecretInput(signingSecretFlags, trigRotateWhsecFile, trigRotateWhsecStdin)
+			if err != nil {
+				return err
+			}
+			in.SigningSecret = &whsec
 		}
 		return withWriteEnv(func(env *runsEnv) error { return doTriggersRotate(cmd.Context(), env, args[0], args[1], in) })
 	},
@@ -282,6 +302,8 @@ func init() {
 	triggersRotateCmd.Flags().BoolVar(&trigRotateURL, "url", false, "Rotate the webhook URL")
 	triggersRotateCmd.Flags().BoolVar(&trigRotateSec, "secret", false, "Rotate the signing secret")
 	triggersRotateCmd.Flags().BoolVar(&trigRotateHard, "no-grace", false, "End the previous signing secret at once (a leaked secret)")
+	triggersRotateCmd.Flags().StringVar(&trigRotateWhsecFile, "signing-secret-file", "", "Stripe only: read the new whsec_ from this file")
+	triggersRotateCmd.Flags().BoolVar(&trigRotateWhsecStdin, "signing-secret-stdin", false, "Stripe only: read the new whsec_ from a pipe")
 }
 
 func automationAndTrigger(cmd *cobra.Command, args []string) error {
@@ -461,6 +483,16 @@ func doTriggersRotate(ctx context.Context, env *runsEnv, ref, triggerID string, 
 	}
 	out, err := env.client.RotateTrigger(ctx, id, triggerID, in)
 	if err != nil {
+		var apiErr *api.APIError
+		if errors.As(err, &apiErr) && apiErr.Status == 400 && apiErr.Param == "signing_secret" {
+			if in.SigningSecret == nil {
+				return usageErrorf("this is a Stripe webhook: its signing secret comes from the Stripe dashboard. " +
+					"Roll it there and pass the new whsec_ with --signing-secret-file PATH or --signing-secret-stdin, " +
+					"or rotate only the URL with --url")
+			}
+			return usageErrorf("the server refused the signing secret: %s. NaN generates the signing secret of GitHub and NaN webhooks; "+
+				"--signing-secret-file and --signing-secret-stdin are for Stripe's whsec_", runs.Truncate(runs.SanitizeLine(apiErr.Message), 200))
+		}
 		return triggerWriteExit(err, ref, triggerID, env.cred)
 	}
 	if autoWriteJSON {
@@ -473,7 +505,10 @@ func doTriggersRotate(ctx context.Context, env *runsEnv, ref, triggerID string, 
 		return nil
 	}
 	printTriggerSecrets(env, out)
-	if out.SigningSecret != nil {
+	if in.SigningSecret != nil {
+		fmt.Fprintln(env.stderr, "the signing secret you gave (from Stripe) is now the one checked")
+	}
+	if out.SigningSecret != nil || in.SigningSecret != nil {
 		if in.Grace {
 			fmt.Fprintln(env.stderr, "the previous signing secret keeps working for 24 hours")
 		} else {

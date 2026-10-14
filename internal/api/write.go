@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 )
@@ -161,6 +162,24 @@ func (c *RunsClient) UpdateTrigger(ctx context.Context, automationID, triggerID 
 type RotateRequest struct {
 	Rotate []string `json:"rotate"`
 	Grace  bool     `json:"grace"`
+	// SigningSecret is the new whsec_ of a Stripe trigger (Stripe issues
+	// it; NaN generates the others). Never printed: see String.
+	SigningSecret *string `json:"signing_secret,omitempty"`
+}
+
+// String keeps the signing secret out of any %v or %+v.
+func (r RotateRequest) String() string {
+	return fmt.Sprintf("RotateRequest{Rotate:%v Grace:%v SigningSecret:%s}", r.Rotate, r.Grace, redactedIf(r.SigningSecret != nil))
+}
+
+// GoString keeps the signing secret out of %#v.
+func (r RotateRequest) GoString() string { return r.String() }
+
+func redactedIf(set bool) string {
+	if set {
+		return "[redacted]"
+	}
+	return "<nil>"
 }
 
 // RotateTrigger is POST /v1/automations/{id}/triggers/{tid}/rotate.

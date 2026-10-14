@@ -337,14 +337,29 @@ func readSecretValue(path string, fromStdin bool) (string, error) {
 	case path == "" && !fromStdin:
 		return "", usageErrorf("the value comes from --value-file PATH or --value-stdin (a pipe), never from the command line")
 	}
+	return readSecretInput(secretValueFlags, path, fromStdin)
+}
+
+// secretInputFlags names the pair of flags a secret is read through, for
+// the messages of readSecretInput.
+type secretInputFlags struct {
+	file, stdin, example string
+}
+
+var secretValueFlags = secretInputFlags{"--value-file", "--value-stdin", "op read ... | nan secrets set NAME --value-stdin"}
+
+// readSecretInput reads a secret from the file at path or from a piped
+// stdin (never a terminal) and drops one trailing newline. Errors never
+// include what was read.
+func readSecretInput(flags secretInputFlags, path string, fromStdin bool) (string, error) {
 	var (
 		raw []byte
 		err error
 	)
 	if fromStdin {
 		if writeStdinTTY() {
-			return "", usageErrorf("--value-stdin reads a piped value, and stdin is a terminal, where typing it would show it on screen: " +
-				"pipe it (op read ... | nan secrets set NAME --value-stdin) or use --value-file PATH")
+			return "", usageErrorf("%s reads a piped value, and stdin is a terminal, where typing it would show it on screen: "+
+				"pipe it (%s) or use %s PATH", flags.stdin, flags.example, flags.file)
 		}
 		raw, err = io.ReadAll(io.LimitReader(writeStdin, maxSecretValue+3))
 		if err != nil {
@@ -354,12 +369,12 @@ func readSecretValue(path string, fromStdin bool) (string, error) {
 		shown := runs.SanitizeLine(path)
 		f, openErr := os.Open(path)
 		if openErr != nil {
-			return "", usageErrorf("could not read --value-file %s: %v", shown, unwrapPath(openErr))
+			return "", usageErrorf("could not read %s %s: %v", flags.file, shown, unwrapPath(openErr))
 		}
 		defer f.Close()
 		if info, statErr := f.Stat(); statErr == nil {
 			if info.IsDir() {
-				return "", usageErrorf("--value-file %s is a directory", shown)
+				return "", usageErrorf("%s %s is a directory", flags.file, shown)
 			}
 			if runtime.GOOS != "windows" && info.Mode().IsRegular() && info.Mode().Perm()&0o077 != 0 {
 				fmt.Fprintf(writeStderr, "note: %s can be read by other users of this machine (chmod 600 %s)\n", shown, shown)
@@ -367,7 +382,7 @@ func readSecretValue(path string, fromStdin bool) (string, error) {
 		}
 		raw, err = io.ReadAll(io.LimitReader(f, maxSecretValue+3))
 		if err != nil {
-			return "", usageErrorf("could not read --value-file %s: %v", shown, unwrapPath(err))
+			return "", usageErrorf("could not read %s %s: %v", flags.file, shown, unwrapPath(err))
 		}
 	}
 	value := string(raw)

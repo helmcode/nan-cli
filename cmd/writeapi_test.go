@@ -214,7 +214,8 @@ func (f *fakeWrite) handler(t *testing.T) http.Handler {
 		case route == "POST /v1/automations/"+testAutoID+"/triggers/"+triggerID+"/rotate":
 			w.Header().Set("Cache-Control", "no-store")
 			var in struct {
-				Rotate []string `json:"rotate"`
+				Rotate        []string `json:"rotate"`
+				SigningSecret *string  `json:"signing_secret"`
 			}
 			_ = json.Unmarshal(body, &in)
 			out := map[string]any{}
@@ -223,6 +224,9 @@ func (f *fakeWrite) handler(t *testing.T) http.Handler {
 				case "url":
 					out["webhook_url"] = "https://api.nan.builders/hooks/nan_whk_ROTATEDROTATEDROTATED"
 				case "secret":
+					if in.SigningSecret != nil {
+						continue // Stripe's whsec_ is stored, never echoed
+					}
 					var rot map[string]any
 					_ = json.Unmarshal(phase2File(t, "trigger_rotate.json"), &rot)
 					out["signing_secret"] = rot["signing_secret"]
@@ -1215,5 +1219,92 @@ func TestWriteTokenFileAndBadEnv(t *testing.T) {
 	r = runWrite(t, fake, writeSetup{env: "not a token"}, "secrets", "ls")
 	if r.code != exitAuth || len(fake.requests()) != 0 || strings.Contains(r.msg, "not a token") {
 		t.Errorf("bad NAN_TOKEN: exit %d %s", r.code, r.msg)
+	}
+}
+
+const testWhsec = "whsec_STRIPEROLLEDSECRET"
+
+// A Stripe trigger's new signing secret comes from Stripe: read from a file
+// or a pipe, sent once, never printed or stored by the CLI.
+func TestTriggersRotateStripeSigningSecret(t *testing.T) {
+	path := "/v1/automations/" + testAutoID + "/triggers/" + triggerUUID + "/rotate"
+	file := writeValueFile(t, testWhsec)
+	for name, tc := range map[string]struct {
+		setup writeSetup
+		flags []string
+		body  string
+	}{
+		"file":         {writeSetup{session: cliSession}, []string{"--signing-secret-file", file}, `{"rotate":["secret"],"grace":true,"signing_secret":"` + testWhsec + `"}`},
+		"stdin":        {writeSetup{session: cliSession, stdin: testWhsec + "\n"}, []string{"--signing-secret-stdin", "--no-grace"}, `{"rotate":["secret"],"grace":false,"signing_secret":"` + testWhsec + `"}`},
+		"url and file": {writeSetup{session: cliSession}, []string{"--url", "--signing-secret-file", file}, `{"rotate":["url","secret"],"grace":true,"signing_secret":"` + testWhsec + `"}`},
+	} {
+		fake := newFakeWrite()
+		r := runWrite(t, fake, tc.setup, append([]string{"automations", "triggers", "rotate", "PR review api", triggerUUID}, tc.flags...)...)
+		if r.code != 0 {
+			t.Errorf("%s: exit %d %s", name, r.code, r.msg)
+			continue
+		}
+		if got := fake.sent("POST", path); len(got) != 1 || got[0].Body != tc.body {
+			t.Errorf("%s: %v", name, fake.requests())
+		}
+		if !strings.Contains(r.stderr, "from Stripe") {
+			t.Errorf("%s: stderr %q", name, r.stderr)
+		}
+		for what, text := range map[string]string{"stdout": r.stdout, "stderr": r.stderr, "message": r.msg} {
+			if strings.Contains(text, testWhsec) {
+				t.Errorf("%s: %s echoes the signing secret", name, what)
+			}
+		}
+		assertNothingWritten(t, r.home, testWhsec)
+	}
+}
+
+func TestTriggersRotateStripeRefusals(t *testing.T) {
+	path := "/v1/automations/" + testAutoID + "/triggers/" + triggerUUID + "/rotate"
+	file := writeValueFile(t, testWhsec)
+	stripe400 := `{"error":{"message":"paste the endpoint's signing secret from the Stripe dashboard (whsec_…)","type":"invalid_request_error","param":"signing_secret","code":"invalid_request"}}`
+	generated400 := `{"error":{"message":"NaN generates the signing secret for this scheme","type":"invalid_request_error","param":"signing_secret","code":"invalid_request"}}`
+	for name, tc := range map[string]struct {
+		setup writeSetup
+		flags []string
+		fail  string
+		sends int
+		wants []string
+	}{
+		"stripe without the secret": {writeSetup{session: cliSession}, nil, stripe400, 1, []string{"Stripe dashboard", "--signing-secret-file", "--url"}},
+		"secret on a github hook":   {writeSetup{session: cliSession}, []string{"--signing-secret-file", file}, generated400, 1, []string{"NaN generates", "Stripe"}},
+		"both sources":              {writeSetup{session: cliSession}, []string{"--signing-secret-file", file, "--signing-secret-stdin"}, "", 0, []string{"not both"}},
+		"terminal":                  {writeSetup{session: cliSession, tty: true}, []string{"--signing-secret-stdin"}, "", 0, []string{"--signing-secret-stdin", "terminal", "--signing-secret-file"}},
+		"empty":                     {writeSetup{session: cliSession, stdin: "\n"}, []string{"--signing-secret-stdin"}, "", 0, []string{"empty"}},
+	} {
+		fake := newFakeWrite()
+		if tc.fail != "" {
+			fake.failOn("POST "+path, 400, tc.fail)
+		}
+		r := runWrite(t, fake, tc.setup, append([]string{"automations", "triggers", "rotate", "PR review api", triggerUUID}, tc.flags...)...)
+		if r.code != exitUsage {
+			t.Errorf("%s: exit %d %s", name, r.code, r.msg)
+		}
+		for _, w := range tc.wants {
+			if !strings.Contains(r.msg, w) {
+				t.Errorf("%s: message lacks %q: %s", name, w, r.msg)
+			}
+		}
+		if got := fake.sent("POST", path); len(got) != tc.sends {
+			t.Errorf("%s: sent %d rotate requests", name, len(got))
+		}
+		if strings.Contains(r.stdout+r.stderr+r.msg, testWhsec) {
+			t.Errorf("%s: output echoes the signing secret", name)
+		}
+	}
+}
+
+func TestRotateRequestRedactsSigningSecret(t *testing.T) {
+	s := testWhsec
+	in := api.RotateRequest{Rotate: []string{"secret"}, Grace: true, SigningSecret: &s}
+	for _, f := range []string{"%v", "%+v", "%#v", "%s"} {
+		if out := fmt.Sprintf(f, in); strings.Contains(out, testWhsec) {
+			t.Errorf("%s prints the signing secret: %s", f, out)
+		}
 	}
 }
