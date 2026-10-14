@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/nxssie/nan-cli/internal/api"
 )
 
 // Notification channels (helmcode/nan-devops
@@ -24,6 +22,10 @@ const (
 	testHookURL   = "https://hooks.slack.com/services/T0000/B0000/HOOKSECRETdoNotLeak42"
 	testHookHTTPS = "https://hooks.example.com/nan/HOOKSECRETdoNotLeak42"
 )
+
+// defaultEvents are what the platform gives a channel created without
+// events (spec §4.2: run.finished is opt-in).
+var defaultEvents = []string{"approval.pending", "run.failed", "automation.disabled", "trigger.failing"}
 
 func phase3File(t testing.TB, name string) []byte {
 	b, err := os.ReadFile(filepath.Join("..", "internal", "api", "testdata", "phase3", name))
@@ -71,7 +73,7 @@ func (f *fakeWrite) serveNotifications(t *testing.T, w http.ResponseWriter, r *h
 				AutomationID *string   `json:"automation_id"`
 			}
 			_ = json.Unmarshal(body, &in)
-			events := api.DefaultNotificationEvents
+			events := defaultEvents
 			if in.Events != nil {
 				events = *in.Events
 			}
@@ -247,7 +249,7 @@ func TestNotificationsShow(t *testing.T) {
 	mustExit(t, r, 0)
 	checkGolden(t, "notifications/show_failing.golden", r.stdout)
 
-	r = runWrite(t, fake, writeSetup{session: cliSession}, "notifications", "show", chanSlackID)
+	r = runWrite(t, fake, writeSetup{session: cliSession}, "notifications", "show", strings.ToUpper(chanSlackID))
 	mustExit(t, r, 0)
 	checkGolden(t, "notifications/show_slack.golden", r.stdout)
 
@@ -626,6 +628,8 @@ func TestNotificationsErrors(t *testing.T) {
 		{503, `{"error":{"message":"notifications are temporarily unavailable; try again","type":"server_error","code":"notifications_unavailable"}}`, exitUnavailable, []string{"temporarily unavailable"}},
 		{403, `{"error":{"message":"this token lacks the notifications:write scope","type":"permission_error","code":"token_scope_denied"}}`, exitAuth, []string{"notifications:write", "Settings > Tokens"}},
 		{403, `{"error":{"message":"x","type":"permission_error","code":"credential_not_allowed"}}`, exitAuth, []string{"nan auth login"}},
+		{400, v1Err(400, "invalid_request", "name", "the name must be 1 to 64 characters without control characters"), exitUsage,
+			[]string{"name: the name must be 1 to 64 characters"}},
 	} {
 		fake := newFakeWrite()
 		fake.failOn("POST /v1/notification-channels", c.status, c.body)

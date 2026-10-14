@@ -694,7 +694,7 @@ func listChannels(ctx context.Context, env *runsEnv) (*api.NotificationChannelLi
 
 func findChannel(list *api.NotificationChannelList, ref string) *api.NotificationChannel {
 	for i := range list.Data {
-		if list.Data[i].ID == ref {
+		if strings.EqualFold(list.Data[i].ID, ref) {
 			return &list.Data[i]
 		}
 	}

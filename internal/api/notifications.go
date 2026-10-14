@@ -31,10 +31,6 @@ const (
 // order the platform documents them.
 var NotificationEvents = []string{"approval.pending", "run.failed", "run.finished", "automation.disabled", "trigger.failing"}
 
-// DefaultNotificationEvents are what a new channel gets when no events are
-// given (run.finished is opt-in).
-var DefaultNotificationEvents = []string{"approval.pending", "run.failed", "automation.disabled", "trigger.failing"}
-
 // NotificationSubscription is one event of a channel, for every automation
 // of the member (AutomationID nil) or for one.
 type NotificationSubscription struct {
