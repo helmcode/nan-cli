@@ -211,7 +211,7 @@ func init() {
 	f.StringVar(&secretSetValueFile, "value-file", "", "Read the value from `PATH`")
 	f.BoolVar(&secretSetValueStdin, "value-stdin", false, "Read the value from stdin (a pipe, never a terminal)")
 	f.StringVar(&secretSetKind, "kind", "", "generic (default) or provider_key, for a new secret")
-	f.StringVar(&secretSetProvider, "provider", "", "anthropic, openai, google or openai_compatible (implies --kind provider_key)")
+	f.StringVar(&secretSetProvider, "provider", "", "anthropic, openai, gemini or openai_compatible (implies --kind provider_key)")
 	f.StringVar(&secretSetBaseURL, "base-url", "", "The endpoint of an openai_compatible provider key")
 	f.StringVar(&secretSetDescription, "description", "", "What the secret is for (never the value)")
 	f.BoolVar(&secretSetJSON, "json", false, "Print the secret's metadata as JSON")
@@ -304,7 +304,14 @@ func buildSecretSet(cmd *cobra.Command, name string) (*secretSet, error) {
 		return nil, usageErrorf("--provider is for --kind provider_key")
 	}
 	if in.kind == api.SecretKindProviderKey && in.provider == "" {
-		return nil, usageErrorf("--kind provider_key needs --provider: anthropic, openai, google or openai_compatible")
+		return nil, usageErrorf("--kind provider_key needs --provider: anthropic, openai, gemini or openai_compatible")
+	}
+	if in.provider != "" && !secretProviders[in.provider] {
+		hint := ""
+		if in.provider == "google" {
+			hint = " (Google's API is gemini)"
+		}
+		return nil, usageErrorf("--provider is anthropic, openai, gemini or openai_compatible%s", hint)
 	}
 	value, err := readSecretValue(secretSetValueFile, secretSetValueStdin)
 	if err != nil {
@@ -312,6 +319,13 @@ func buildSecretSet(cmd *cobra.Command, name string) (*secretSet, error) {
 	}
 	in.value = value
 	return in, nil
+}
+
+// secretProviders are the provider names cloud-api accepts on a provider_key
+// secret (internal/secrets/service.go). Anything else would be a 400 after the
+// value was already read and sent.
+var secretProviders = map[string]bool{
+	"anthropic": true, "openai": true, "gemini": true, "openai_compatible": true,
 }
 
 // readSecretValue reads the value from --value-file or a piped stdin, and

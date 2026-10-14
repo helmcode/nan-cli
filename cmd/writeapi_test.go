@@ -436,6 +436,8 @@ func TestSecretsSetRefusals(t *testing.T) {
 		"empty value":           {writeSetup{session: cliSession, stdin: "\n"}, []string{"secrets", "set", "X_TOKEN", "--value-stdin"}, []string{"empty"}},
 		"unknown kind":          {writeSetup{session: cliSession}, []string{"secrets", "set", "X_TOKEN", "--value-file", file, "--kind", "other"}, []string{"generic or provider_key"}},
 		"provider_key no prov":  {writeSetup{session: cliSession}, []string{"secrets", "set", "X_TOKEN", "--value-file", file, "--kind", "provider_key"}, []string{"--provider"}},
+		"provider google":       {writeSetup{session: cliSession}, []string{"secrets", "set", "X_TOKEN", "--value-file", file, "--provider", "google"}, []string{"gemini"}},
+		"provider unknown":      {writeSetup{session: cliSession}, []string{"secrets", "set", "X_TOKEN", "--value-file", file, "--provider", "mistral"}, []string{"anthropic, openai, gemini or openai_compatible"}},
 		"provider with generic": {writeSetup{session: cliSession}, []string{"secrets", "set", "X_TOKEN", "--value-file", file, "--kind", "generic", "--provider", "openai"}, []string{"provider_key"}},
 		"missing file":          {writeSetup{session: cliSession}, []string{"secrets", "set", "X_TOKEN", "--value-file", "/nonexistent/v"}, []string{"could not read"}},
 	} {
