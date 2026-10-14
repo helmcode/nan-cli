@@ -233,6 +233,37 @@ without `workspaces:read` (or `automations:read`, for automation names in
 `nan approvals ls` and `nan runs show`) gets the ids instead, never an error.
 `--json` prints the API's objects unchanged, with ids only.
 
+### Notifications
+
+Get told in Slack, Microsoft Teams, Discord or your own HTTPS endpoint when an
+automation run waits for approval, fails or finishes, when an automation is
+disabled, or when a webhook trigger keeps failing:
+
+```bash
+nan notifications ls [--json]
+nan notifications show <NAME|id> [--json]
+nan notifications add NAME --kind slack|teams|discord|https (--url-file PATH | --url-stdin)
+                      [--event EVENT]... [--no-events] [--automation <name|id>] [--json]
+nan notifications edit <NAME|id> [--name NEW] [--enable | --disable] [--url-file PATH | --url-stdin] [--json]
+nan notifications rm <NAME|id> [--yes]
+nan notifications test <NAME|id> [--json]                    # exit 1 when not delivered
+nan notifications rotate <NAME|id> [--json]                  # https only: new signing secret, shown ONCE
+nan notifications deliveries <NAME|id> [--limit 20] [--json]
+nan notifications subscriptions <NAME|id> [--set|--add|--remove EVENT[=AUTOMATION]]... [--clear] [--json]
+```
+
+A webhook URL is a credential (whoever has it can post to your channel): it
+comes from `--url-file` or a pipe into `--url-stdin`, never from the command
+line, and NaN never shows it again (only the host and its last characters).
+An `https` channel's signing secret is printed once, to stdout (inside the
+JSON with `--json`); requests are signed like NaN's inbound webhooks. A
+channel turns itself off after 20 failed deliveries in a row: fix the
+receiver and turn it back on with `nan notifications edit NAME --enable`.
+A platform token needs `notifications:read` to read and
+`notifications:write` to change, added in the portal only. Without
+notifications on your account, these commands exit 64 and point at the
+portal. Docs: <https://nan.builders/docs/notifications>.
+
 ### Exit codes
 
 `nan run`, `nan runs logs -f` and `nan automations run` exit with the run's outcome, so a script can
