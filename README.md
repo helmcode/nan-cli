@@ -172,27 +172,55 @@ nan runs reject <id> [--reason R]                           # turn the proposal 
 
 ### Automations, approvals and secrets
 
-Automations are created and edited in the portal. From the CLI you can list,
-inspect and run them, read their webhook deliveries, see what waits for your
-approval, and list your secrets (names and metadata, never values):
+From the CLI you can create, change and run automations, manage their
+triggers, read their webhook deliveries, see what waits for your approval,
+and manage your secrets (values go in, only names and metadata come out):
 
 ```bash
 nan automations ls [--json]
 nan automations show <id|name> [--json]
+nan automations create -f automation.yaml                   # YAML or JSON, - for stdin
+nan automations edit <id|name> -f changes.yaml              # only the fields in the file change
+nan automations enable|disable <id|name>
+nan automations rm <id|name> [--yes]
+nan automations triggers ls <id|name> [--json]
+nan automations triggers add <id|name> -f trigger.yaml [--json]   # webhook URL + secret shown ONCE
+nan automations triggers edit <id|name> <trigger-id> -f changes.yaml
+nan automations triggers rotate <id|name> <trigger-id> [--url] [--secret] [--no-grace] [--json]
+nan automations triggers rm <id|name> <trigger-id> [--yes]
 nan automations run <id|name> [--input @payload.json | --input - | --input JSON] [--detach] [--json]
 nan automations deliveries <id|name> [--limit 50] [--json]
 nan approvals ls [--state pending|approved|rejected|expired|cancelled|auto|all] [--limit 20] [--json]
 nan approvals show <run-id> [--diff]                        # same as nan runs proposal
-nan secrets ls [--json]                                     # needs nan auth login
+nan secrets ls [--json]
+nan secrets show NAME [--json]
+nan secrets set NAME (--value-file PATH | --value-stdin) [--kind provider_key --provider P --base-url URL] [--description D]
+nan secrets edit NAME [--description D] [--base-url URL]
+nan secrets rm NAME [--yes]
 ```
 
-Approving a proposal, writing a secret and creating or editing an automation
-happen only in the portal at <https://cloud.nan.builders>, signed in through
-the browser. Each of them can hand a secret to an agent or let it act on your
-repository without asking, so none is possible with a credential an agent or
-a CI job could read: this machine's CLI session, a platform token or an API
-key. A platform token needs the `automations:read` scope to list and inspect
-automations and `automations:run` to start one.
+A secret's value is never an argument (it would stay in your shell history):
+it comes from `--value-file` or a pipe into `--value-stdin`, and is never
+shown again. A webhook's URL and signing secret are printed once, to stdout,
+when the trigger is added or rotated: store them in the sender right away.
+
+Writes need your session from `nan auth login`, or a platform token with the
+scope of what it does: `secrets:read` to list secrets, `secrets:write` to
+change them, `automations:write` to change automations (plus
+`automations:read` to find one by name). Those scopes are added to a token in
+the portal only, signed in through the browser. API keys (`sk-`) and
+workspace keys never read or write secrets and never change automations.
+Whoever holds a credential that can write automations can reach every secret
+you have (an automation receives the secrets you assign it), so sign in on
+your own machine, not inside a workspace, and give a workspace or CI job a
+token with only the scopes it needs. If your account does not have the write
+API yet, these commands exit 64 and point at the portal.
+
+Approving a proposal stays portal-only, at <https://cloud.nan.builders>,
+signed in through the browser: a credential an agent or a script can hold
+never approves what an agent proposed. A platform token needs the
+`automations:read` scope to list and inspect automations and
+`automations:run` to start one.
 
 The text views show workspace and automation names, looked up once per
 command; detail views print `name (id)` so the id stays copyable. A token

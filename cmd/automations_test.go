@@ -558,19 +558,12 @@ func TestRunsLsAcceptsAwaitingApproval(t *testing.T) {
 	}
 }
 
-// nan secrets ls goes with the session even when a token is set: the
-// platform refuses tokens and API keys there (§3.4).
-func TestSecretsUseTheSessionOnly(t *testing.T) {
-	fakeHome(t, `{"token":"","platformToken":"`+testPAT+`","apiKey":"`+testKey+`"}`)
-	t.Setenv(tokenEnvVar, testPAT)
-	_, err := newSessionEnv()
-	if exitCode(err) != exitAuth || !strings.Contains(err.Error(), "nan auth login") || strings.Contains(err.Error(), testPAT) {
-		t.Fatalf("exit %d: %v", exitCode(err), err)
-	}
-
+// nan secrets ls goes with the session even when a token is set, on the
+// portal's route, which any session may read whatever the write API.
+func TestSecretsLsPrefersTheSession(t *testing.T) {
 	fakeHome(t, `{"token":"sess-1","platformToken":"`+testPAT+`"}`)
 	t.Setenv(tokenEnvVar, testPAT)
-	env, err := newSessionEnv()
+	env, err := newWriteEnv()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -593,9 +586,6 @@ func TestSecretsUseTheSessionOnly(t *testing.T) {
 		}
 	}
 	assertNoControls(t, "secrets ls", out.String())
-	if !strings.Contains(errOut.String(), "Settings > Secrets") {
-		t.Errorf("no portal hint: %q", errOut.String())
-	}
 }
 
 func TestSecretsLsJSONHasNoValues(t *testing.T) {
@@ -642,20 +632,13 @@ func execute(t *testing.T, args ...string) (int, string) {
 	return code, msg
 }
 
-// Approving, writing secrets and writing automations are portal-only in
-// Phase 2 (§9.4, §11.2, owner decision 10): no command does them, and
-// reaching for one says where to go and why.
-func TestPortalOnlyWritesPointToThePortal(t *testing.T) {
+// Approving stays portal-only (write API decision 4): no command does it,
+// and reaching for one says where to go and why.
+func TestApprovingPointsToThePortal(t *testing.T) {
 	fakeHome(t, "")
 	for _, args := range [][]string{
 		{"runs", "approve", testRunID},
 		{"approvals", "approve", testRunID},
-		{"secrets", "set", "GITHUB_TOKEN"},
-		{"secrets", "rm", "GITHUB_TOKEN"},
-		{"automations", "create"},
-		{"automations", "edit", "PR review"},
-		{"automations", "rm", "PR review"},
-		{"automations", "triggers", "add"},
 	} {
 		code, msg := execute(t, args...)
 		if code != exitUsage || !strings.Contains(msg, "https://cloud.nan.builders") || !strings.Contains(msg, "browser") {
@@ -664,16 +647,12 @@ func TestPortalOnlyWritesPointToThePortal(t *testing.T) {
 	}
 }
 
-func TestNoCommandWrites(t *testing.T) {
+func TestNoCommandApproves(t *testing.T) {
 	var walk func(c *cobra.Command)
 	walk = func(c *cobra.Command) {
 		for _, sub := range c.Commands() {
-			path := sub.CommandPath()
-			switch sub.Name() {
-			case "approve", "set", "create", "edit", "rm", "delete", "triggers":
-				if !strings.HasPrefix(path, "nan auth") {
-					t.Errorf("%q exists", path)
-				}
+			if sub.Name() == "approve" || sub.HasAlias("approve") {
+				t.Errorf("%q exists", sub.CommandPath())
 			}
 			walk(sub)
 		}
@@ -716,13 +695,13 @@ func TestPhase2Help(t *testing.T) {
 	if !strings.Contains(runCmd.Long, "10  awaiting approval") || !strings.Contains(runsLogsCmd.Long, "10 awaiting approval") {
 		t.Error("exit code 10 is not documented")
 	}
-	for _, c := range append(automationsCmd.Commands(), approvalsCmd.Commands()...) {
+	cmds := append(automationsCmd.Commands(), approvalsCmd.Commands()...)
+	cmds = append(cmds, secretsCmd.Commands()...)
+	cmds = append(cmds, automationsTriggersCmd.Commands()...)
+	for _, c := range cmds {
 		if c.InheritedFlags().Lookup("token-file") == nil {
 			t.Errorf("%s has no --token-file", c.CommandPath())
 		}
-	}
-	if secretsLsCmd.Flags().Lookup("token-file") != nil || secretsLsCmd.InheritedFlags().Lookup("token-file") != nil {
-		t.Error("nan secrets ls takes --token-file, which the platform would refuse")
 	}
 }
 

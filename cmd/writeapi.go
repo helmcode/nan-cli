@@ -58,6 +58,8 @@ token with only the scopes the job needs.`
 var (
 	writeStdin    io.Reader = os.Stdin
 	writeStdinTTY           = func() bool { return isTerminal(os.Stdin) }
+	writeStdout   io.Writer = os.Stdout
+	writeStderr   io.Writer = os.Stderr
 )
 
 // newWriteEnv picks the credential of a secrets or write command: an
@@ -97,7 +99,7 @@ func writeEnvFor(cred credential) (*runsEnv, error) {
 		return nil, exitf(exitAuth, "%s is an API key (sk-): API keys never read or write secrets and never change automations. "+
 			"Sign in with nan auth login, or use a platform token (nan_pat_) with the scope you need, created at %s/settings", cred.describe(), runs.PortalURL)
 	}
-	return &runsEnv{client: cred.client(), cred: cred, stdout: os.Stdout, stderr: os.Stderr}, nil
+	return &runsEnv{client: cred.client(), cred: cred, stdout: writeStdout, stderr: writeStderr}, nil
 }
 
 // withWriteEnv is withRunsEnv for the secrets and write commands.

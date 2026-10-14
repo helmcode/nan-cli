@@ -206,7 +206,14 @@ func byokGoldenEnv(t *testing.T) (*runsEnv, *bytes.Buffer, *bytes.Buffer) {
 
 func checkTextGolden(t *testing.T, name, got string) {
 	t.Helper()
-	path := filepath.Join("testdata", "byok", name+".golden")
+	checkGolden(t, "byok/"+name+".golden", got)
+}
+
+// checkGolden compares got with cmd/testdata/<rel>; -update rewrites it.
+func checkGolden(t *testing.T, rel, got string) {
+	t.Helper()
+	name := rel
+	path := filepath.Join("testdata", filepath.FromSlash(rel))
 	if *updateGolden {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)

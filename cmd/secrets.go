@@ -74,7 +74,7 @@ where it would stay in your shell history:
 The portal does all of this too, Settings > Secrets at ` + runs.PortalURL + `,
 signed in through the browser.
 
-Docs: ` + writeDocs,
+Docs: ` + writeDocs + ` and https://nan.builders/docs/runs`,
 	Annotations: sysexits,
 	Args:        cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -345,7 +345,7 @@ func readSecretValue(path string, fromStdin bool) (string, error) {
 				return "", usageErrorf("--value-file %s is a directory", shown)
 			}
 			if runtime.GOOS != "windows" && info.Mode().IsRegular() && info.Mode().Perm()&0o077 != 0 {
-				fmt.Fprintf(os.Stderr, "note: %s can be read by other users of this machine (chmod 600 %s)\n", shown, shown)
+				fmt.Fprintf(writeStderr, "note: %s can be read by other users of this machine (chmod 600 %s)\n", shown, shown)
 			}
 		}
 		raw, err = io.ReadAll(io.LimitReader(f, maxSecretValue+3))
