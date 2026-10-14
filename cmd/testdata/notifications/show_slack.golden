@@ -1,0 +1,15 @@
+name               team alerts
+id                 c0000000-0000-4000-8000-000000000001
+kind               slack
+destination        hooks.slack.com/…/abcd
+status             on
+last delivery      2026-10-14 10:00 delivered
+last changed from  Browser
+created            2026-10-14 09:00
+updated            2026-10-14 09:00
+
+EVENT                AUTOMATION
+approval.pending     all automations
+run.failed           all automations
+automation.disabled  all automations
+trigger.failing      all automations

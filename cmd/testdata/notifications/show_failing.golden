@@ -1,0 +1,14 @@
+name               ci receiver
+id                 c0000000-0000-4000-8000-000000000002
+kind               https
+destination        hooks.example.com
+status             off: failing
+why                turned off after 20 failed deliveries in a row; fix the receiver (or replace the URL with --url-file) and turn it on with: nan notifications edit 'ci receiver' --enable
+last delivery      2026-10-14 11:30 failed
+signing            two secrets: the previous one works until 2026-10-15 09:00
+last changed from  CLI
+created            2026-10-13 09:00
+updated            2026-10-14 09:00
+
+EVENT         AUTOMATION
+run.finished  PR review api (a0000000-0000-4000-8000-000000000001)
