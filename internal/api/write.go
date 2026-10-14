@@ -19,6 +19,9 @@ type Features struct {
 	WriteAPI    bool `json:"write_api"`
 	Secrets     bool `json:"secrets"`
 	Automations bool `json:"automations"`
+	// Notifications is features.notifications: notification channels are
+	// available to the member.
+	Notifications bool `json:"notifications"`
 }
 
 // Features is GET /api/auth/me, read for its feature flags.
