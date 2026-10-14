@@ -34,6 +34,9 @@ const (
 	scopeNotificationsRead  = "notifications:read"
 	scopeNotificationsWrite = "notifications:write"
 
+	// maxHookURL is the platform's limit on a channel URL.
+	maxHookURL = 2048
+
 	// maxDeliveriesLimit is the platform's cap on ?limit=.
 	maxDeliveriesLimit = 100
 )
@@ -472,13 +475,17 @@ func readHookURL() (string, error) {
 	if err != nil {
 		var exit *ExitError
 		if errors.As(err, &exit) {
-			exit.Err = errors.New(strings.Replace(exit.Err.Error(), "the value", "the URL", 1))
+			msg := strings.ReplaceAll(exit.Err.Error(), "the value", "the URL")
+			exit.Err = errors.New(strings.ReplaceAll(msg, ", the most a secret holds", ""))
 		}
 		return "", err
 	}
 	u = strings.TrimSpace(u)
-	if u == "" {
+	switch {
+	case u == "":
 		return "", usageErrorf("the URL is empty")
+	case len(u) > maxHookURL:
+		return "", usageErrorf("the URL is over %d bytes, the most the platform takes", maxHookURL)
 	}
 	return u, nil
 }

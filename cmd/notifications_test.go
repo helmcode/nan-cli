@@ -343,6 +343,19 @@ func TestNotificationsURLNeverOnTheCommandLine(t *testing.T) {
 		}
 		noHookLeak(t, r, fake)
 	}
+	// Too long or empty: refused before anything is sent, in the URL's words.
+	for in, want := range map[string]string{"https://x.example/" + strings.Repeat("a", 2100): "over 2048 bytes", "\n": "the URL is empty",
+		strings.Repeat("a", 20000): "the URL is over 16 KiB"} {
+		fake := newFakeWrite()
+		r := runWrite(t, fake, writeSetup{session: cliSession, stdin: in}, "notifications", "add", "x", "--kind", "https", "--url-stdin")
+		mustExit(t, r, exitUsage, want)
+		if strings.Contains(r.msg, "value") || strings.Contains(r.msg, "secret") {
+			t.Errorf("message speaks of a secret value: %s", r.msg)
+		}
+		if len(fake.sent("POST", "/v1/notification-channels")) != 0 {
+			t.Error("sent it")
+		}
+	}
 	// --url-stdin from a terminal would echo the URL.
 	fake := newFakeWrite()
 	r := runWrite(t, fake, writeSetup{session: cliSession, tty: true}, "notifications", "add", "x", "--kind", "slack", "--url-stdin")
