@@ -24,4 +24,4 @@ instructions:
   Review for correctness.
 
 run it: nan automations run a0000000-0000-4000-8000-000000000001
-edit it in the portal: https://cloud.nan.builders/automations/a0000000-0000-4000-8000-000000000001
+change it: nan automations edit a0000000-0000-4000-8000-000000000001 -f FILE, or in the portal: https://cloud.nan.builders/automations/a0000000-0000-4000-8000-000000000001

@@ -27,9 +27,12 @@ type Secret struct {
 	ValueBytes  int     `json:"value_bytes"`
 	Description string  `json:"description"`
 	UsedBy      []Ref   `json:"used_by"`
-	CreatedAt   string  `json:"created_at"`
-	UpdatedAt   string  `json:"updated_at"`
-	LastUsedAt  *string `json:"last_used_at"`
+	// UpdatedBy is the credential kind of the last write: browser_session,
+	// cli_session or platform_token (write API).
+	UpdatedBy  string  `json:"updated_by,omitempty"`
+	CreatedAt  string  `json:"created_at"`
+	UpdatedAt  string  `json:"updated_at"`
+	LastUsedAt *string `json:"last_used_at"`
 }
 
 type SecretList struct {
