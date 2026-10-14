@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/nxssie/nan-cli/internal/api"
@@ -489,6 +490,10 @@ func doTriggersRotate(ctx context.Context, env *runsEnv, ref, triggerID string, 
 				return usageErrorf("this is a Stripe webhook: its signing secret comes from the Stripe dashboard. " +
 					"Roll it there and pass the new whsec_ with --signing-secret-file PATH or --signing-secret-stdin, " +
 					"or rotate only the URL with --url")
+			}
+			if strings.Contains(apiErr.Message, "Stripe") {
+				return usageErrorf("the server refused the signing secret: %s. Copy the endpoint's whsec_ from the Stripe dashboard again",
+					runs.Truncate(runs.SanitizeLine(apiErr.Message), 200))
 			}
 			return usageErrorf("the server refused the signing secret: %s. NaN generates the signing secret of GitHub and NaN webhooks; "+
 				"--signing-secret-file and --signing-secret-stdin are for Stripe's whsec_", runs.Truncate(runs.SanitizeLine(apiErr.Message), 200))

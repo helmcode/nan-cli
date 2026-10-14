@@ -1272,6 +1272,7 @@ func TestTriggersRotateStripeRefusals(t *testing.T) {
 		wants []string
 	}{
 		"stripe without the secret": {writeSetup{session: cliSession}, nil, stripe400, 1, []string{"Stripe dashboard", "--signing-secret-file", "--url"}},
+		"malformed whsec":           {writeSetup{session: cliSession}, []string{"--signing-secret-file", file}, stripe400, 1, []string{"Stripe dashboard again"}},
 		"secret on a github hook":   {writeSetup{session: cliSession}, []string{"--signing-secret-file", file}, generated400, 1, []string{"NaN generates", "Stripe"}},
 		"both sources":              {writeSetup{session: cliSession}, []string{"--signing-secret-file", file, "--signing-secret-stdin"}, "", 0, []string{"not both"}},
 		"terminal":                  {writeSetup{session: cliSession, tty: true}, []string{"--signing-secret-stdin"}, "", 0, []string{"--signing-secret-stdin", "terminal", "--signing-secret-file"}},
