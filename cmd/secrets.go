@@ -79,6 +79,9 @@ Docs: ` + writeDocs + ` and https://nan.builders/docs/runs`,
 	Args:        cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) > 0 {
+			if looksLikeAKey(args[0]) {
+				return usageErrorf("unknown command for \"nan secrets\". %s", pastedValueHint)
+			}
 			shown := runs.Truncate(runs.SanitizeLine(args[0]), 64)
 			if hint, ok := secretVerbHints[args[0]]; ok {
 				return usageErrorf("there is no nan secrets %s; try: nan secrets %s", shown, hint)
@@ -387,7 +390,11 @@ func listSecrets(ctx context.Context, env *runsEnv) (*api.SecretList, error) {
 	}
 	list, err := env.client.SecretsV1(ctx)
 	if err != nil {
-		return nil, secretsV1Exit(err, env.cred, scopeSecretsRead)
+		var apiErr *api.APIError
+		if errors.As(err, &apiErr) && apiErr.Status == 404 {
+			return nil, apiOff("reading secrets with a platform token")
+		}
+		return nil, writeExit(err, env.cred, "secrets", scopeSecretsRead)
 	}
 	return list, nil
 }

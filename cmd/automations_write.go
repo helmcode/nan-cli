@@ -467,7 +467,9 @@ func doTriggersRotate(ctx context.Context, env *runsEnv, ref, triggerID string, 
 		if err := printJSON(env.stdout, out, true); err != nil {
 			return err
 		}
-		fmt.Fprintln(env.stderr, oneTimeNote)
+		if out.WebhookURL != nil || out.SigningSecret != nil {
+			fmt.Fprintln(env.stderr, oneTimeNote)
+		}
 		return nil
 	}
 	printTriggerSecrets(env, out)

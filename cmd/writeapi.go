@@ -114,8 +114,14 @@ func withWriteEnv(fn func(*runsEnv) error) error {
 // writeAPIOff is the answer when the platform does not take writes from
 // this CLI (yet) for the member: the portal still does them.
 func writeAPIOff(what string) *ExitError {
-	return usageErrorf("changing %s from the CLI is not available for your account yet: do it in the portal at %s, "+
-		"signed in through the browser. See %s", what, runs.PortalURL, writeDocs)
+	return apiOff("changing " + what)
+}
+
+// apiOff is writeAPIOff for any action ("reading secrets", "changing
+// automations").
+func apiOff(action string) *ExitError {
+	return usageErrorf("%s from the CLI is not available for your account yet: do it in the portal at %s, "+
+		"signed in through the browser. See %s", action, runs.PortalURL, writeDocs)
 }
 
 // requireWriteAPI asks the platform, for a session, whether it takes writes

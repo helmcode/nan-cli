@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -93,6 +94,12 @@ func (f *fakeWrite) handler(t *testing.T) http.Handler {
 		defer f.mu.Unlock()
 		f.reqs = append(f.reqs, writeReq{r.Method, r.URL.Path, r.Header.Get("Cookie"), r.Header.Get("Authorization"), r.Header.Get("Idempotency-Key"), string(body)})
 		w.Header().Set("Content-Type", "application/json")
+		if f.dropFirstCreate {
+			// A fresh connection per request: net/http only retries a
+			// request itself on a reused connection, so what follows a
+			// dropped answer is the CLI's own retry.
+			w.Header().Set("Connection", "close")
+		}
 		route := r.Method + " " + r.URL.Path
 		if fe, ok := f.fail[route]; ok {
 			w.WriteHeader(fe.status)
@@ -206,7 +213,22 @@ func (f *fakeWrite) handler(t *testing.T) http.Handler {
 			writeJSON(200, tc.Trigger)
 		case route == "POST /v1/automations/"+testAutoID+"/triggers/"+triggerID+"/rotate":
 			w.Header().Set("Cache-Control", "no-store")
-			_, _ = w.Write(phase2File(t, "trigger_rotate.json"))
+			var in struct {
+				Rotate []string `json:"rotate"`
+			}
+			_ = json.Unmarshal(body, &in)
+			out := map[string]any{}
+			for _, x := range in.Rotate {
+				switch x {
+				case "url":
+					out["webhook_url"] = "https://api.nan.builders/hooks/nan_whk_ROTATEDROTATEDROTATED"
+				case "secret":
+					var rot map[string]any
+					_ = json.Unmarshal(phase2File(t, "trigger_rotate.json"), &rot)
+					out["signing_secret"] = rot["signing_secret"]
+				}
+			}
+			writeJSON(200, out)
 		default:
 			writeJSON(404, map[string]any{"error": map[string]any{"message": "no route " + route, "type": "invalid_request_error", "code": "not_found"}})
 		}
@@ -481,6 +503,9 @@ func TestSecretsSetRetriesWithTheSameIdempotencyKey(t *testing.T) {
 	posts := fake.sent("POST", "/v1/secrets")
 	if len(posts) != 2 || posts[0].IdemKey == "" || posts[0].IdemKey != posts[1].IdemKey {
 		t.Fatalf("posts %v", posts)
+	}
+	if r.stderr != "" && strings.Contains(r.stderr, "could not reach") {
+		t.Errorf("stderr %q", r.stderr)
 	}
 	if n := len(fake.secrets); n != 2 {
 		t.Errorf("%d secrets: a retry created a second one", n)
@@ -843,7 +868,14 @@ func TestTriggersRotate(t *testing.T) {
 		if got := fake.sent("POST", path); len(got) != 1 || got[0].Body != tc.body {
 			t.Errorf("%s: %v", name, fake.requests())
 		}
-		if strings.Count(r.stdout, "new_secret_shown_once") != 1 || !strings.Contains(r.stderr, tc.note) {
+		wantSecret := 1
+		if strings.Join(tc.flags, " ") == "--url" {
+			wantSecret = 0
+			if strings.Count(r.stdout, "nan_whk_ROTATED") != 1 {
+				t.Errorf("%s: no new URL: %q", name, r.stdout)
+			}
+		}
+		if strings.Count(r.stdout, "new_secret_shown_once") != wantSecret || !strings.Contains(r.stderr, tc.note) {
 			t.Errorf("%s: stdout %q stderr %q", name, r.stdout, r.stderr)
 		}
 	}
@@ -968,4 +1000,201 @@ func TestVerbHintsPointAtTheCommand(t *testing.T) {
 
 func apiCreate(name string) api.CreateSecretRequest {
 	return api.CreateSecretRequest{Name: name, Value: testValue}
+}
+
+// Without the CLI's own retry, the lost answer is an error: the second POST
+// of the test above is this CLI's, not net/http's.
+func TestSecretsSetWithoutRetryFailsOnALostAnswer(t *testing.T) {
+	fake := newFakeWrite()
+	fake.dropFirstCreate = true
+	file := writeValueFile(t, testValue)
+	createAttempts = 1
+	r := runWrite(t, fake, writeSetup{session: cliSession}, "secrets", "set", "NEW_TOKEN", "--value-file", file)
+	if r.code == 0 || len(fake.sent("POST", "/v1/secrets")) != 1 {
+		t.Fatalf("exit %d, posts %v", r.code, fake.sent("POST", "/v1/secrets"))
+	}
+	noLeak(t, r, fake)
+}
+
+func TestLostAnswer(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"network":   {fmt.Errorf("could not reach nan.builders: %w", io.ErrUnexpectedEOF), true},
+		"refusal":   {&api.APIError{Status: 409, Code: "name_taken"}, false},
+		"5xx":       {&api.APIError{Status: 502}, false},
+		"expired":   {api.ErrSessionExpired, false},
+		"cancelled": {fmt.Errorf("x: %w", context.Canceled), false},
+	} {
+		if got := lostAnswer(tc.err); got != tc.want {
+			t.Errorf("%s: %v", name, got)
+		}
+	}
+}
+
+const readScopeDenied = `{"error":{"message":"This token lacks the \"secrets:read\" scope.","type":"permission_error","code":"token_scope_denied"}}`
+
+// A token with secrets:write and not secrets:read cannot look the name up:
+// it still creates, and says what it needs when the name exists.
+func TestSecretsSetWithAWriteOnlyToken(t *testing.T) {
+	file := writeValueFile(t, testValue)
+	fake := newFakeWrite()
+	fake.failOn("GET /v1/secrets", 403, readScopeDenied)
+	r := runWrite(t, fake, writeSetup{env: testPAT}, "secrets", "set", "NEW_TOKEN", "--value-file", file)
+	if r.code != 0 || len(fake.sent("POST", "/v1/secrets")) != 1 {
+		t.Fatalf("exit %d %s %v", r.code, r.msg, fake.requests())
+	}
+	if got := fake.sent("POST", "/v1/secrets")[0]; got.Authz != "Bearer "+testPAT || len(fake.sent("GET", "/api/auth/me")) != 0 {
+		t.Errorf("token request %v", fake.requests())
+	}
+
+	fake = newFakeWrite()
+	fake.failOn("GET /v1/secrets", 403, readScopeDenied)
+	fake.failOn("POST /v1/secrets", 409, `{"error":{"message":"taken","type":"invalid_request_error","param":"name","code":"name_taken"}}`)
+	r = runWrite(t, fake, writeSetup{env: testPAT}, "secrets", "set", "GITHUB_TOKEN", "--value-file", file)
+	if r.code != exitUsage || !strings.Contains(r.msg, "secrets:read") || !strings.Contains(r.msg, "GITHUB_TOKEN already exists") || strings.Contains(r.msg, testPAT) {
+		t.Errorf("exit %d %s", r.code, r.msg)
+	}
+	noLeak(t, r, fake)
+}
+
+func TestSecretsSetExistingWithBaseURLAndAFailedPatch(t *testing.T) {
+	const path = "/v1/secrets/5e000000-0000-4000-8000-000000000001"
+	file := writeValueFile(t, testValue)
+	fake := newFakeWrite()
+	r := runWrite(t, fake, writeSetup{session: cliSession}, "secrets", "set", "GITHUB_TOKEN", "--value-file", file, "--base-url", "https://x.example/v1")
+	if p := fake.sent("PATCH", path); r.code != 0 || len(p) != 1 || p[0].Body != `{"base_url":"https://x.example/v1"}` {
+		t.Errorf("exit %d %s %v", r.code, r.msg, p)
+	}
+
+	fake = newFakeWrite()
+	fake.failOn("PATCH "+path, 400, `{"error":{"message":"base_url must be an https URL","type":"invalid_request_error","param":"base_url","code":"invalid_request"}}`)
+	r = runWrite(t, fake, writeSetup{session: cliSession}, "secrets", "set", "GITHUB_TOKEN", "--value-file", file, "--base-url", "http://x")
+	if r.code != exitUsage || !strings.Contains(r.msg, "base_url") || len(fake.sent("PUT", path+"/value")) != 1 {
+		t.Errorf("exit %d %s", r.code, r.msg)
+	}
+	wantAll(t, "stderr", r.stderr, "the value was replaced, but not the description or base URL")
+	noLeak(t, r, fake)
+}
+
+// A secret deleted between the lookup and the write.
+func TestSecretWriteNotFound(t *testing.T) {
+	const path = "/v1/secrets/5e000000-0000-4000-8000-000000000001"
+	notFound := `{"error":{"message":"Not found","type":"invalid_request_error","code":"not_found"}}`
+	file := writeValueFile(t, testValue)
+	for name, tc := range map[string]struct {
+		route string
+		args  []string
+	}{
+		"set":  {"PUT " + path + "/value", []string{"secrets", "set", "GITHUB_TOKEN", "--value-file", file}},
+		"edit": {"PATCH " + path, []string{"secrets", "edit", "GITHUB_TOKEN", "--description", "x"}},
+		"rm":   {"DELETE " + path, []string{"secrets", "rm", "GITHUB_TOKEN", "--yes"}},
+	} {
+		fake := newFakeWrite()
+		fake.failOn(tc.route, 404, notFound)
+		r := runWrite(t, fake, writeSetup{session: cliSession}, tc.args...)
+		if r.code != exitUsage || !strings.Contains(r.msg, "not found") {
+			t.Errorf("%s: exit %d %s", name, r.code, r.msg)
+		}
+	}
+}
+
+func TestSecretValueSizeLimit(t *testing.T) {
+	defer func() { writeStdin, writeStdinTTY = os.Stdin, func() bool { return isTerminal(os.Stdin) } }()
+	writeStdinTTY = func() bool { return false }
+	writeStdin = strings.NewReader(strings.Repeat("a", maxSecretValue) + "\n")
+	if v, err := readSecretValue("", true); err != nil || len(v) != maxSecretValue {
+		t.Errorf("16 KiB: %d %v", len(v), err)
+	}
+	writeStdin = strings.NewReader(strings.Repeat("a", maxSecretValue) + "\r\n")
+	if v, err := readSecretValue("", true); err != nil || len(v) != maxSecretValue {
+		t.Errorf("16 KiB + CRLF: %d %v", len(v), err)
+	}
+	writeStdin = strings.NewReader(strings.Repeat("a", maxSecretValue+1))
+	if _, err := readSecretValue("", true); exitCode(err) != exitUsage || !strings.Contains(err.Error(), "16 KiB") {
+		t.Errorf("16 KiB + 1: %v", err)
+	}
+	writeStdin = strings.NewReader("\xff\xfe")
+	if _, err := readSecretValue("", true); exitCode(err) != exitUsage || strings.Contains(err.Error(), "\xff") {
+		t.Errorf("not UTF-8: %v", err)
+	}
+}
+
+func TestPastedValueIsNotEchoedAsACommand(t *testing.T) {
+	fakeHome(t, "")
+	code, msg := execute(t, "secrets", testValue)
+	if code != exitUsage || strings.Contains(msg, "TESTVALUE") || !strings.Contains(msg, "shell history") {
+		t.Errorf("exit %d: %s", code, msg)
+	}
+}
+
+func TestSecretsReadWithTheWriteAPIOff(t *testing.T) {
+	fake := newFakeWrite()
+	fake.writeAPI = false
+	r := runWrite(t, fake, writeSetup{env: testPAT}, "secrets", "ls")
+	if r.code != exitUsage || !strings.Contains(r.msg, "reading secrets") {
+		t.Errorf("exit %d %s", r.code, r.msg)
+	}
+}
+
+func TestTriggersJSONAndTokens(t *testing.T) {
+	fake := newFakeWrite()
+	r := runWrite(t, fake, writeSetup{env: testPAT}, "automations", "triggers", "ls", "PR review api", "--json")
+	var list map[string]any
+	if err := json.Unmarshal([]byte(r.stdout), &list); r.code != 0 || err != nil || list["data"] == nil {
+		t.Errorf("ls --json: exit %d %v %s", r.code, err, r.stdout)
+	}
+
+	file := filepath.Join(t.TempDir(), "t.yaml")
+	_ = os.WriteFile(file, []byte("kind: webhook\nsignature_scheme: github\n"), 0o600)
+	fake = newFakeWrite()
+	r = runWrite(t, fake, writeSetup{env: testPAT}, "automations", "triggers", "add", testAutoID, "-f", file)
+	if got := fake.sent("POST", "/v1/automations/"+testAutoID+"/triggers"); r.code != 0 || len(got) != 1 || got[0].Authz != "Bearer "+testPAT {
+		t.Errorf("add with a token: exit %d %s %v", r.code, r.msg, fake.requests())
+	}
+	if strings.Count(r.stdout, "whsec_shown_once") != 1 {
+		t.Errorf("add with a token: %q", r.stdout)
+	}
+
+	fake = newFakeWrite()
+	r = runWrite(t, fake, writeSetup{env: testPAT}, "automations", "triggers", "rotate", testAutoID, triggerUUID, "--secret", "--json")
+	var rot map[string]any
+	if err := json.Unmarshal([]byte(r.stdout), &rot); r.code != 0 || err != nil || rot["signing_secret"] != "new_secret_shown_once" || rot["webhook_url"] != nil {
+		t.Errorf("rotate --json: exit %d %v %s", r.code, err, r.stdout)
+	}
+	wantAll(t, "stderr", r.stderr, "Store these now")
+}
+
+func TestWriteArgumentErrors(t *testing.T) {
+	for _, args := range [][]string{
+		{"secrets", "show"},
+		{"secrets", "rm", "A_TOKEN", "B_TOKEN"},
+		{"secrets", "set"},
+		{"secrets", "edit", "lower"},
+		{"automations", "triggers", "rm", "PR review api"},
+		{"automations", "triggers", "rm", "PR review api", triggerUUID, "extra"},
+		{"automations", "create", "-f", ""},
+		{"automations", "triggers", "nope"},
+	} {
+		fake := newFakeWrite()
+		r := runWrite(t, fake, writeSetup{session: cliSession}, args...)
+		if r.code != exitUsage || len(fake.requests()) != 0 {
+			t.Errorf("nan %s: exit %d %s %v", strings.Join(args, " "), r.code, r.msg, fake.requests())
+		}
+	}
+}
+
+func TestWriteTokenFileAndBadEnv(t *testing.T) {
+	path := writeTokenFile(t, testPAT+"\n", 0o600)
+	fake := newFakeWrite()
+	r := runWrite(t, fake, writeSetup{session: cliSession}, "secrets", "ls", "--token-file", path)
+	if got := fake.sent("GET", "/v1/secrets"); r.code != 0 || len(got) != 1 || got[0].Authz != "Bearer "+testPAT || got[0].Cookie != "" {
+		t.Errorf("--token-file wins over the session: exit %d %s %v", r.code, r.msg, fake.requests())
+	}
+	fake = newFakeWrite()
+	r = runWrite(t, fake, writeSetup{env: "not a token"}, "secrets", "ls")
+	if r.code != exitAuth || len(fake.requests()) != 0 || strings.Contains(r.msg, "not a token") {
+		t.Errorf("bad NAN_TOKEN: exit %d %s", r.code, r.msg)
+	}
 }
