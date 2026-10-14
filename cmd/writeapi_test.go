@@ -33,6 +33,7 @@ const testValue = "ghp_TESTVALUEdoNotLeak0123456789abcdef"
 
 type writeReq struct {
 	Method, Path, Cookie, Authz, IdemKey, Body string
+	Query                                      string
 }
 
 type fakeWrite struct {
@@ -97,7 +98,7 @@ func (f *fakeWrite) handler(t *testing.T) http.Handler {
 		body, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		f.reqs = append(f.reqs, writeReq{r.Method, r.URL.Path, r.Header.Get("Cookie"), r.Header.Get("Authorization"), r.Header.Get("Idempotency-Key"), string(body)})
+		f.reqs = append(f.reqs, writeReq{r.Method, r.URL.Path, r.Header.Get("Cookie"), r.Header.Get("Authorization"), r.Header.Get("Idempotency-Key"), string(body), r.URL.RawQuery})
 		w.Header().Set("Content-Type", "application/json")
 		if f.dropFirstCreate {
 			// A fresh connection per request: net/http only retries a

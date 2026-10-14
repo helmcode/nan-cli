@@ -153,12 +153,6 @@ func (c *RunsClient) ListNotificationChannels(ctx context.Context) (*Notificatio
 	return list, c.getJSON(ctx, notificationChannelsPath, list)
 }
 
-// GetNotificationChannel is GET /v1/notification-channels/{id}.
-func (c *RunsClient) GetNotificationChannel(ctx context.Context, id string) (*NotificationChannel, error) {
-	ch := &NotificationChannel{}
-	return ch, c.getJSON(ctx, channelPath(id), ch)
-}
-
 // NotificationDeliveries is GET …/{id}/deliveries?limit=N (newest first).
 func (c *RunsClient) NotificationDeliveries(ctx context.Context, id string, limit int) (*NotificationDeliveryList, error) {
 	list := &NotificationDeliveryList{}

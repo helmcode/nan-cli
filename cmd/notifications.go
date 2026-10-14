@@ -336,6 +336,9 @@ EVENT alone is for every automation; EVENT=AUTOMATION (a name or an id) for
 that one only. Events: approval.pending, run.failed, run.finished,
 automation.disabled, trigger.failing. Up to 50 per channel.
 
+With --json, listing prints {"subscriptions": [...]}; a change prints the
+whole channel as the platform answers it.
+
 ` + notifCredentialHelp + `
 
 Docs: ` + notificationsDocs,
@@ -1155,6 +1158,8 @@ func doNotifSubs(ctx context.Context, env *runsEnv, ref string, change bool) err
 			}
 			resolved[auto] = id
 		}
+		// The platform answers ids in lower case.
+		id = strings.ToLower(id)
 		s.AutomationID = &id
 		return s, nil
 	}

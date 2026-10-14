@@ -132,7 +132,6 @@ func TestNotificationChannelRoutes(t *testing.T) {
 	on := false
 	steps := []func() error{
 		func() error { _, err := c.ListNotificationChannels(ctx); return err },
-		func() error { _, err := c.GetNotificationChannel(ctx, id); return err },
 		func() error { _, err := c.NotificationDeliveries(ctx, id, 7); return err },
 		func() error {
 			_, err := c.CreateNotificationChannel(ctx, CreateNotificationChannelRequest{Name: "a", Kind: "slack", URL: "u"})
@@ -158,7 +157,6 @@ func TestNotificationChannelRoutes(t *testing.T) {
 	p := "/v1/notification-channels"
 	want := []string{
 		"GET " + p + " ",
-		"GET " + p + "/" + id + " ",
 		"GET " + p + "/" + id + "/deliveries?limit=7 ",
 		"POST " + p + ` {"name":"a","kind":"slack","url":"u"}`,
 		"PATCH " + p + "/" + id + ` {"enabled":false}`,

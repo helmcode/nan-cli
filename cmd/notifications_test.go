@@ -2,12 +2,13 @@ package cmd
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nxssie/nan-cli/internal/api"
 )
 
 // Notification channels (helmcode/nan-devops
@@ -70,7 +71,7 @@ func (f *fakeWrite) serveNotifications(t *testing.T, w http.ResponseWriter, r *h
 				AutomationID *string   `json:"automation_id"`
 			}
 			_ = json.Unmarshal(body, &in)
-			events := []string{"approval.pending", "run.failed", "automation.disabled", "trigger.failing"}
+			events := api.DefaultNotificationEvents
 			if in.Events != nil {
 				events = *in.Events
 			}
@@ -500,7 +501,7 @@ func TestNotificationsDeliveries(t *testing.T) {
 	checkGolden(t, "notifications/deliveries.golden", r.stdout)
 	reqs := fake.requests()
 	last := reqs[len(reqs)-1]
-	if last.Path != "/v1/notification-channels/"+chanHTTPSID+"/deliveries" {
+	if last.Path != "/v1/notification-channels/"+chanHTTPSID+"/deliveries" || last.Query != "limit=5" {
 		t.Errorf("%v", last)
 	}
 	r = runWrite(t, fake, writeSetup{session: cliSession}, "notifications", "deliveries", "ci receiver", "--json")
@@ -519,11 +520,18 @@ func TestNotificationsDeliveriesSendsTheLimit(t *testing.T) {
 	mustExit(t, r, 0)
 	for _, req := range fake.requests() {
 		if strings.HasSuffix(req.Path, "/deliveries") {
-			got = req.Path
+			got = req.Query
 		}
 	}
-	if got == "" {
-		t.Fatal("no deliveries request")
+	if got != "limit=7" {
+		t.Fatalf("query %q", got)
+	}
+	// Without --limit: the 20 the help documents.
+	fake = newFakeWrite()
+	r = runWrite(t, fake, writeSetup{session: cliSession}, "notifications", "deliveries", "team alerts")
+	mustExit(t, r, 0)
+	if p := fake.sent("GET", "/v1/notification-channels/"+chanSlackID+"/deliveries"); len(p) != 1 || p[0].Query != "limit=20" {
+		t.Errorf("%v", p)
 	}
 }
 
@@ -559,6 +567,8 @@ func TestNotificationsSubscriptions(t *testing.T) {
 			`{"subscriptions":[{"event":"run.failed","automation_id":null},{"event":"approval.pending","automation_id":"` + testAutoID + `"}]}`},
 		{[]string{"ci receiver", "--remove", "run.finished=PR review api"}, chanHTTPSID, `{"subscriptions":[]}`},
 		{[]string{"ci receiver", "--clear"}, chanHTTPSID, `{"subscriptions":[]}`},
+		// An id typed in capitals is the same automation.
+		{[]string{"ci receiver", "--remove", "run.finished=" + strings.ToUpper(testAutoID)}, chanHTTPSID, `{"subscriptions":[]}`},
 	} {
 		fake := newFakeWrite()
 		r := runWrite(t, fake, writeSetup{session: cliSession}, append([]string{"notifications", "subscriptions"}, c.args...)...)
@@ -708,5 +718,4 @@ func TestNotificationsUnknownVerbs(t *testing.T) {
 		r := runWrite(t, newFakeWrite(), writeSetup{session: cliSession}, "notifications", verb)
 		mustExit(t, r, exitUsage, want)
 	}
-	_ = io.Discard
 }
