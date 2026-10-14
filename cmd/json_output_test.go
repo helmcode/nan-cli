@@ -14,7 +14,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -284,21 +283,23 @@ func runJSONCase(t *testing.T, c jsonCase) (code int, msg, stdout, stderr string
 	defer errF.Close()
 
 	oldBase, oldIn, oldTTY, oldOut, oldErr := runsBaseURL, writeStdin, writeStdinTTY, writeStdout, writeStderr
-	oldOSOut, oldOSErr, oldLocal := os.Stdout, os.Stderr, time.Local
+	oldOSOut, oldOSErr := os.Stdout, os.Stderr
+	restore := func() {
+		os.Stdout, os.Stderr = oldOSOut, oldOSErr
+		runsBaseURL, writeStdin, writeStdinTTY, writeStdout, writeStderr = oldBase, oldIn, oldTTY, oldOut, oldErr
+		resetCommandFlags(rootCmd)
+	}
 	runsBaseURL = srv.URL
 	writeStdin = strings.NewReader(c.stdin)
 	writeStdinTTY = func() bool { return false }
-	time.Local = time.UTC
 	resetCommandFlags(rootCmd)
 	os.Stdout, os.Stderr = outF, errF
 	writeStdout, writeStderr = outF, errF
-
-	code, msg = execute(t, c.args...)
-
-	os.Stdout, os.Stderr = oldOSOut, oldOSErr
-	runsBaseURL, writeStdin, writeStdinTTY, writeStdout, writeStderr = oldBase, oldIn, oldTTY, oldOut, oldErr
-	time.Local = oldLocal
-	resetCommandFlags(rootCmd)
+	func() {
+		// A panic inside the command must not leave os.Stdout on the file.
+		defer restore()
+		code, msg = execute(t, c.args...)
+	}()
 
 	o, _ := os.ReadFile(outF.Name())
 	e, _ := os.ReadFile(errF.Name())
