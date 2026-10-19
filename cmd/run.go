@@ -109,6 +109,7 @@ Ephemeral runs (no workspace):
   Your minutes, cost and limits: nan ephemeral usage, nan ephemeral settings.
   Starting one needs your session (nan auth login) or a platform token with
   the runs:ephemeral scope; API keys (sk-) cannot start them.
+  Docs: ` + ephemeralDocs + `
 
 In the portal:
   Folder = --cwd, Separate branch = --worktree/--no-worktree,

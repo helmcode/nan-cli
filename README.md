@@ -148,7 +148,8 @@ SSH, no SMTP). A run started from the CLI gets no secrets, so the repository
 has to be public; for a private one, use an ephemeral automation (`executor:
 ephemeral`, `checkout: fresh`, `github_repo`, `model`, and an agent secret
 `GITHUB_TOKEN`). Starting one needs your session or a platform token with the
-`runs:ephemeral` scope; API keys cannot.
+`runs:ephemeral` scope; API keys cannot. Docs:
+<https://nan.builders/docs/ephemeral-runs>.
 
 | Size | Container | Price per started minute |
 |---|---|---|
