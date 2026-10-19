@@ -158,9 +158,9 @@ func TestEphemeralRefusalsSayWhatToDo(t *testing.T) {
 		{"cap reached", credential{kind: credSession}, 402, "ephemeral_cap_reached", "", exitUnavailable,
 			[]string{"monthly cap", "Settings at https://cloud.nan.builders/settings", "nan ephemeral usage"}, nil},
 		{"currency migration", credential{kind: credSession}, 402, "currency_migration_required", "", exitUnavailable,
-			[]string{"USD", "EUR", "Settings > Billing"}, []string{"monthly cap"}},
+			[]string{"USD", "EUR", `"Switch billing to EUR"`, "Settings → Ephemeral runs", "New run dialog"}, []string{"monthly cap", "Settings > Billing"}},
 		{"payment method", credential{kind: credSession}, 402, "payment_method_required", "", exitUnavailable,
-			[]string{"add a payment method in the portal first", "https://cloud.nan.builders/settings", "free minutes included"}, []string{"monthly cap"}},
+			[]string{`"Add a payment method"`, "Settings → Ephemeral runs", "https://cloud.nan.builders/settings", "free minutes included"}, []string{"monthly cap"}},
 		{"another 402", credential{kind: credSession}, 402, "something_new", "", exitUnavailable,
 			nil, []string{"monthly cap", "payment method", "USD"}},
 		{"token without scope", credential{kind: credEnv, bearer: testPAT}, 403, "token_scope_denied", "executor", exitAuth,
@@ -455,14 +455,14 @@ func TestEphemeralUsageStates(t *testing.T) {
 	if err := doEphemeralUsage(ctx, env); err != nil {
 		t.Fatal(err)
 	}
-	wantAll(t, "usage needing action", out.String(), "add a payment method in the portal first", "free minutes included",
-		"your subscription bills in USD; ephemeral runs bill in EUR", "Settings > Billing")
+	wantAll(t, "usage needing action", out.String(), `"Add a payment method"`, "free minutes included",
+		"your subscription bills in USD; ephemeral runs bill in EUR", `"Switch billing to EUR"`, "Settings → Ephemeral runs")
 
 	env, out, _, _ = ephemeralGoldenEnv(t, sessionCred, usage)
 	if err := doEphemeralUsage(ctx, env); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out.String(), "payment method in the portal first") || strings.Contains(out.String(), "USD") {
+	if strings.Contains(out.String(), "Add a payment method") || strings.Contains(out.String(), "USD") {
 		t.Errorf("usage with nothing to do asks for something:\n%s", out.String())
 	}
 }

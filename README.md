@@ -161,7 +161,9 @@ A 14 s run is 1 minute. Free minutes every month: Community 100, Inference 300,
 Premium 1000; they come with a membership (accounts without one have none).
 Free minutes are S-minutes: one M minute uses 2, one L minute 4 (100 free
 minutes = 100 minutes of S, 50 of M or 25 of L). Ephemeral runs need a payment
-method on file, free minutes included. While billing is not active, usage is
+method on file, free minutes included ("Add a payment method" in the portal,
+Settings → Ephemeral runs; a subscription billed in USD is moved with "Switch
+billing to EUR" there). While billing is not active, usage is
 metered and shown, not charged. `nan runs ls` and `nan runs show` show each
 ephemeral run's size and cost. The COST column of `nan runs ls` appears only
 when an ephemeral run is listed, so scripts should read `nan runs ls --json`

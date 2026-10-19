@@ -41,16 +41,16 @@ var freeMinutesLine = strings.ReplaceAll(freeMinutesHelp, "\n", " ")
 // with a membership, and every ephemeral run needs a payment method.
 const (
 	membershipHelp = "Free minutes come with a membership (accounts without one have none)"
-	paymentHelp    = "Ephemeral runs need a payment method on file, free minutes included"
+	paymentHelp    = "Ephemeral runs need a payment method on file, free minutes included\n(add one in the browser: Settings → Ephemeral runs)"
 )
 
 // paymentMethodRequired and currencyMigrationRequired are what to do about
 // the two billing refusals (402) of an ephemeral run.
 const (
-	paymentMethodRequired = "add a payment method in the portal first: Settings at " + ephemeralSettingsURL +
-		" (ephemeral runs need one on file, free minutes included)"
-	currencyMigrationRequired = "your subscription bills in USD; ephemeral runs bill in EUR: switch it to EUR in the portal (Settings > Billing at " +
-		ephemeralSettingsURL + ")"
+	paymentMethodRequired = `ephemeral runs need a payment method on file, free minutes included: use "Add a payment method" ` +
+		"in the portal, Settings → Ephemeral runs at " + ephemeralSettingsURL
+	currencyMigrationRequired = `your subscription bills in USD; ephemeral runs bill in EUR: use "Switch billing to EUR" ` +
+		"in the portal, Settings → Ephemeral runs at " + ephemeralSettingsURL + " (also offered in the New run dialog)"
 )
 
 // notChargedNote is what a cost means while billing is off.

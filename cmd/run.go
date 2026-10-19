@@ -106,7 +106,7 @@ Ephemeral runs (no workspace):
 ` + sizeTable("    ") + `  Free minutes every month: Community 100, Inference 300, Premium 1000.
   ` + membershipHelp + `.
   ` + strings.ReplaceAll(freeMinutesHelp, "\n", "\n  ") + `.
-  ` + paymentHelp + `.
+  ` + strings.ReplaceAll(paymentHelp, "\n", "\n  ") + `.
   While billing is not active, usage is metered and shown, not charged.
   Your minutes, cost and limits: nan ephemeral usage, nan ephemeral settings.
   Starting one needs your session (nan auth login) or a platform token with
