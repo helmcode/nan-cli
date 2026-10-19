@@ -49,14 +49,18 @@ type runOptions struct {
 	idempotencyKey string
 	file           string
 	byokSecret     string
+	ephemeral      bool
+	repo           string
+	size           string
 }
 
 var runOpts runOptions
 
 var runCmd = &cobra.Command{
 	Use:   `run [flags] ( "prompt" | -f FILE | - )`,
-	Short: "Run an agent in one of your workspaces",
-	Long: `Run an agent in one of your workspaces and stream what it does.
+	Short: "Run an agent in one of your workspaces, or in an ephemeral container",
+	Long: `Run an agent in one of your workspaces, or in an ephemeral container, and
+stream what it does.
 
 The prompt is the argument, the contents of -f FILE, or stdin when the
 argument is "-". The run happens in the workspace, not on this machine: it
@@ -86,6 +90,25 @@ Your own provider key (BYOK):
   key cannot start them, because a prompt can make the agent print the key
   it holds. A token can trigger an automation that uses your key instead.
   Hermes cannot use an Anthropic key yet: use pi or pi_gentle with it.
+
+Ephemeral runs (no workspace):
+  --ephemeral --repo OWNER/NAME --model ID runs the agent in a fresh,
+  throwaway container instead of a workspace: it clones the GitHub
+  repository, runs the agent (pi, pi_gentle or hermes) with the model you
+  name, streams like any run, and is destroyed at the end. The container
+  can only reach the internet over HTTP and HTTPS (no SSH, no SMTP). A run
+  started here gets no secrets, so the repository has to be public; for a
+  private one, use an ephemeral automation with an agent secret
+  GITHUB_TOKEN (nan automations create --help). --ws, --cwd, --worktree
+  and --no-worktree do not apply.
+  --size picks the container (default s), billed per started minute (a
+  14 s run is 1 minute):
+` + sizeTable() + `  Free minutes every month: Community 100, Inference 300, Premium 1000.
+  ` + freeMinutesHelp + `.
+  While billing is not active, usage is metered and shown, not charged.
+  Your minutes, cost and limits: nan ephemeral usage, nan ephemeral settings.
+  Starting one needs your session (nan auth login) or a platform token with
+  the runs:ephemeral scope; API keys (sk-) cannot start them.
 
 In the portal:
   Folder = --cwd, Separate branch = --worktree/--no-worktree,
@@ -123,8 +146,10 @@ Exit codes:
   10  awaiting approval: an automation run whose proposed actions wait for
       you (nan runs proposal <id>; approve in the portal)
   64  usage error
-  65  not signed in, or not allowed (a token for a run with your own key)
-  69  nan.builders unavailable, or the stream was lost (the run goes on)
+  65  not signed in, or not allowed (a token for a run with your own key, a
+      token without runs:ephemeral, ephemeral runs not available to you)
+  69  nan.builders unavailable, the stream was lost (the run goes on), or
+      an ephemeral run would pass your monthly spend cap
   75  detached: the run was accepted and is still going
 
 Docs: https://nan.builders/docs/runs`,
@@ -133,7 +158,8 @@ Docs: https://nan.builders/docs/runs`,
   git diff | nan run -
   id=$(nan run --detach "upgrade the dependencies")
   nan run --ws ci -f task.md    # in CI, with NAN_TOKEN set from a secret
-  nan run --byok-secret ANTHROPIC_KEY --model claude-sonnet-4-5 "fix the flaky test"`,
+  nan run --byok-secret ANTHROPIC_KEY --model claude-sonnet-4-5 "fix the flaky test"
+  nan run --ephemeral --repo acme/api --model glm5.3 --size m "find and fix the flaky test"`,
 	Args:        cobra.ArbitraryArgs,
 	Annotations: sysexits,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -162,8 +188,11 @@ func init() {
 	rootCmd.AddCommand(runCmd)
 	f := runCmd.Flags()
 	f.StringVar(&runOpts.workspace, "ws", "", "Workspace to run in (default: your only workspace)")
+	f.BoolVar(&runOpts.ephemeral, "ephemeral", false, "Run in a fresh, throwaway container instead of a workspace (needs --repo and --model)")
+	f.StringVar(&runOpts.repo, "repo", "", "With --ephemeral: the public GitHub repository to clone, `OWNER/NAME`")
+	f.StringVar(&runOpts.size, "size", "", "With --ephemeral: the container, s, m or l (default s; see Ephemeral runs below)")
 	f.StringVar(&runOpts.agent, "agent", "pi", "Agent to run: pi, pi_gentle (Pi + Gentle Shell) or hermes, if the workspace has it installed")
-	f.StringVar(&runOpts.model, "model", "", "Model for the agent (default: the agent's own; required with --byok-secret)")
+	f.StringVar(&runOpts.model, "model", "", "Model for the agent (default: the agent's own; required with --byok-secret and --ephemeral)")
 	f.StringVar(&runOpts.byokSecret, "byok-secret", "", "Run on your own provider key: the `NAME` of a provider key secret saved in the portal (never the key itself); needs --model")
 	f.StringVar(&runOpts.cwd, "cwd", "", "Folder in the workspace to run in (default: /home/nan)")
 	f.BoolVar(&runOpts.worktree, "worktree", false, "Always work on a separate branch, nan-run/<id> (fails outside a git repository)")
@@ -216,7 +245,8 @@ func newRunsEnv() (*runsEnv, error) {
 }
 
 func startRun(ctx context.Context, env *runsEnv, opts runOptions, req *api.CreateRunRequest) error {
-	if req.Workspace == "" {
+	ephemeral := req.Executor == api.ExecutorEphemeral
+	if req.Workspace == "" && !ephemeral {
 		name, err := defaultWorkspace(ctx, env)
 		if err != nil {
 			return err
@@ -231,6 +261,12 @@ func startRun(ctx context.Context, env *runsEnv, opts runOptions, req *api.Creat
 			if exit := byokRefusal(apiErr, req); exit != nil {
 				return exit
 			}
+			if exit := ephemeralExit(apiErr, env.cred); exit != nil {
+				return exit
+			}
+		}
+		if ephemeral && errors.As(err, &apiErr) && apiErr.Status == 404 {
+			return exitf(exitAuth, "runs are not enabled for your account")
 		}
 		if errors.As(err, &apiErr) && apiErr.Status == 404 {
 			return usageErrorf("workspace %q not found (or runs are not enabled for your account)", runs.SanitizeLine(req.Workspace))
@@ -256,22 +292,25 @@ func startRun(ctx context.Context, env *runsEnv, opts runOptions, req *api.Creat
 			}
 		} else {
 			fmt.Fprintln(env.stdout, id)
-			fmt.Fprintf(env.stderr, "run %s %s on %s\n", id, runs.SanitizeLine(run.State), runs.SanitizeLine(run.Workspace.Name))
+			fmt.Fprintf(env.stderr, "run %s %s %s\n", id, runs.SanitizeLine(run.State), runPlace(run, req))
 			printFollowHints(env.stderr, id)
 		}
 		return runExit(run)
 	}
 
 	if !replayed {
-		where := runs.SanitizeLine(run.Workspace.Name)
-		if where == "" {
-			where = runs.SanitizeLine(req.Workspace)
-		}
 		agent := runs.SanitizeLine(run.Agent)
-		if in := req.Inference; in != nil && in.Source == api.InferenceBYOK {
+		switch in := req.Inference; {
+		case in != nil && in.Source == api.InferenceBYOK:
 			agent += ", your key " + runs.SanitizeLine(in.Secret) + ", model " + runs.SanitizeLine(in.Model)
+		case ephemeral && req.Model != nil:
+			agent += ", model " + runs.SanitizeLine(*req.Model)
 		}
-		fmt.Fprintf(env.stderr, "run %s queued on %s (%s) — Ctrl-C to detach\n", id, where, agent)
+		if ephemeral {
+			fmt.Fprintf(env.stderr, "run %s queued %s (%s), Ctrl-C to detach\n", id, runPlace(run, req), agent)
+		} else {
+			fmt.Fprintf(env.stderr, "run %s queued %s (%s) — Ctrl-C to detach\n", id, runPlace(run, req), agent)
+		}
 	}
 	return follow(ctx, env, run.ID, 0, opts.json, true)
 }
@@ -353,6 +392,9 @@ func follow(ctx context.Context, env *runsEnv, id string, after int64, asJSON, d
 			}
 		} else {
 			fmt.Fprintln(env.stderr, runs.Outcome(res.run))
+			if res.run.Ephemeral() {
+				fmt.Fprintf(env.stderr, "cost: %s\n", runCostLabel(res.run))
+			}
 		}
 		return runExit(res.run)
 	}
@@ -456,6 +498,9 @@ func buildRunRequest(in promptInput, opts runOptions, args []string) (*api.Creat
 			return nil, err
 		}
 	}
+	if err := checkEphemeralFlags(&opts); err != nil {
+		return nil, err
+	}
 	if opts.model != "" && !modelPattern.MatchString(opts.model) {
 		return nil, usageErrorf("--model %q is not a model name (letters, digits and . _ : / -, up to 128)", opts.model)
 	}
@@ -489,6 +534,10 @@ func buildRunRequest(in promptInput, opts runOptions, args []string) (*api.Creat
 	if opts.worktree || opts.noWorktree {
 		iso := opts.worktree
 		req.GitIsolation = &iso
+	}
+	if opts.ephemeral {
+		repo := opts.repo
+		req.Executor, req.Size, req.GitHubRepo = api.ExecutorEphemeral, opts.size, &repo
 	}
 	if opts.timeoutSet {
 		if opts.timeout < minTimeout || opts.timeout > maxTimeout {

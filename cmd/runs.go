@@ -284,17 +284,32 @@ func doRunsLs(ctx context.Context, env *runsEnv) error {
 	for i := range list.Data {
 		env.nameRunWorkspace(ctx, &list.Data[i])
 	}
+	// The COST column shows only when an ephemeral run is listed: a
+	// workspace run has no cost of its own.
+	withCost := false
+	for i := range list.Data {
+		withCost = withCost || list.Data[i].Ephemeral()
+	}
 	tw := tabwriter.NewWriter(env.stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tSTATE\tWORKSPACE\tAGENT\tINFERENCE\tCREATED\tPROMPT")
-	for _, r := range list.Data {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+	if withCost {
+		fmt.Fprintln(tw, "ID\tSTATE\tWORKSPACE\tAGENT\tINFERENCE\tCOST\tCREATED\tPROMPT")
+	} else {
+		fmt.Fprintln(tw, "ID\tSTATE\tWORKSPACE\tAGENT\tINFERENCE\tCREATED\tPROMPT")
+	}
+	for i := range list.Data {
+		r := &list.Data[i]
+		cols := []string{
 			runs.SanitizeLine(r.ID),
 			runs.SanitizeLine(r.State),
-			runs.Truncate(runs.SanitizeLine(refLabel(r.Workspace.Name, r.Workspace.ID)), 40),
+			runWhere(r),
 			runs.SanitizeLine(r.Agent),
 			inferenceShort(r.Inference),
-			localTime(r.CreatedAt),
-			runs.Truncate(runs.SanitizeLine(r.PromptPreview), 60))
+		}
+		if withCost {
+			cols = append(cols, runCostShort(r))
+		}
+		cols = append(cols, localTime(r.CreatedAt), runs.Truncate(runs.SanitizeLine(r.PromptPreview), 60))
+		fmt.Fprintln(tw, strings.Join(cols, "\t"))
 	}
 	if err := tw.Flush(); err != nil {
 		return err
@@ -351,7 +366,11 @@ func doRunsShow(ctx context.Context, env *runsEnv, id string) error {
 	if run.ExitCode != nil {
 		row("exit code", fmt.Sprint(*run.ExitCode))
 	}
-	row("workspace", runs.NameAndID(run.Workspace.Name, run.Workspace.ID))
+	if run.Ephemeral() {
+		row("executor", "ephemeral: a fresh container, size "+sizeLabel(run.Size))
+	} else {
+		row("workspace", runs.NameAndID(run.Workspace.Name, run.Workspace.ID))
+	}
 	agent := runs.SanitizeLine(run.Agent)
 	if run.Model != nil && *run.Model != "" {
 		agent += " · model " + runs.SanitizeLine(*run.Model)
@@ -387,12 +406,15 @@ func doRunsShow(ctx context.Context, env *runsEnv, id string) error {
 	for _, apply := range applyRuns(run) {
 		row("apply run", runs.SanitizeLine(apply))
 	}
-	row("cwd", runs.SanitizeLine(run.Cwd))
-	worktree := "auto"
-	if run.GitIsolation != nil {
-		worktree = map[bool]string{true: "yes", false: "no"}[*run.GitIsolation]
+	if !run.Ephemeral() {
+		// An ephemeral run works in its fresh checkout: neither applies.
+		row("cwd", runs.SanitizeLine(run.Cwd))
+		worktree := "auto"
+		if run.GitIsolation != nil {
+			worktree = map[bool]string{true: "yes", false: "no"}[*run.GitIsolation]
+		}
+		row("worktree", worktree)
 	}
-	row("worktree", worktree)
 	if run.TimeoutSeconds > 0 {
 		row("timeout", (time.Duration(run.TimeoutSeconds) * time.Second).String())
 	}
@@ -430,8 +452,14 @@ func doRunsShow(ctx context.Context, env *runsEnv, id string) error {
 		}
 		row("tokens", tokens)
 	}
+	if run.Ephemeral() {
+		row("cost", runCostLabel(run))
+	}
 	if err := tw.Flush(); err != nil {
 		return err
+	}
+	if run.Ephemeral() && run.Cost != nil {
+		env.billingNote(ctx)
 	}
 	if run.State == api.StateAwaitingApproval {
 		fmt.Fprintln(env.stdout)
