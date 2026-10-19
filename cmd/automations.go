@@ -528,7 +528,7 @@ func doAutomationsRun(ctx context.Context, env *runsEnv, ref string, input json.
 		if name == "" {
 			name = runs.Truncate(runs.SanitizeLine(ref), 64)
 		}
-		fmt.Fprintf(env.stderr, "run %s of %s queued on %s; Ctrl-C to detach\n", run.ID, name, runs.SanitizeLine(run.Workspace.Name))
+		fmt.Fprintf(env.stderr, "run %s of %s queued %s, Ctrl-C to detach\n", run.ID, name, runPlace(run, &api.CreateRunRequest{}))
 	}
 	return follow(ctx, env, run.ID, 0, autoRunJSON, true)
 }

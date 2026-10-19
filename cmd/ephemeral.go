@@ -32,7 +32,26 @@ const ephemeralSettingsURL = runs.PortalURL + "/settings"
 
 // freeMinutesHelp is how free minutes count, said wherever they are shown
 // (owner request).
-const freeMinutesHelp = "Free minutes are S-minutes: one M minute uses 2, one L minute 4 (100 free = 100 S, 50 M or 25 L)"
+const freeMinutesHelp = "Free minutes are S-minutes: one M minute uses 2, one L minute 4\n(100 free minutes = 100 minutes of S, 50 of M or 25 of L)"
+
+// freeMinutesLine is freeMinutesHelp on one line, for an error message.
+var freeMinutesLine = strings.ReplaceAll(freeMinutesHelp, "\n", " ")
+
+// membershipHelp and paymentHelp are the owner's rules: free minutes come
+// with a membership, and every ephemeral run needs a payment method.
+const (
+	membershipHelp = "Free minutes come with a membership (accounts without one have none)"
+	paymentHelp    = "Ephemeral runs need a payment method on file, free minutes included"
+)
+
+// paymentMethodRequired and currencyMigrationRequired are what to do about
+// the two billing refusals (402) of an ephemeral run.
+const (
+	paymentMethodRequired = "add a payment method in the portal first: Settings at " + ephemeralSettingsURL +
+		" (ephemeral runs need one on file, free minutes included)"
+	currencyMigrationRequired = "your subscription bills in USD; ephemeral runs bill in EUR: switch it to EUR in the portal (Settings > Billing at " +
+		ephemeralSettingsURL + ")"
+)
 
 // notChargedNote is what a cost means while billing is off.
 const notChargedNote = "not charged yet: billing is not active, usage is metered and shown only"
@@ -183,9 +202,17 @@ func ephemeralUnavailable() *ExitError {
 //     billable work (an sk- key, or a token without runs:ephemeral).
 //   - 402 ephemeral_cap_reached: the month's spend plus the worst case of
 //     the runs going on could pass the member's cap.
+//   - 402 payment_method_required: no payment method on file.
+//   - 402 currency_migration_required: the subscription bills in USD.
+//
+// Any other 402 is left to the usual mapping.
 func ephemeralExit(apiErr *api.APIError, cred credential) *ExitError {
 	switch {
-	case apiErr.Code == "ephemeral_cap_reached" || apiErr.Status == 402:
+	case apiErr.Code == "payment_method_required":
+		return exitf(exitUnavailable, "%s", paymentMethodRequired)
+	case apiErr.Code == "currency_migration_required":
+		return exitf(exitUnavailable, "%s", currencyMigrationRequired)
+	case apiErr.Code == "ephemeral_cap_reached":
 		return exitf(exitUnavailable, "this run could take your ephemeral spend past your monthly cap: raise the cap in the portal, "+
 			"Settings at %s (signed in through the browser), or wait for your ephemeral runs going on to finish. "+
 			"See this month's spend with: nan ephemeral usage", ephemeralSettingsURL)
@@ -244,16 +271,13 @@ func checkAutomationExecutor(body json.RawMessage, create bool) error {
 	size, hasSize, ok := str("size")
 	if !ok || (hasSize && size != "" && size != api.SizeS && size != api.SizeM && size != api.SizeL) {
 		return usageErrorf(`size must be "s", "m" or "l" (the container of an ephemeral automation: %s); %s`,
-			sizeList(), freeMinutesHelp)
+			sizeList(), freeMinutesLine)
 	}
 	if hasSize && size != "" && hasExecutor && executor == api.ExecutorWorkspace {
 		return usageErrorf(`size is for ephemeral automations only: set executor: ephemeral, or remove size`)
 	}
 	if !create || executor != api.ExecutorEphemeral {
 		return nil
-	}
-	if hasSize && size != "" && !hasExecutor {
-		return usageErrorf(`size is for ephemeral automations only: add executor: ephemeral, or remove size`)
 	}
 	if ws, has, _ := str("workspace"); has && ws != "" {
 		return usageErrorf("an ephemeral automation has no workspace: remove workspace (it runs in a fresh container)")
@@ -308,7 +332,9 @@ a workspace: start one with nan run --ephemeral --repo OWNER/NAME --model ID.
 Sizes, billed per started minute (a 14 s run is 1 minute):
 ` + sizeTable("  ") + `
 Free minutes every calendar month: Community 100, Inference 300, Premium
-1000. ` + freeMinutesHelp + `.
+1000. ` + membershipHelp + `.
+` + freeMinutesHelp + `.
+` + paymentHelp + `.
 While billing is not active, usage is metered and shown, not charged:
 nan ephemeral usage says which.
 
@@ -336,6 +362,8 @@ var ephemeralUsageCmd = &cobra.Command{
 free minutes, the free minutes left, your monthly cap and the prices.
 
 ` + freeMinutesHelp + `.
+` + membershipHelp + `.
+` + paymentHelp + `.
 While billing is not active, usage is metered and shown, not charged.
 
 ` + ephemeralCredentialHelp + `
@@ -355,9 +383,9 @@ var ephemeralSettingsCmd = &cobra.Command{
 and how many ephemeral runs may go on at once (1 to 50, default 50).
 
 They are read only here: change them in the browser, Settings at
-` + ephemeralSettingsURL + `, signed in through the browser, so that nothing
-that can read this machine's CLI session (an agent, a CI job) can raise
-what you spend.
+` + ephemeralSettingsURL + `,
+signed in through the browser, so that nothing that can read this
+machine's CLI session (an agent, a CI job) can raise what you spend.
 
 ` + ephemeralCredentialHelp + `
 
@@ -452,7 +480,10 @@ func doEphemeralUsage(ctx context.Context, env *runsEnv) error {
 	fmt.Fprintf(env.stdout, "ephemeral runs, %s\n\n", month)
 	tw := tabwriter.NewWriter(env.stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintf(tw, "container time\t%s\n", plural(int(u.Minutes), "minute"))
-	if priceS > 0 {
+	switch {
+	case u.FreeEURMicrosTotal == 0:
+		fmt.Fprintf(tw, "free minutes\tnone: free minutes come with a membership (%s/membership)\n", runs.PortalURL)
+	case priceS > 0:
 		total, used := sMinutes(u.FreeEURMicrosTotal), sMinutes(u.FreeEURMicrosUsed)
 		fmt.Fprintf(tw, "free minutes left\t%d S-minutes of %d (= %d M or %d L minutes); %d used\n",
 			u.FreeMinutesLeft, total, u.FreeMinutesLeft/2, u.FreeMinutesLeft/4, used)
@@ -481,6 +512,15 @@ func doEphemeralUsage(ctx context.Context, env *runsEnv) error {
 		return err
 	}
 	fmt.Fprintf(env.stdout, "\n%s.\n", freeMinutesHelp)
+	if u.PaymentMethodRequired || u.CurrencyMigrationRequired {
+		fmt.Fprintln(env.stdout, "\nbefore your next ephemeral run:")
+	}
+	if u.PaymentMethodRequired {
+		fmt.Fprintf(env.stdout, "  %s\n", paymentMethodRequired)
+	}
+	if u.CurrencyMigrationRequired {
+		fmt.Fprintf(env.stdout, "  %s\n", currencyMigrationRequired)
+	}
 	return nil
 }
 
@@ -493,7 +533,7 @@ func doEphemeralSettings(ctx context.Context, env *runsEnv) error {
 		return printJSON(env.stdout, s, true)
 	}
 	tw := tabwriter.NewWriter(env.stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(tw, "monthly spend cap\t%s (€0 to %s)\n", formatCents(s.MonthlyCapEURCents), formatCents(s.Limits.MonthlyCapEURCentsMax))
+	fmt.Fprintf(tw, "monthly spend cap\t%s (%s to %s)\n", formatCents(s.MonthlyCapEURCents), formatCents(0), formatCents(s.Limits.MonthlyCapEURCentsMax))
 	fmt.Fprintf(tw, "concurrent runs\tup to %d at once (1 to %d)\n", s.MaxConcurrent, s.Limits.MaxConcurrentMax)
 	billing := "active: ephemeral usage past your free minutes is charged"
 	if !s.BillingEnabled {
@@ -565,7 +605,7 @@ func checkEphemeralFlags(opts *runOptions) error {
 	if opts.size != "" {
 		size := strings.ToLower(opts.size)
 		if sizeSpec(size) == "" {
-			return usageErrorf("--size must be s, m or l, not %q: %s. %s", runs.Truncate(runs.SanitizeLine(opts.size), 16), sizeList(), freeMinutesHelp)
+			return usageErrorf("--size must be s, m or l, not %q: %s. %s", runs.Truncate(runs.SanitizeLine(opts.size), 16), sizeList(), freeMinutesLine)
 		}
 		opts.size = size
 	}

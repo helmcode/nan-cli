@@ -104,7 +104,9 @@ Ephemeral runs (no workspace):
   --size picks the container (default s), billed per started minute (a
   14 s run is 1 minute):
 ` + sizeTable("    ") + `  Free minutes every month: Community 100, Inference 300, Premium 1000.
-  ` + freeMinutesHelp + `.
+  ` + membershipHelp + `.
+  ` + strings.ReplaceAll(freeMinutesHelp, "\n", "\n  ") + `.
+  ` + paymentHelp + `.
   While billing is not active, usage is metered and shown, not charged.
   Your minutes, cost and limits: nan ephemeral usage, nan ephemeral settings.
   Starting one needs your session (nan auth login) or a platform token with
@@ -307,11 +309,7 @@ func startRun(ctx context.Context, env *runsEnv, opts runOptions, req *api.Creat
 		case ephemeral && req.Model != nil:
 			agent += ", model " + runs.SanitizeLine(*req.Model)
 		}
-		if ephemeral {
-			fmt.Fprintf(env.stderr, "run %s queued %s (%s), Ctrl-C to detach\n", id, runPlace(run, req), agent)
-		} else {
-			fmt.Fprintf(env.stderr, "run %s queued %s (%s) — Ctrl-C to detach\n", id, runPlace(run, req), agent)
-		}
+		fmt.Fprintf(env.stderr, "run %s queued %s (%s), Ctrl-C to detach\n", id, runPlace(run, req), agent)
 	}
 	return follow(ctx, env, run.ID, 0, opts.json, true)
 }

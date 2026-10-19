@@ -36,6 +36,12 @@ type EphemeralUsage struct {
 	PricesEURMicrosPerMinute map[string]int64 `json:"prices_eur_micros_per_minute"`
 	// BillingEnabled false: usage is metered and shown, not charged.
 	BillingEnabled bool `json:"billing_enabled"`
+
+	// What blocks the next ephemeral run (false on a platform that does not
+	// send them): no payment method on file (always needed, free minutes
+	// included), or a subscription billed in USD (ephemeral runs bill in EUR).
+	PaymentMethodRequired     bool `json:"payment_method_required"`
+	CurrencyMigrationRequired bool `json:"currency_migration_required"`
 }
 
 // EphemeralLimits are the ranges the platform accepts for the settings.

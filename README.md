@@ -158,10 +158,14 @@ ephemeral`, `checkout: fresh`, `github_repo`, `model`, and an agent secret
 | `l` | 4 vCPU, 12 GiB RAM, 20 GB disk | €0.012 |
 
 A 14 s run is 1 minute. Free minutes every month: Community 100, Inference 300,
-Premium 1000. Free minutes are S-minutes: one M minute uses 2, one L minute 4
-(100 free = 100 S, 50 M or 25 L). While billing is not active, usage is
+Premium 1000; they come with a membership (accounts without one have none).
+Free minutes are S-minutes: one M minute uses 2, one L minute 4 (100 free
+minutes = 100 minutes of S, 50 of M or 25 of L). Ephemeral runs need a payment
+method on file, free minutes included. While billing is not active, usage is
 metered and shown, not charged. `nan runs ls` and `nan runs show` show each
-ephemeral run's size and cost.
+ephemeral run's size and cost. The COST column of `nan runs ls` appears only
+when an ephemeral run is listed, so scripts should read `nan runs ls --json`
+rather than the columns.
 
 ```bash
 nan run --ephemeral --repo acme/api --model glm5.3 --size m "find and fix the flaky test"

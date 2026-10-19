@@ -157,6 +157,12 @@ func TestEphemeralRefusalsSayWhatToDo(t *testing.T) {
 	}{
 		{"cap reached", credential{kind: credSession}, 402, "ephemeral_cap_reached", "", exitUnavailable,
 			[]string{"monthly cap", "Settings at https://cloud.nan.builders/settings", "nan ephemeral usage"}, nil},
+		{"currency migration", credential{kind: credSession}, 402, "currency_migration_required", "", exitUnavailable,
+			[]string{"USD", "EUR", "Settings > Billing"}, []string{"monthly cap"}},
+		{"payment method", credential{kind: credSession}, 402, "payment_method_required", "", exitUnavailable,
+			[]string{"add a payment method in the portal first", "https://cloud.nan.builders/settings", "free minutes included"}, []string{"monthly cap"}},
+		{"another 402", credential{kind: credSession}, 402, "something_new", "", exitUnavailable,
+			nil, []string{"monthly cap", "payment method", "USD"}},
 		{"token without scope", credential{kind: credEnv, bearer: testPAT}, 403, "token_scope_denied", "executor", exitAuth,
 			[]string{"runs:ephemeral", "NAN_TOKEN", "Settings > Tokens", "nan auth login"}, []string{testPAT}},
 		{"saved API key", credential{kind: credStoredKey, bearer: testKey}, 403, "token_scope_denied", "executor", exitAuth,
@@ -213,6 +219,37 @@ func TestEphemeralRefusalsOnEveryPath(t *testing.T) {
 	if exit := apiExit(other, cred); strings.Contains(exit.Error(), "runs:ephemeral") {
 		t.Errorf("a plain scope refusal reads as ephemeral: %v", exit)
 	}
+}
+
+// nan automations run of an ephemeral automation says where it runs, not
+// "queued on " with an empty workspace name.
+func TestAutomationsRunEphemeralSaysWhere(t *testing.T) {
+	resetPhase2Flags()
+	defer resetPhase2Flags()
+	h := newPhase2Harness(t, &fakePhase2{runs: &fakePlatform{ephemeral: true}})
+	if err := doAutomationsRun(context.Background(), h.env, testAutoID, nil); err != nil {
+		t.Fatal(err)
+	}
+	wantAll(t, "stderr", h.stderr.String(), "queued in an ephemeral container (size M) for acme/api, Ctrl-C to detach")
+	if strings.Contains(h.stderr.String(), "queued on ") || strings.Contains(h.stderr.String(), "—") {
+		t.Errorf("stderr = %q", h.stderr.String())
+	}
+	// A workspace automation keeps its wording.
+	h = newPhase2Harness(t, &fakePhase2{})
+	if err := doAutomationsRun(context.Background(), h.env, testAutoID, nil); err != nil {
+		t.Fatal(err)
+	}
+	wantAll(t, "stderr", h.stderr.String(), "queued on develop, Ctrl-C to detach")
+}
+
+// The announcement of a workspace run uses the same separator as the
+// others (no em-dash).
+func TestRunAnnouncementSeparator(t *testing.T) {
+	h := newHarness(t, &fakePlatform{})
+	if err := doRun(context.Background(), h.env, defaultOpts(), []string{"x"}); err != nil {
+		t.Fatal(err)
+	}
+	wantAll(t, "stderr", h.stderr.String(), "queued on develop (pi), Ctrl-C to detach")
 }
 
 // ─── views ─────────────────────────────────────────────────────────────────
@@ -395,12 +432,59 @@ func TestEphemeralUsageFacts(t *testing.T) {
 	}
 }
 
+// Free minutes come with a membership; a payment method is always needed;
+// a USD subscription has to move to EUR. The usage view says each one.
+func TestEphemeralUsageStates(t *testing.T) {
+	ctx := context.Background()
+	usage := goldenUsage(t, false)
+	noFree := bytes.Replace(bytes.Replace(bytes.Replace(usage, []byte(`"free_eur_micros_total": 900000`), []byte(`"free_eur_micros_total": 0`), 1),
+		[]byte(`"free_eur_micros_left": 741000`), []byte(`"free_eur_micros_left": 0`), 1), []byte(`"free_minutes_left": 247`), []byte(`"free_minutes_left": 0`), 1)
+	noFree = bytes.Replace(noFree, []byte(`"plan": "inference"`), []byte(`"plan": "none"`), 1)
+	env, out, _, _ := ephemeralGoldenEnv(t, sessionCred, noFree)
+	if err := doEphemeralUsage(ctx, env); err != nil {
+		t.Fatal(err)
+	}
+	wantAll(t, "usage without membership", out.String(), "none: free minutes come with a membership")
+	if strings.Contains(out.String(), "S-minutes of 0") {
+		t.Errorf("usage without membership:\n%s", out.String())
+	}
+
+	flagged := bytes.Replace(usage, []byte(`"billing_enabled": false`),
+		[]byte(`"billing_enabled": false, "payment_method_required": true, "currency_migration_required": true`), 1)
+	env, out, _, _ = ephemeralGoldenEnv(t, sessionCred, flagged)
+	if err := doEphemeralUsage(ctx, env); err != nil {
+		t.Fatal(err)
+	}
+	wantAll(t, "usage needing action", out.String(), "add a payment method in the portal first", "free minutes included",
+		"your subscription bills in USD; ephemeral runs bill in EUR", "Settings > Billing")
+
+	env, out, _, _ = ephemeralGoldenEnv(t, sessionCred, usage)
+	if err := doEphemeralUsage(ctx, env); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "payment method in the portal first") || strings.Contains(out.String(), "USD") {
+		t.Errorf("usage with nothing to do asks for something:\n%s", out.String())
+	}
+}
+
+// A help line stays within 80 columns (the S-minutes sentence included).
+func TestEphemeralHelpFitsTheTerminal(t *testing.T) {
+	for name, text := range map[string]string{"nan ephemeral": ephemeralCmd.Long, "nan ephemeral usage": ephemeralUsageCmd.Long,
+		"nan ephemeral settings": ephemeralSettingsCmd.Long, "nan run": runCmd.Long} {
+		for _, l := range strings.Split(text, "\n") {
+			if n := len([]rune(l)); n > 80 {
+				t.Errorf("%s --help: a %d-column line: %q", name, n, l)
+			}
+		}
+	}
+}
+
 func TestEphemeralSettingsIsReadOnly(t *testing.T) {
 	env, out, errOut, seen := ephemeralGoldenEnv(t, sessionCred, nil)
 	if err := doEphemeralSettings(context.Background(), env); err != nil {
 		t.Fatal(err)
 	}
-	wantAll(t, "settings", out.String(), "€100.00 (€0 to €1000.00)", "up to 50 at once (1 to 50)", "not active yet")
+	wantAll(t, "settings", out.String(), "€100.00 (€0.00 to €1000.00)", "up to 50 at once (1 to 50)", "not active yet")
 	wantAll(t, "settings stderr", errOut.String(), "change these in the browser", "https://cloud.nan.builders/settings")
 	for _, r := range seen() {
 		if !strings.HasPrefix(r, "GET ") {
@@ -604,7 +688,7 @@ func TestRunCostLabels(t *testing.T) {
 
 // The owner asked for this sentence wherever free minutes are shown.
 func TestEphemeralHelpExplainsSMinutes(t *testing.T) {
-	const want = "Free minutes are S-minutes: one M minute uses 2, one L minute 4 (100 free = 100 S, 50 M or 25 L)"
+	const want = "Free minutes are S-minutes: one M minute uses 2, one L minute 4\n(100 free minutes = 100 minutes of S, 50 of M or 25 of L)"
 	if freeMinutesHelp != want {
 		t.Fatalf("freeMinutesHelp = %q", freeMinutesHelp)
 	}
@@ -614,7 +698,7 @@ func TestEphemeralHelpExplainsSMinutes(t *testing.T) {
 		"nan run":                runCmd.Long,
 		"nan automations create": automationsCreateCmd.Long,
 	} {
-		if !strings.Contains(text, want) {
+		if !strings.Contains(strings.Join(strings.Fields(text), " "), strings.Join(strings.Fields(want), " ")) {
 			t.Errorf("%s --help does not explain S-minutes", name)
 		}
 		if strings.Contains(text, "—") {
@@ -626,14 +710,15 @@ func TestEphemeralHelpExplainsSMinutes(t *testing.T) {
 	}
 	wantAll(t, "nan run --help", runCmd.Long, "--ephemeral --repo OWNER/NAME --model ID", "HTTP and HTTPS", "public",
 		"GITHUB_TOKEN", "1 vCPU, 4 GiB RAM, 10 GB disk", "€0.012 per minute", "14 s run is 1 minute", "runs:ephemeral",
-		"metered and shown, not charged", "nan ephemeral usage", "Docs: https://nan.builders/docs/ephemeral-runs", runsDocs)
+		"metered and shown, not charged", "nan ephemeral usage", "come with a membership", "payment method", "Docs: https://nan.builders/docs/ephemeral-runs", runsDocs)
 	wantAll(t, "nan run examples", runCmd.Example, "nan run --ephemeral --repo acme/api --model glm5.3 --size m")
 	for name, c := range map[string]string{"nan ephemeral": ephemeralCmd.Long, "nan ephemeral usage": ephemeralUsageCmd.Long,
 		"nan ephemeral settings": ephemeralSettingsCmd.Long} {
 		wantAll(t, name+" --help", c, "Docs: https://nan.builders/docs/ephemeral-runs")
 	}
 	wantAll(t, "nan ephemeral settings --help", ephemeralSettingsCmd.Long, "read only", "browser", ephemeralSettingsURL)
-	wantAll(t, "nan ephemeral --help", ephemeralCmd.Long, "Community 100, Inference 300, Premium", "€100", "50", "nan auth login")
+	wantAll(t, "nan ephemeral --help", ephemeralCmd.Long, "Community 100, Inference 300, Premium", "€100", "50", "nan auth login",
+		"without one have none", "payment method on file", "free minutes included")
 	wantAll(t, "nan automations create --help", automationsCreateCmd.Long, "executor: ephemeral", "size: m", "checkout: fresh", "runs:ephemeral")
 	for _, f := range []string{"ephemeral", "repo", "size"} {
 		if runCmd.Flags().Lookup(f) == nil {

@@ -10,4 +10,5 @@ prices per started minute (a 14 s run is 1 minute):
   M  2 vCPU, 8 GiB RAM, 16 GB disk   €0.006  a minute uses 2 free S-minutes
   L  4 vCPU, 12 GiB RAM, 20 GB disk  €0.012  a minute uses 4 free S-minutes
 
-Free minutes are S-minutes: one M minute uses 2, one L minute 4 (100 free = 100 S, 50 M or 25 L).
+Free minutes are S-minutes: one M minute uses 2, one L minute 4
+(100 free minutes = 100 minutes of S, 50 of M or 25 of L).
