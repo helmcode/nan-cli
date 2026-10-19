@@ -628,6 +628,10 @@ func TestEphemeralHelpExplainsSMinutes(t *testing.T) {
 		"GITHUB_TOKEN", "1 vCPU, 4 GiB RAM, 10 GB disk", "€0.012 per minute", "14 s run is 1 minute", "runs:ephemeral",
 		"metered and shown, not charged", "nan ephemeral usage")
 	wantAll(t, "nan run examples", runCmd.Example, "nan run --ephemeral --repo acme/api --model glm5.3 --size m")
+	for name, c := range map[string]string{"nan ephemeral": ephemeralCmd.Long, "nan ephemeral usage": ephemeralUsageCmd.Long,
+		"nan ephemeral settings": ephemeralSettingsCmd.Long} {
+		wantAll(t, name+" --help", c, "Docs: https://nan.builders/docs/ephemeral-runs")
+	}
 	wantAll(t, "nan ephemeral settings --help", ephemeralSettingsCmd.Long, "read only", "browser", ephemeralSettingsURL)
 	wantAll(t, "nan ephemeral --help", ephemeralCmd.Long, "Community 100, Inference 300, Premium", "€100", "50", "nan auth login")
 	wantAll(t, "nan automations create --help", automationsCreateCmd.Long, "executor: ephemeral", "size: m", "checkout: fresh", "runs:ephemeral")

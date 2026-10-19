@@ -24,7 +24,7 @@ import (
 // started minute by container size, with free minutes every month.
 
 // ephemeralDocs is where ephemeral runs are explained.
-const ephemeralDocs = "https://nan.builders/docs/runs"
+const ephemeralDocs = "https://nan.builders/docs/ephemeral-runs"
 
 // ephemeralSettingsURL is where the member changes their ephemeral limits:
 // writing them needs a browser sign-in.
