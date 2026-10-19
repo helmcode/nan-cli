@@ -103,7 +103,7 @@ Ephemeral runs (no workspace):
   and --no-worktree do not apply.
   --size picks the container (default s), billed per started minute (a
   14 s run is 1 minute):
-` + sizeTable() + `  Free minutes every month: Community 100, Inference 300, Premium 1000.
+` + sizeTable("    ") + `  Free minutes every month: Community 100, Inference 300, Premium 1000.
   ` + freeMinutesHelp + `.
   While billing is not active, usage is metered and shown, not charged.
   Your minutes, cost and limits: nan ephemeral usage, nan ephemeral settings.
@@ -190,7 +190,7 @@ func init() {
 	f.StringVar(&runOpts.workspace, "ws", "", "Workspace to run in (default: your only workspace)")
 	f.BoolVar(&runOpts.ephemeral, "ephemeral", false, "Run in a fresh, throwaway container instead of a workspace (needs --repo and --model)")
 	f.StringVar(&runOpts.repo, "repo", "", "With --ephemeral: the public GitHub repository to clone, `OWNER/NAME`")
-	f.StringVar(&runOpts.size, "size", "", "With --ephemeral: the container, s, m or l (default s; see Ephemeral runs below)")
+	f.StringVar(&runOpts.size, "size", "", "With --ephemeral: the container, s, m or l (default s; see Ephemeral runs above)")
 	f.StringVar(&runOpts.agent, "agent", "pi", "Agent to run: pi, pi_gentle (Pi + Gentle Shell) or hermes, if the workspace has it installed")
 	f.StringVar(&runOpts.model, "model", "", "Model for the agent (default: the agent's own; required with --byok-secret and --ephemeral)")
 	f.StringVar(&runOpts.byokSecret, "byok-secret", "", "Run on your own provider key: the `NAME` of a provider key secret saved in the portal (never the key itself); needs --model")
@@ -413,7 +413,7 @@ func follow(ctx context.Context, env *runsEnv, id string, after int64, asJSON, d
 		}
 		renderer.Flush()
 		safeID := runs.SanitizeLine(id)
-		fmt.Fprintf(env.stderr, "\ndetached — run %s goes on in the workspace\n", safeID)
+		fmt.Fprintf(env.stderr, "\ndetached — run %s goes on at nan.builders\n", safeID)
 		printFollowHints(env.stderr, safeID)
 		fmt.Fprintf(env.stderr, "press Ctrl-C again within %s to cancel it now\n", cancelWindow)
 
@@ -443,7 +443,7 @@ func follow(ctx context.Context, env *runsEnv, id string, after int64, asJSON, d
 func streamExit(err error, env *runsEnv, id string) error {
 	safeID := runs.SanitizeLine(id)
 	if errors.Is(err, api.ErrStreamLost) {
-		return exitf(exitUnavailable, "%s — run %s goes on in the workspace; follow it with: nan runs logs %s -f", runs.SanitizeLine(err.Error()), safeID, safeID)
+		return exitf(exitUnavailable, "%s — run %s goes on at nan.builders; follow it with: nan runs logs %s -f", runs.SanitizeLine(err.Error()), safeID, safeID)
 	}
 	exit := notFound(err, safeID, env.cred)
 	if exit.Code == exitUnavailable {

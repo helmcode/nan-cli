@@ -106,6 +106,19 @@ func TestRunURLFallsBackWithoutAWorkspaceID(t *testing.T) {
 	}
 }
 
+// An ephemeral run has no workspace: its page is /runs/<id>.
+func TestRunURLOfAnEphemeralRun(t *testing.T) {
+	run := awaitingRun(t)
+	run.Executor, run.Workspace = api.ExecutorEphemeral, api.RunWorkspace{}
+	if got := RunURL(run); got != "https://cloud.nan.builders/runs/"+strings.ToLower(run.ID) {
+		t.Errorf("RunURL = %q", got)
+	}
+	run.ID = "../../evil"
+	if got := RunURL(run); got != "https://cloud.nan.builders/automations?tab=approvals" {
+		t.Errorf("RunURL with a bad id = %q", got)
+	}
+}
+
 func TestPhase2Events(t *testing.T) {
 	var b bytes.Buffer
 	r := &Renderer{Out: &b}

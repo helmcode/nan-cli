@@ -306,7 +306,7 @@ var ephemeralCmd = &cobra.Command{
 a workspace: start one with nan run --ephemeral --repo OWNER/NAME --model ID.
 
 Sizes, billed per started minute (a 14 s run is 1 minute):
-` + sizeTable() + `
+` + sizeTable("  ") + `
 Free minutes every calendar month: Community 100, Inference 300, Premium
 1000. ` + freeMinutesHelp + `.
 While billing is not active, usage is metered and shown, not charged:
@@ -376,12 +376,13 @@ func init() {
 	ephemeralSettingsCmd.Flags().BoolVar(&ephemeralSettingsJSON, "json", false, "Print the API's settings object as JSON")
 }
 
-// sizeTable is the sizes and their prices, for help text.
-func sizeTable() string {
+// sizeTable is the sizes and their prices, for help text, each line
+// starting with indent.
+func sizeTable(indent string) string {
 	prices := map[string]string{api.SizeS: "€0.003", api.SizeM: "€0.006", api.SizeL: "€0.012"}
 	var b strings.Builder
 	for _, s := range ephemeralSizes {
-		fmt.Fprintf(&b, "  %-2s %-32s %s per minute\n", s.name, s.spec, prices[s.name])
+		fmt.Fprintf(&b, "%s%-2s %-32s %s per minute\n", indent, s.name, s.spec, prices[s.name])
 	}
 	return b.String()
 }
