@@ -473,7 +473,7 @@ func doEphemeralUsage(ctx context.Context, env *runsEnv) error {
 		if !ok {
 			continue
 		}
-		fmt.Fprintf(tw, "  %s\t%s\t%s\tuses %s\n", strings.ToUpper(s.name), s.spec, formatEUR(price),
+		fmt.Fprintf(tw, "  %s\t%s\t%s\ta minute uses %s\n", strings.ToUpper(s.name), s.spec, formatEUR(price),
 			plural(s.sMinutes, "free S-minute"))
 	}
 	if err := tw.Flush(); err != nil {

@@ -104,8 +104,11 @@ id=$(nan run --detach "upgrade the dependencies")
 |---|---|---|
 | `--ws NAME` | your only workspace | Workspace to run in. Required when you have more than one. |
 | `--agent pi\|pi_gentle\|hermes` | `pi` | Agent to run: `pi_gentle` is Pi with Gentle Shell. The workspace must have it installed. |
-| `--model M` | the agent's own | Model for the agent. Required with `--byok-secret`. |
+| `--model M` | the agent's own | Model for the agent. Required with `--byok-secret` and `--ephemeral`. |
 | `--byok-secret NAME` | NaN inference | Run on your own provider key: the name of a provider key secret saved in the portal. See below. |
+| `--ephemeral` | | Run in a fresh, throwaway container instead of a workspace. See below. |
+| `--repo OWNER/NAME` | | With `--ephemeral`: the public GitHub repository the container clones. |
+| `--size s\|m\|l` | `s` | With `--ephemeral`: the container size. |
 | `--cwd PATH` | `/home/nan` | Folder in the workspace. |
 | `--worktree` / `--no-worktree` | auto | Work on a separate branch, or in the folder itself. See below. |
 | `--timeout D` | `30m` | Stop the run after this long, `1m` to `2h`. |
@@ -135,6 +138,34 @@ Hermes cannot use an Anthropic key yet. Docs: <https://nan.builders/docs/runs>.
 ```bash
 nan secrets ls                                               # KIND provider_key, PROVIDER, BASE URL
 nan run --byok-secret ANTHROPIC_KEY --model claude-sonnet-4-5 "fix the flaky test"
+```
+
+**Ephemeral runs (no workspace).** `--ephemeral --repo OWNER/NAME --model ID`
+runs the agent in a fresh, throwaway container: it clones the repository, runs
+the agent with the model you name, streams like any run, and is destroyed at
+the end. The container can only reach the internet over HTTP and HTTPS (no
+SSH, no SMTP). A run started from the CLI gets no secrets, so the repository
+has to be public; for a private one, use an ephemeral automation (`executor:
+ephemeral`, `checkout: fresh`, `github_repo`, `model`, and an agent secret
+`GITHUB_TOKEN`). Starting one needs your session or a platform token with the
+`runs:ephemeral` scope; API keys cannot.
+
+| Size | Container | Price per started minute |
+|---|---|---|
+| `s` (default) | 1 vCPU, 4 GiB RAM, 10 GB disk | €0.003 |
+| `m` | 2 vCPU, 8 GiB RAM, 16 GB disk | €0.006 |
+| `l` | 4 vCPU, 12 GiB RAM, 20 GB disk | €0.012 |
+
+A 14 s run is 1 minute. Free minutes every month: Community 100, Inference 300,
+Premium 1000. Free minutes are S-minutes: one M minute uses 2, one L minute 4
+(100 free = 100 S, 50 M or 25 L). While billing is not active, usage is
+metered and shown, not charged. `nan runs ls` and `nan runs show` show each
+ephemeral run's size and cost.
+
+```bash
+nan run --ephemeral --repo acme/api --model glm5.3 --size m "find and fix the flaky test"
+nan ephemeral usage      # this month's minutes, cost, free S-minutes left, prices
+nan ephemeral settings   # your monthly spend cap and concurrent runs (change them in the browser)
 ```
 
 **Queue.** If the workspace is already running as many runs as its size
@@ -278,8 +309,8 @@ branch on it without parsing text:
 | 4 | the workspace is not set up for it: agent not installed, no inference key, bad configuration |
 | 10 | awaiting approval: an automation run whose proposed actions wait for you (`nan runs proposal <id>`, approve in the portal) |
 | 64 | usage error (also: more than one workspace and no `--ws`) |
-| 65 | not signed in, session expired, or not allowed |
-| 69 | nan.builders unavailable, or the stream was lost after retries (the run goes on; the id is printed) |
+| 65 | not signed in, session expired, or not allowed (also: a token without `runs:ephemeral`, ephemeral runs not available to you) |
+| 69 | nan.builders unavailable, the stream was lost after retries (the run goes on; the id is printed), or an ephemeral run would pass your monthly spend cap |
 | 75 | `--detach`, or Ctrl-C: the run was accepted and is still going |
 
 Full reference, including the event types `nan runs logs --json` prints (one
