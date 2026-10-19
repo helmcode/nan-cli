@@ -121,6 +121,32 @@ type Run struct {
 	GitHubRepo    *string     `json:"github_repo,omitempty"`
 	TriggerDepth  int         `json:"trigger_depth,omitempty"`
 	Secrets       []RunSecret `json:"secrets,omitempty"`
+
+	// Ephemeral executors: where the run executes ("workspace" or
+	// "ephemeral"; absent on an older platform), the container size of an
+	// ephemeral run (s, m or l) and its metered cost (nil until metered,
+	// and always nil for workspace runs). An ephemeral run has no
+	// workspace: the platform sends "workspace": null.
+	Executor string   `json:"executor,omitempty"`
+	Size     *string  `json:"size,omitempty"`
+	Cost     *RunCost `json:"cost,omitempty"`
+}
+
+// Executors, as the platform names them.
+const (
+	ExecutorWorkspace = "workspace"
+	ExecutorEphemeral = "ephemeral"
+)
+
+// Ephemeral reports whether the run executes in an ephemeral container.
+func (r *Run) Ephemeral() bool { return r != nil && r.Executor == ExecutorEphemeral }
+
+// RunCost is an ephemeral run's metered price: the gross price of its
+// billed (started) minutes, before the month's free minutes are applied.
+type RunCost struct {
+	EUR           float64 `json:"eur"`
+	EURMicros     int64   `json:"eur_micros"`
+	BilledSeconds int64   `json:"billed_seconds"`
 }
 
 // RunSecret is a secret a run received: its env name and who saw it.
@@ -155,7 +181,8 @@ func (r *Run) UnmarshalJSON(b []byte) error {
 // CreateRunRequest is the body of POST /v1/runs. Pointers are the fields the
 // platform defaults when they are left out, which is not the same as zero.
 type CreateRunRequest struct {
-	Workspace      string  `json:"workspace"`
+	// Workspace is left out for an ephemeral run, which has none.
+	Workspace      string  `json:"workspace,omitempty"`
 	Agent          string  `json:"agent"`
 	Prompt         string  `json:"prompt"`
 	Cwd            *string `json:"cwd,omitempty"`
@@ -167,6 +194,13 @@ type CreateRunRequest struct {
 	// Inference is left out for NaN inference (the platform's default).
 	// With BYOK the model goes here, never in Model.
 	Inference *RunInference `json:"inference,omitempty"`
+
+	// Executor "ephemeral" runs the agent in a fresh container of Size
+	// (s, m or l; the platform defaults to s) on a fresh checkout of
+	// GitHubRepo, with no workspace. Left out: a workspace run.
+	Executor   string  `json:"executor,omitempty"`
+	Size       string  `json:"size,omitempty"`
+	GitHubRepo *string `json:"github_repo,omitempty"`
 }
 
 // RunInference is the inference choice of POST /v1/runs: {"source":"byok"}

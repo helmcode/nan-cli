@@ -1,0 +1,10 @@
+{
+  "billing_enabled": false,
+  "limits": {
+    "max_concurrent_max": 50,
+    "monthly_cap_eur_cents_max": 100000
+  },
+  "max_concurrent": 50,
+  "monthly_cap_eur": 100,
+  "monthly_cap_eur_cents": 10000
+}
