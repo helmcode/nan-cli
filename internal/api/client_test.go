@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -54,6 +55,35 @@ func TestKeyStatusSaysWhenThereIsNoKey(t *testing.T) {
 	}
 	if status.Exists {
 		t.Error("an account with no key reads as having one")
+	}
+}
+
+// /api/auth/me also carries the platform's own workings: feature flags,
+// entitlements, roles, the deployment it runs in. None of it is the member's
+// to see, and `nan me` prints whatever Me holds, so Me holds only what was
+// chosen and the rest is never decoded.
+func TestMeReadsOnlyWhatIsShown(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"email":"a@b.co","tier":"inference","graceUntil":null,` +
+			`"userUUID":"u-1","discordId":"d-1","namespace":"ns-1","isAdmin":true,"roles":["x"],` +
+			`"environment":"prod","inferenceProfile":"litellm-prod","workspaces_beta":true,` +
+			`"features":{"ephemeral":true},"entitlements":{"apps":true},"profile":{"fullName":"A"}}`))
+	}))
+	defer srv.Close()
+
+	me, err := New("t", WithBaseURL(srv.URL)).Me(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if me.Email != "a@b.co" || me.Tier != "inference" || me.GraceUntil != "" {
+		t.Errorf("me parsed wrong: %+v", me)
+	}
+	out, err := json.Marshal(me)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(out), `{"email":"a@b.co","tier":"inference"}`; got != want {
+		t.Errorf("nan me would print %s, want %s", got, want)
 	}
 }
 

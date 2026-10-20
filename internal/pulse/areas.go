@@ -2,7 +2,6 @@ package pulse
 
 import (
 	"fmt"
-	"sort"
 
 	"github.com/nxssie/nan-cli/internal/ui"
 )
@@ -47,7 +46,6 @@ type row struct {
 	id string
 	// what the row is: at most one of these is set.
 	model    string
-	field    string
 	sig      *signal
 	quick    *quickAction
 	newModel string
@@ -88,7 +86,8 @@ func (m model) rows(a area) []row {
 	s := m.snap
 	switch a {
 	case areaHome:
-		var out []row
+		quick := m.quickActions()
+		out := make([]row, 0, len(m.sigs)+len(m.newModels)+len(quick))
 		for i := range m.sigs {
 			sg := m.sigs[i]
 			out = append(out, row{id: "sig:" + sg.say, sig: &sg})
@@ -96,25 +95,21 @@ func (m model) rows(a area) []row {
 		for _, name := range m.newModels {
 			out = append(out, row{id: "new:" + name, newModel: name})
 		}
-		for _, q := range m.quickActions() {
+		for _, q := range quick {
 			out = append(out, row{id: "do:" + q.label, quick: &q})
 		}
 		return out
 
 	case areaProfile:
-		keys := make([]string, 0, len(s.me))
-		for k, v := range s.me {
-			// A nested object is the platform's own structure, not a fact
-			// about the member; it would print as a Go map.
-			if _, nested := v.(map[string]any); nested {
-				continue
-			}
-			keys = append(keys, k)
+		if s.me == nil {
+			return nil
 		}
-		sort.Strings(keys)
-		out := make([]row, 0, len(keys))
-		for _, k := range keys {
-			out = append(out, row{id: "field:" + k, field: k, cells: []string{humanKey(k), censor(k, fmt.Sprintf("%v", s.me[k]))}})
+		out := []row{
+			{id: "field:email", cells: []string{"Email", shorten(s.me.Email)}},
+			{id: "field:plan", cells: []string{"Plan", s.me.Tier}},
+		}
+		if s.me.GraceUntil != "" {
+			out = append(out, row{id: "field:grace", cells: []string{"Membership ends", day(s.me.GraceUntil)}})
 		}
 		return out
 

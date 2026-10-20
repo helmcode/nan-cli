@@ -67,7 +67,7 @@ shows every key and `q` quits.
 | Area | What it shows |
 |---|---|
 | **Home** | What needs you (sign in, a missing key, a tool not pointed at NaN, a newer release), new models, and shortcuts |
-| **Profile** | Your nan.builders account details, identifiers shortened |
+| **Profile** | Your email (shortened), your plan, and when the membership ends if it has |
 | **Usage** | Token usage over the last 24 hours, 30 days and all time, by model |
 | **Models** | What your key can call, and your usage of each |
 | **Costs** | Estimated cost of that usage on other providers |

@@ -6,19 +6,27 @@ import (
 	"strconv"
 )
 
-// Me is the member as the platform describes them. It stays a map because
-// the dashboard's Profile shows whatever the platform sends, and `nan me`
-// prints it unchanged: a field the platform adds tomorrow appears in both
-// without a release of this CLI.
-type Me map[string]any
+// Me is what this CLI shows of the signed-in member, and all it reads of
+// /api/auth/me. The platform's answer also carries its own workings - feature
+// flags, entitlements, roles, the deployment it runs in - which are not the
+// member's business and not this CLI's to print, so they are never decoded:
+// a field the platform adds tomorrow stays out until somebody chooses it.
+type Me struct {
+	Email string `json:"email"`
+	// Tier is the plan: free, inference and so on.
+	Tier string `json:"tier"`
+	// GraceUntil is set only while a membership that ended keeps its apps
+	// and data, RFC 3339.
+	GraceUntil string `json:"graceUntil,omitempty"`
+}
 
 // Me fetches the signed-in member.
-func (c *Client) Me(ctx context.Context) (Me, error) {
+func (c *Client) Me(ctx context.Context) (*Me, error) {
 	var out Me
 	if err := c.get(ctx, "/api/auth/me", &out); err != nil {
 		return nil, err
 	}
-	return out, nil
+	return &out, nil
 }
 
 // Count is a token count off the wire. The platform sends numbers, and a

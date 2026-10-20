@@ -19,7 +19,7 @@ import (
 // would spend its first seconds saying nothing needs you, and then change
 // its mind.
 type snapshot struct {
-	me        api.Me
+	me        *api.Me
 	usage     *api.Usage
 	keyStatus *api.KeyStatus
 	models    []modelInfo

@@ -27,12 +27,10 @@ func usagePeriod(total float64, models ...api.ModelUsage) api.Period {
 func demoSnapshot() snapshot {
 	return snapshot{
 		token: "t",
-		me: api.Me{
-			"email":     "cristian@example.com",
-			"userId":    "u_1234567890",
-			"username":  "crstian",
-			"createdAt": "2025-08-02T10:00:00Z",
-			"settings":  map[string]any{"theme": "dark"},
+		me: &api.Me{
+			Email:      "cristian@example.com",
+			Tier:       "inference",
+			GraceUntil: "2026-11-20T10:00:00Z",
 		},
 		usage: &api.Usage{
 			Last24h: usagePeriod(3e6,
@@ -222,7 +220,7 @@ func TestEachAreaShowsItsThings(t *testing.T) {
 	m, _ := demoModel(t, 140, 44)
 	cases := map[string][]string{
 		"1": {"welcome to", "nan.builders", "Nothing needs you right now", "Set up your tools", "240.0M"},
-		"2": {"Username", "crstia...", "User Id", "u_1234...", "Created At"},
+		"2": {"Email", "cristi...", "Plan", "inference", "Membership ends", "20 Nov 2026"},
 		"3": {"glm5.3-flash", "deepseek-v4-flash", "240.0M", "67%"},
 		"4": {"glm5.3-flash", "chat", "chat · premium", "embedding"},
 		"5": {"Claude Opus 5.5", "Anthropic", "GPT-6 Luna", "No per-token charges"},
@@ -239,36 +237,23 @@ func TestEachAreaShowsItsThings(t *testing.T) {
 	}
 }
 
-// Nested objects are the platform's own structure, not facts about the
-// member, and identifiers are cut short: a screen is shared and recorded.
-func TestProfileCutsIdentifiersShort(t *testing.T) {
+// Profile is the email, cut short because a screen is shared and recorded,
+// and the plan: nothing else the platform says about the account.
+func TestProfileShowsTheAccountAndNothingElse(t *testing.T) {
 	m, _ := demoModel(t, 140, 40)
 	out := screen(press(t, m, keyOf("2")))
-	if strings.Contains(out, "cristian@example.com") || strings.Contains(out, "u_1234567890") {
-		t.Errorf("an identifier is on screen whole:\n%s", out)
+	if strings.Contains(out, "cristian@example.com") {
+		t.Errorf("the email is on screen whole:\n%s", out)
 	}
-	if strings.Contains(out, "map[") || strings.Contains(out, "Settings") {
-		t.Errorf("a nested object is on screen:\n%s", out)
+	if got := shorten("abc"); got != "..." {
+		t.Errorf("a short identifier is %q", got)
 	}
-	if got := censor("email", "abc"); got != "..." {
-		t.Errorf("a short sensitive value is %q", got)
+	if got := len(m.rows(areaProfile)); got != 3 {
+		t.Errorf("Profile has %d rows, want email, plan and membership end", got)
 	}
-	if got := censor("plan", "membership"); got != "membership" {
-		t.Errorf("an ordinary value was cut: %q", got)
-	}
-}
-
-func TestHumanKeyKeepsAcronymsWhole(t *testing.T) {
-	for in, want := range map[string]string{
-		"userUUID":     "User UUID",
-		"createdAt":    "Created At",
-		"discord_id":   "Discord id",
-		"APIKeyStatus": "API Key Status",
-		"x":            "X",
-	} {
-		if got := humanKey(in); got != want {
-			t.Errorf("humanKey(%q) = %q, want %q", in, got, want)
-		}
+	m.snap.me.GraceUntil = ""
+	if got := len(m.rows(areaProfile)); got != 2 {
+		t.Errorf("a live membership still shows when it ends (%d rows)", got)
 	}
 }
 
