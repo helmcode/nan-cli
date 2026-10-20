@@ -1,0 +1,59 @@
+{
+  "agent": "pi",
+  "agent_finished_at": null,
+  "apply_run_ids": [],
+  "approval": null,
+  "approval_kinds": null,
+  "automation_id": null,
+  "cancel_requested": false,
+  "checkout": null,
+  "created_at": "2026-10-10T09:00:00Z",
+  "cwd": "/home/nan/projects/api",
+  "error": null,
+  "error_code": null,
+  "exit_code": null,
+  "finished_at": null,
+  "git_isolation": null,
+  "github_repo": null,
+  "id": "6f1c2a9b-0000-4000-8000-000000000001",
+  "inference": {
+    "model": "claude-sonnet-4-5",
+    "provider": "anthropic",
+    "secret": "ANTHROPIC_KEY",
+    "source": "byok"
+  },
+  "last_seq": 42,
+  "model": "claude-sonnet-4-5",
+  "object": "run",
+  "parent_run_id": null,
+  "phase": "run",
+  "prompt": "review PR 42 in full",
+  "prompt_preview": "review PR 42",
+  "queue_position": null,
+  "result": {
+    "actions_applied": [],
+    "artifacts": [],
+    "branch": "nan-run/6f1c2a9b",
+    "changed_files": 3,
+    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "status": "succeeded",
+    "summary": "done"
+  },
+  "secrets": [],
+  "started_at": "2026-10-10T09:00:01Z",
+  "state": "succeeded",
+  "sticky_pr_comment": false,
+  "superseded_by": null,
+  "timeout_seconds": 1800,
+  "trigger": "cli",
+  "trigger_depth": 0,
+  "usage": {
+    "source": "byok",
+    "tokens_in": 12840,
+    "tokens_out": 1630
+  },
+  "workspace": {
+    "id": "11111111-2222-4333-8444-555555555555",
+    "name": "develop"
+  }
+}

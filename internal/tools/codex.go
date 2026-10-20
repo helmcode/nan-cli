@@ -99,16 +99,29 @@ wire_api = "responses"
 // and leave with the disconnect - a web_search = "disabled" at the root
 // would stay behind and take search from the member's OpenAI sessions too.
 func writeCodexProfiles(codexHome string) error {
+	// Starting from none, so a model the cluster retired does not leave its
+	// profile behind to answer 401 on `--profile`.
+	if err := removeCodexProfiles(codexHome); err != nil {
+		return err
+	}
+	models, err := codexCatalog()
+	if err != nil {
+		return err
+	}
+	if err := writeConfigFile(filepath.Join(codexHome, codexCatalogFile), models); err != nil {
+		return err
+	}
 	for _, m := range catalog.ChatModels() {
 		body := fmt.Sprintf(`# Written by the NaN CLI. Disconnecting Codex removes it.
 model = %q
 model_provider = "nan"
 model_context_window = %d
+model_catalog_json = %q
 web_search = "disabled"
 
 [features]
 multi_agent = false
-`, m.ID, m.Context)
+`, m.ID, m.Context, codexCatalogPath(codexHome))
 		path := filepath.Join(codexHome, codexProfileName(m.ID)+".config.toml")
 		if err := writeConfigFile(path, []byte(body)); err != nil {
 			return err
@@ -126,7 +139,8 @@ func codexProfileName(id string) string {
 	return "nan-" + strings.ReplaceAll(id, ".", "")
 }
 
-// Takes back only the files this CLI wrote, by the prefix it wrote them under.
+// Takes back only the files this CLI wrote: the profiles, by the prefix it
+// wrote them under, and the catalogue they point at.
 func removeCodexProfiles(codexHome string) error {
 	entries, err := os.ReadDir(codexHome)
 	if err != nil {
@@ -134,7 +148,8 @@ func removeCodexProfiles(codexHome string) error {
 	}
 	for _, e := range entries {
 		name := e.Name()
-		if !e.IsDir() && strings.HasPrefix(name, "nan-") && strings.HasSuffix(name, ".config.toml") {
+		ours := strings.HasPrefix(name, "nan-") && strings.HasSuffix(name, ".config.toml")
+		if !e.IsDir() && (ours || name == codexCatalogFile) {
 			if err := os.Remove(filepath.Join(codexHome, name)); err != nil && !os.IsNotExist(err) {
 				return err
 			}

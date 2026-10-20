@@ -86,8 +86,13 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # -race and -shuffle because the suite shares package state (the cobra
+      # tree, swappable package vars, time.Local) and both a race on it and a
+      # test that only passed after another one went unseen until #55. A
+      # shuffle failure prints its -test.shuffle seed: rerun with that seed to
+      # reproduce the order.
       - name: Test
-        run: go test ./...
+        run: go test -race -shuffle=on ./...
 
       # The release builds four targets from this same source. A build that
       # only works on the runner's own platform is worth knowing about before

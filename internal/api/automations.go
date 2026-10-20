@@ -17,13 +17,29 @@ type SecretAssignment struct {
 	Exposure string `json:"exposure"`
 }
 
+// Inference is where a run's or an automation's model calls go: NaN's own
+// inference ({"source":"nan"}), or the member's provider key
+// ({"source":"byok"}, BYOK) with the key's provider, the secret's name and
+// the model. The key itself is never part of it.
 type Inference struct {
-	Source string `json:"source"`
+	Source   string  `json:"source"`
+	Provider *string `json:"provider,omitempty"`
+	Secret   *string `json:"secret,omitempty"`
+	Model    *string `json:"model,omitempty"`
 }
 
-// Automation mirrors the automation object of /v1/automations. It is the
-// member's own configuration, read here and never written: creating and
-// editing automations happens in the portal.
+// Inference sources, as the platform names them.
+const (
+	InferenceNaN  = "nan"
+	InferenceBYOK = "byok"
+)
+
+// BYOK reports whether the inference is the member's own provider key.
+func (in *Inference) BYOK() bool { return in != nil && in.Source == InferenceBYOK }
+
+// Automation mirrors the automation object of /v1/automations: the
+// member's own configuration. Writes send the member's own file as it is
+// (see CreateAutomation), so this type only has to read what comes back.
 type Automation struct {
 	ID                 string             `json:"id"`
 	Object             string             `json:"object,omitempty"`
@@ -47,6 +63,7 @@ type Automation struct {
 	MaxTriggerDepth    int                `json:"max_trigger_depth"`
 	Enabled            bool               `json:"enabled"`
 	DisabledReason     *string            `json:"disabled_reason"`
+	UpdatedBy          string             `json:"updated_by,omitempty"`
 	CreatedAt          string             `json:"created_at"`
 	UpdatedAt          string             `json:"updated_at"`
 }
@@ -57,8 +74,8 @@ type AutomationList struct {
 }
 
 // Trigger is a webhook or a schedule of an automation. The webhook URL and
-// its signing secret are shown once, in the portal, and never again: only
-// the URL's prefix is here.
+// its signing secret are shown once, when the trigger is created or rotated
+// (TriggerSecrets), and never again: only the URL's prefix is here.
 type Trigger struct {
 	ID              string  `json:"id"`
 	Kind            string  `json:"kind"`
@@ -72,6 +89,7 @@ type Trigger struct {
 	LastOutcome     *string `json:"last_outcome,omitempty"`
 	PrevSecretUntil *string `json:"prev_secret_until,omitempty"`
 	CreatedAt       string  `json:"created_at,omitempty"`
+	UpdatedBy       string  `json:"updated_by,omitempty"`
 }
 
 type TriggerList struct {

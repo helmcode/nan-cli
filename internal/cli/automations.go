@@ -34,51 +34,46 @@ var (
 	autoDeliveryJSON  bool
 )
 
-// portalOnlyAutomationVerbs are the writes a member may reach for. Each one
-// answers with where to do it instead of "unknown command".
-var portalOnlyAutomationVerbs = map[string]bool{
-	"create": true, "new": true, "add": true, "edit": true, "update": true, "set": true,
-	"rm": true, "delete": true, "remove": true, "enable": true, "disable": true,
-	"triggers": true, "trigger": true, "rotate": true,
+// automationVerbHints answer the verbs a member may reach for that are not
+// commands, with the one that is.
+var automationVerbHints = map[string]string{
+	"new": "create", "add": "create", "update": "edit", "set": "edit",
+	"rotate": "triggers rotate",
 }
-
-const automationsPortalOnly = "automations are created and edited in the portal: " + runs.AutomationsURL + " (new: " + runs.NewAutomationURL + ")" +
-	". An automation decides which of your secrets an agent receives and which of its actions need your approval, " +
-	"so writing one needs you signed in through the browser. From here you can list, inspect and run them " +
-	"(nan automations --help)"
 
 var automationsCmd = &cobra.Command{
 	Use:   "automations",
 	Short: "List, inspect and run your automations",
-	Long: `List, inspect and run the automations you set up in the portal, and read
-their webhook delivery log.
+	Long: `Create, change, list, inspect and run your automations, manage their
+triggers (webhooks, schedules), and read their webhook delivery log.
 
 An automation is a saved agent task: a workspace, an agent, instructions,
 the secrets it receives, and its triggers (webhooks, schedules). Its runs
 can propose actions on your repository (a push, a pull request, a comment)
 that apply automatically or wait for your approval, as you configured.
 
-Portal-only, and why: creating and editing automations, writing secrets and
-approving proposals need you signed in through the browser at
-` + runs.PortalURL + `. Each of them can hand a secret to an agent
-or let an agent act without asking, so none can be done with a credential an
-agent or a CI job could read: this machine's CLI session, a platform token or
-an API key.
+Approving a proposal stays portal-only, signed in through the browser at
+` + runs.PortalURL + `: a credential an agent or a script can hold
+must never approve what an agent proposed.
 
-Authentication is the same as nan run (see nan run --help). A platform token
-needs the automations:read scope to list and inspect, and automations:run to
-start a run. Workspace names are looked up with workspaces:read; without it
-the workspace's id is shown instead.
+Authentication of ls, show, run and deliveries is the same as nan run (see
+nan run --help): a platform token needs the automations:read scope to list
+and inspect, and automations:run to start a run. Workspace names are looked
+up with workspaces:read; without it the workspace's id is shown instead.
+
+Creating, changing and deleting automations and triggers:
+` + writeCredentialHelp + `
 
 Docs: https://nan.builders/docs/runs`,
 	Annotations: sysexits,
 	Args:        cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if len(args) > 0 && portalOnlyAutomationVerbs[args[0]] {
-			return usageErrorf("%s", automationsPortalOnly)
-		}
 		if len(args) > 0 {
-			return usageErrorf("unknown command %q for \"nan automations\"; try: nan automations --help", runs.Truncate(runs.SanitizeLine(args[0]), 64))
+			shown := runs.Truncate(runs.SanitizeLine(args[0]), 64)
+			if hint, ok := automationVerbHints[args[0]]; ok {
+				return usageErrorf("there is no nan automations %s; try: nan automations %s", shown, hint)
+			}
+			return usageErrorf("unknown command %q for \"nan automations\"; try: nan automations --help", shown)
 		}
 		return cmd.Help()
 	},
@@ -113,7 +108,7 @@ approval settings, and stream what it does.
 --input passes a JSON object to the run: @FILE reads it from a file, -
 from stdin, or give the JSON itself. The agent receives it as untrusted data
 next to the automation's instructions, which it never replaces. Up to 48 KiB.
-Do not put secrets in it: the agent reads it; assign secrets in the portal.
+Do not put secrets in it: the agent reads it; assign secrets to the automation\ninstead (nan automations edit, or the portal).
 
 When the run proposes actions that need your approval, it stops in
 awaiting_approval and this command exits 10: read the proposal with nan runs
@@ -244,7 +239,7 @@ func doAutomationsLs(ctx context.Context, env *runsEnv) error {
 		return printJSON(env.stdout, list, true)
 	}
 	if len(list.Data) == 0 {
-		_, _ = fmt.Fprintf(env.stderr, "No automations yet. Create one in the portal: %s\n", runs.NewAutomationURL)
+		_, _ = fmt.Fprintf(env.stderr, "No automations yet. Create one with nan automations create -f FILE, or in the portal: %s\n", runs.NewAutomationURL)
 		return nil
 	}
 	for i := range list.Data {
@@ -323,6 +318,7 @@ func doAutomationsShow(ctx context.Context, env *runsEnv, ref string) error {
 		agent += " · model " + runs.SanitizeLine(*a.Model)
 	}
 	row("agent", agent)
+	row("inference", inferenceLabel(a.Inference))
 	row("cwd", runs.SanitizeLine(a.Cwd))
 	worktree := "auto"
 	if a.GitIsolation != nil {
@@ -354,6 +350,7 @@ func doAutomationsShow(ctx context.Context, env *runsEnv, ref string) error {
 		}
 	}
 	row("updated", localTime(a.UpdatedAt))
+	row("last changed from", updatedByLabel(a.UpdatedBy))
 	if err := tw.Flush(); err != nil {
 		return err
 	}
@@ -361,9 +358,24 @@ func doAutomationsShow(ctx context.Context, env *runsEnv, ref string) error {
 		_, _ = fmt.Fprintf(env.stderr, "could not read the triggers: %s\n", runs.SanitizeLine(apiExit(trigErr, env.cred).Error()))
 	}
 
+	if a.Inference.BYOK() && trigErr == nil && hasWebhook(triggers.Data) {
+		_, _ = fmt.Fprintln(env.stdout, "\nnote: this automation runs on your own key, and a webhook starts it: what a delivery "+
+			"carries is untrusted input to an agent that holds your key in its environment")
+	}
+
 	printBlock(env, "instructions", a.Instructions)
-	_, _ = fmt.Fprintf(env.stdout, "\nrun it: nan automations run %s\nedit it in the portal: %s\n", runs.SanitizeLine(a.ID), runs.AutomationURL(a.ID))
+	_, _ = fmt.Fprintf(env.stdout, "\nrun it: nan automations run %s\nchange it: nan automations edit %s -f FILE, or in the portal: %s\n",
+		runs.SanitizeLine(a.ID), runs.SanitizeLine(a.ID), runs.AutomationURL(a.ID))
 	return nil
+}
+
+func hasWebhook(ts []api.Trigger) bool {
+	for _, t := range ts {
+		if t.Kind == "webhook" && t.Enabled {
+			return true
+		}
+	}
+	return false
 }
 
 func exposureNote(exposure string) string {
@@ -428,7 +440,7 @@ func readAutomationInput(in promptInput, flag string) (json.RawMessage, error) {
 		}
 	case strings.HasPrefix(flag, "@"):
 		path := flag[1:]
-		f, openErr := os.Open(path) //nolint:gosec // G304: a config file at a path this program chose
+		f, openErr := os.Open(path) //nolint:gosec // G304: a file the member named on the command line
 		if openErr != nil {
 			return nil, usageErrorf("could not read the input: %v", unwrapPath(openErr))
 		}

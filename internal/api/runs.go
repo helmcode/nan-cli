@@ -163,6 +163,18 @@ type CreateRunRequest struct {
 	TimeoutSeconds *int    `json:"timeout_seconds,omitempty"`
 	Model          *string `json:"model,omitempty"`
 	Trigger        string  `json:"trigger,omitempty"`
+
+	// Inference is left out for NaN inference (the platform's default).
+	// With BYOK the model goes here, never in Model.
+	Inference *RunInference `json:"inference,omitempty"`
+}
+
+// RunInference is the inference choice of POST /v1/runs: {"source":"byok"}
+// names the provider key by its secret NAME, never by its value.
+type RunInference struct {
+	Source string `json:"source"`
+	Secret string `json:"secret,omitempty"`
+	Model  string `json:"model,omitempty"`
 }
 
 type RunList struct {
@@ -217,6 +229,9 @@ type APIError struct {
 	Code    string
 	Param   string
 	Message string
+	// Automations names the automations a 409 secret_in_use or
+	// secrets_too_large is about (write API).
+	Automations []Ref
 }
 
 func (e *APIError) Error() string {
@@ -367,21 +382,24 @@ func (c *RunsClient) statusError(status int, body []byte) error {
 	apiErr := &APIError{Status: status}
 	var openai struct {
 		Error struct {
-			Message string  `json:"message"`
-			Type    string  `json:"type"`
-			Param   *string `json:"param"`
-			Code    any     `json:"code"`
+			Message     string  `json:"message"`
+			Type        string  `json:"type"`
+			Param       *string `json:"param"`
+			Code        any     `json:"code"`
+			Automations []Ref   `json:"automations"`
 		} `json:"error"`
 	}
 	var bare struct {
-		Error   string  `json:"error"`
-		Message string  `json:"message"`
-		Param   *string `json:"param"`
+		Error       string  `json:"error"`
+		Message     string  `json:"message"`
+		Param       *string `json:"param"`
+		Automations []Ref   `json:"automations"`
 	}
 	switch {
 	case json.Unmarshal(body, &openai) == nil && (openai.Error.Message != "" || openai.Error.Code != nil):
 		apiErr.Message = openai.Error.Message
 		apiErr.Type = openai.Error.Type
+		apiErr.Automations = openai.Error.Automations
 		if openai.Error.Param != nil {
 			apiErr.Param = *openai.Error.Param
 		}
@@ -402,6 +420,7 @@ func (c *RunsClient) statusError(status int, body []byte) error {
 		if bare.Param != nil {
 			apiErr.Param = *bare.Param
 		}
+		apiErr.Automations = bare.Automations
 	}
 	return apiErr
 }

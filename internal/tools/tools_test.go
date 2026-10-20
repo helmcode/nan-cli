@@ -145,6 +145,43 @@ func TestOpencodeConfigRepairsAnEntryWrittenByAnOlderVersion(t *testing.T) {
 	}
 }
 
+// mimo-v2.5 left the cluster for mimo-v2.6-flash. A merge that only ever adds
+// kept it in the picker of everyone already configured, where choosing it
+// answers 401 "does not have access to the requested model".
+func TestOpencodeConfigTakesOutARetiredModel(t *testing.T) {
+	path := tempConfig(t, "opencode.json")
+	old := `{
+	  "provider": {
+	    "nan": {
+	      "npm": "@ai-sdk/openai-compatible",
+	      "options": { "baseURL": "https://api.nan.builders/v1", "apiKey": "sk-old" },
+	      "models": {
+	        "mimo-v2.5": { "name": "Xiaomi MiMo V2.5" },
+	        "gemma4": { "name": "my own name for it" }
+	      }
+	    }
+	  }
+	}`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeOpencodeConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	models := readJSON(t, path)["provider"].(map[string]any)["nan"].(map[string]any)["models"].(map[string]any)
+	for _, id := range catalog.Retired {
+		if _, ok := models[id]; ok {
+			t.Errorf("%s is still offered, and the cluster no longer serves it", id)
+		}
+	}
+	if _, ok := models["mimo-v2.6-flash"]; !ok {
+		t.Error("mimo-v2.6-flash was not added")
+	}
+	if models["gemma4"].(map[string]any)["name"] != "my own name for it" {
+		t.Error("taking out the retired model touched an entry the member owns")
+	}
+}
+
 func TestOpencodeConfigKeepsWhatItDoesNotOwn(t *testing.T) {
 	path := tempConfig(t, "opencode.json")
 	if err := os.WriteFile(path, []byte(`{"theme":"tokyonight","provider":{}}`), 0o600); err != nil {
@@ -208,7 +245,7 @@ func TestPiConfigWritesOnlyTheModalitiesPiAccepts(t *testing.T) {
 	}
 	// Pi's schema is `("text" | "image")[]`. A third value fails validation and
 	// Pi then refuses the whole file, every other provider in it included, so
-	// mimo-v2.5 goes in without its audio.
+	// mimo-v2.6-flash goes in without its audio.
 	for id, entry := range piModels(t, path) {
 		for _, raw := range entry["input"].([]any) {
 			if in := raw.(string); in != "text" && in != "image" {
@@ -536,6 +573,27 @@ func TestCodexProfilesGiveEveryModelItsOwnWindow(t *testing.T) {
 	}
 }
 
+func TestCodexProfilesOfARetiredModelGoAway(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	home := filepath.Dir(path)
+	stale := filepath.Join(home, "nan-mimo-v25.config.toml")
+	mine := filepath.Join(home, "work.config.toml")
+	for _, f := range []string{stale, mine} {
+		if err := os.WriteFile(f, []byte("model = \"x\"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Error("nan-mimo-v25 is still there, and `--profile nan-mimo-v25` answers 401")
+	}
+	if _, err := os.Stat(mine); err != nil {
+		t.Errorf("a profile the member wrote was removed: %v", err)
+	}
+}
+
 // Codex refuses a --profile with a dot in it ("pass a plain name such as
 // `work`"), which is every id on the cluster that carries a version number.
 // With the sub-agent namespace or web_search in the request, /responses
@@ -801,6 +859,42 @@ func TestFactoryConfigMarksWhatCannotSeeImages(t *testing.T) {
 	if defaultModel != catalog.Default {
 		t.Errorf("default is %q, want %q, the model the quickstart recommends",
 			defaultModel, catalog.Default)
+	}
+}
+
+func TestFactoryConfigTakesOutARetiredModel(t *testing.T) {
+	path := tempConfig(t, "settings.json")
+	old := `{"customModels":[
+	  {"model":"glm5.3-flash","id":"custom:GLM-5.3-Flash-(NaN)-0","index":0,"baseUrl":"https://api.nan.builders/v1","displayName":"GLM 5.3 Flash (NaN)","provider":"openai"},
+	  {"model":"mimo-v2.5","id":"custom:Xiaomi-MiMo-V2.5-(NaN)-1","index":1,"baseUrl":"https://api.nan.builders/v1","displayName":"Xiaomi MiMo V2.5 (NaN)","provider":"openai"},
+	  {"model":"gpt-6.1-sol","id":"custom:mine-2","index":2,"baseUrl":"https://api.openai.com/v1","displayName":"mine","provider":"openai"}
+	]}`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFactoryConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	indexes := map[float64]string{}
+	for _, raw := range readJSON(t, path)["customModels"].([]any) {
+		entry := raw.(map[string]any)
+		id := entry["model"].(string)
+		seen[id] = true
+		i := entry["index"].(float64)
+		if other, dup := indexes[i]; dup {
+			t.Errorf("%s and %s share index %v", id, other, i)
+		}
+		indexes[i] = id
+	}
+	if seen["mimo-v2.5"] {
+		t.Error("mimo-v2.5 is still offered, and the cluster no longer serves it")
+	}
+	if !seen["mimo-v2.6-flash"] {
+		t.Error("mimo-v2.6-flash was not added")
+	}
+	if !seen["gpt-6.1-sol"] {
+		t.Error("a model the member added themselves was removed")
 	}
 }
 
@@ -1545,4 +1639,134 @@ func RemoveNanFromTools() (removed []string, failed []string) {
 		failed = append(failed, f.Tool+" ("+f.Err.Error()+")")
 	}
 	return removed, failed
+}
+
+func TestCodexProfilesPointAtACatalogOfTheClustersModels(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Dir(path)
+
+	var cat struct {
+		Models []map[string]any `json:"models"`
+	}
+	data, err := os.ReadFile(filepath.Join(home, codexCatalogFile))
+	if err != nil {
+		t.Fatalf("no catalogue, so /model offers only gpt-* models the cluster answers with a 401: %v", err)
+	}
+	if err := json.Unmarshal(data, &cat); err != nil {
+		t.Fatal(err)
+	}
+	bySlug := map[string]map[string]any{}
+	for _, e := range cat.Models {
+		bySlug[e["slug"].(string)] = e
+	}
+	for _, m := range catalog.ChatModels() {
+		e, ok := bySlug[m.ID]
+		if !ok {
+			t.Errorf("%s is not in the catalogue, so /model cannot reach it", m.ID)
+			continue
+		}
+		if got := int(e["context_window"].(float64)); got != m.Context {
+			t.Errorf("%s: context_window %d, want %d", m.ID, got, m.Context)
+		}
+		if e["base_instructions"] != codexBaseInstructions {
+			t.Errorf("%s: the entry does not carry Codex's own prompt", m.ID)
+		}
+		// Codex refuses the whole file over a field it cannot parse, so the
+		// modalities it does not know must not get in.
+		for _, in := range e["input_modalities"].([]any) {
+			if in != "text" && in != "image" {
+				t.Errorf("%s: input_modalities has %q", m.ID, in)
+			}
+		}
+
+		body := readFile(t, filepath.Join(home, codexProfileName(m.ID)+".config.toml"))
+		want := fmt.Sprintf("model_catalog_json = %q", codexCatalogPath(home))
+		at := strings.Index(body, want)
+		if at < 0 {
+			t.Errorf("%s: the profile does not point at the catalogue:\n%s", m.ID, body)
+			continue
+		}
+		// A key under [features] belongs to that table and Codex would not
+		// read it as the catalogue.
+		if features := strings.Index(body, "[features]"); features >= 0 && at > features {
+			t.Errorf("%s: model_catalog_json landed inside [features]:\n%s", m.ID, body)
+		}
+		if strings.Contains(want, `\`) {
+			t.Errorf("%s: a backslash in a TOML basic string is an escape: %s", m.ID, want)
+		}
+	}
+	// Only the profiles point at it. In config.toml it would take OpenAI's
+	// models out of the member's own sessions.
+	if strings.Contains(readFile(t, path), "model_catalog_json") {
+		t.Error("config.toml points at the catalogue, so OpenAI sessions lose their models")
+	}
+}
+
+// What a NaN model is told must not change because a picker appeared: the
+// prompt is the one Codex sends a model it has no metadata for.
+func TestCodexCatalogPromptIsTheOneCodexAlreadySent(t *testing.T) {
+	if !strings.HasPrefix(codexBaseInstructions, "You are a coding agent running in the Codex CLI") {
+		t.Errorf("not Codex's default prompt: %.80q", codexBaseInstructions)
+	}
+	// Codex drops these when update_plan is not offered, and it is not.
+	for _, section := range []string{"## Planning", "## `update_plan`"} {
+		if strings.Contains(codexBaseInstructions, section) {
+			t.Errorf("the prompt still has %q, which Codex leaves out", section)
+		}
+	}
+	// A checkout that turned the file to CRLF would change every byte of the
+	// prompt on that machine's builds.
+	if strings.Contains(codexBaseInstructions, "\r") {
+		t.Error("the embedded prompt has carriage returns")
+	}
+}
+
+func TestCodexRemovalTakesTheCatalog(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCodexConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(path), codexCatalogFile)); !os.IsNotExist(err) {
+		t.Error("the catalogue outlived the disconnect")
+	}
+}
+
+// qwen3.8-flash went out at 262,144 when it is served at 1,048,576. An
+// existing opencode entry with that exact figure is one this CLI wrote.
+func TestOpencodeConfigCorrectsAWindowWeGotWrong(t *testing.T) {
+	path := tempConfig(t, "opencode.json")
+	old := `{
+	  "provider": {
+	    "nan": {
+	      "npm": "@ai-sdk/openai-compatible",
+	      "options": { "baseURL": "https://api.nan.builders/v1", "apiKey": "sk-old" },
+	      "models": {
+	        "qwen3.8-flash": { "name": "Qwen 3.8 Flash", "limit": { "context": 262144, "output": 32768 } },
+	        "gemma4": { "name": "Gemma 4", "limit": { "context": 100000, "output": 65536 } }
+	      }
+	    }
+	  }
+	}`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeOpencodeConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	models := readJSON(t, path)["provider"].(map[string]any)["nan"].(map[string]any)["models"].(map[string]any)
+	limit := func(id string) int {
+		return int(models[id].(map[string]any)["limit"].(map[string]any)["context"].(float64))
+	}
+	if got := limit("qwen3.8-flash"); got != 1_048_576 {
+		t.Errorf("qwen3.8-flash context %d, still compacting at a quarter of the window", got)
+	}
+	if got := limit("gemma4"); got != 100_000 {
+		t.Errorf("gemma4 context %d, a window the member set was overwritten", got)
+	}
 }

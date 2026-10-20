@@ -48,6 +48,12 @@ func writeOpencodeConfig(cfgPath, apiKey string) error {
 					existing = map[string]any{}
 				}
 				changed := false
+				for id := range existing {
+					if catalog.IsRetired(id) {
+						delete(existing, id)
+						changed = true
+					}
+				}
 				for id, m := range nanModels {
 					found, ok := existing[id].(map[string]any)
 					if !ok {
@@ -63,6 +69,16 @@ func writeOpencodeConfig(cfgPath, apiKey string) error {
 						if _, present := found[field]; !present {
 							found[field] = m.(map[string]any)[field]
 							changed = true
+						}
+					}
+					if limit, ok := found["limit"].(map[string]any); ok {
+						if ctx, ok := limit["context"].(float64); ok {
+							for _, stale := range catalog.StaleContexts[id] {
+								if int(ctx) == stale {
+									limit["context"] = m.(map[string]any)["limit"].(map[string]any)["context"]
+									changed = true
+								}
+							}
 						}
 					}
 				}

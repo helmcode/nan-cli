@@ -116,3 +116,73 @@ func TestGoldenTriggersAndDeliveries(t *testing.T) {
 		t.Fatalf("delivery = %+v", d)
 	}
 }
+
+// BYOK (AGENT-AUTOMATIONS-PHASE3-BYOK.md §2): the inference object of a run
+// and an automation, usage.source, and a provider key's provider and base
+// URL. testdata/phase3 is rendered by cloud-api's own handlers.
+func TestGoldenBYOK(t *testing.T) {
+	var run Run
+	golden3(t, "run_get_byok.json", &run)
+	in := run.Inference
+	if !in.BYOK() || *in.Provider != "anthropic" || *in.Secret != "ANTHROPIC_KEY" || *in.Model != "claude-sonnet-4-5" ||
+		*run.Model != "claude-sonnet-4-5" || run.Usage == nil || *run.Usage.Source != "byok" || *run.Usage.TokensIn != 12840 {
+		t.Fatalf("byok run = %+v %+v", in, run.Usage)
+	}
+
+	var list RunList
+	golden3(t, "run_list_byok.json", &list)
+	if len(list.Data) != 2 || !list.Data[0].Inference.BYOK() || list.Data[1].Inference.BYOK() ||
+		list.Data[1].Inference.Source != InferenceNaN || list.Data[1].Inference.Secret != nil {
+		t.Fatalf("list = %+v", list.Data)
+	}
+
+	var a Automation
+	golden3(t, "automation_get_byok.json", &a)
+	if !a.Inference.BYOK() || *a.Inference.Provider != "openai_compatible" || *a.Inference.Secret != "TOGETHER_KEY" ||
+		*a.Inference.Model != "qwen/qwen3-coder" {
+		t.Fatalf("automation inference = %+v", a.Inference)
+	}
+
+	var secrets SecretList
+	golden3(t, "secrets_list_byok.json", &secrets)
+	byName := map[string]Secret{}
+	for _, s := range secrets.Data {
+		byName[s.Name] = s
+	}
+	if s := byName["TOGETHER_KEY"]; s.Kind != SecretKindProviderKey || *s.Provider != "openai_compatible" || *s.BaseURL != "https://api.together.xyz/v1" {
+		t.Fatalf("TOGETHER_KEY = %+v", s)
+	}
+	if s := byName["ANTHROPIC_KEY"]; s.Kind != SecretKindProviderKey || *s.Provider != "anthropic" || s.BaseURL != nil {
+		t.Fatalf("ANTHROPIC_KEY = %+v", s)
+	}
+	if s := byName["GITHUB_WRITE_TOKEN"]; s.Kind != SecretKindGeneric || s.Provider != nil || s.BaseURL != nil {
+		t.Fatalf("GITHUB_WRITE_TOKEN = %+v", s)
+	}
+}
+
+func golden3(t *testing.T, name string, out any) {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", "phase3", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, out); err != nil {
+		t.Fatalf("%s: %v", name, err)
+	}
+}
+
+// The request of a BYOK run: inference with the secret's name and the
+// model, no top-level model; a NaN run sends no inference at all.
+func TestCreateRunRequestInference(t *testing.T) {
+	b, _ := json.Marshal(CreateRunRequest{
+		Workspace: "w", Agent: "pi", Prompt: "p",
+		Inference: &RunInference{Source: InferenceBYOK, Secret: "K", Model: "m"},
+	})
+	if want := `{"workspace":"w","agent":"pi","prompt":"p","inference":{"source":"byok","secret":"K","model":"m"}}`; string(b) != want {
+		t.Fatalf("%s", b)
+	}
+	b, _ = json.Marshal(CreateRunRequest{Workspace: "w", Agent: "pi", Prompt: "p"})
+	if string(b) != `{"workspace":"w","agent":"pi","prompt":"p"}` {
+		t.Fatalf("%s", b)
+	}
+}

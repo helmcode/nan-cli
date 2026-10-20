@@ -32,21 +32,41 @@ func writeFactoryConfig(cfgPath, apiKey string) error {
 		}
 	}
 
-	// Index NaN model IDs already present
+	// Index NaN model IDs already present, dropping the ones the cluster no
+	// longer serves.
 	existingIDs := map[string]bool{}
+	changed := false
+	kept := models[:0]
+	nextIndex := 0
 	for _, m := range models {
 		if base, _ := m["baseUrl"].(string); strings.Contains(base, "api.nan.builders") {
-			if id, _ := m["model"].(string); id != "" {
+			id, _ := m["model"].(string)
+			if catalog.IsRetired(id) {
+				changed = true
+				continue
+			}
+			if id != "" {
 				existingIDs[id] = true
 			}
 		}
+		// JSON numbers come back as float64. The next index goes past the
+		// highest one, not at len(models): with an entry taken out, len lands
+		// on an index someone already holds.
+		if i, ok := m["index"].(float64); ok && int(i) >= nextIndex {
+			nextIndex = int(i) + 1
+		}
+		kept = append(kept, m)
+	}
+	models = kept
+	if len(models) > nextIndex {
+		nextIndex = len(models)
 	}
 
 	// Append only missing models
-	added := false
 	for _, nm := range catalog.ChatModels() {
 		if !existingIDs[nm.ID] {
-			idx := len(models)
+			idx := nextIndex
+			nextIndex++
 			display := nm.Name + " (NaN)"
 			models = append(models, map[string]any{
 				"model":          nm.ID,
@@ -58,10 +78,10 @@ func writeFactoryConfig(cfgPath, apiKey string) error {
 				"noImageSupport": !nm.Accepts(catalog.InputImage),
 				"provider":       "openai",
 			})
-			added = true
+			changed = true
 		}
 	}
-	if !added {
+	if !changed {
 		return nil
 	}
 	cfg["customModels"] = models

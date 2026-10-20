@@ -1,0 +1,4 @@
+WHEN              EVENT        STATUS     ATTEMPT  HTTP  ERROR     RUN
+2026-10-14 11:30  digest (12)  failed     1        404   http_4xx  -
+2026-10-14 10:05  test         delivered  1        200   -         -
+2026-10-14 10:00  run.failed   retrying   2        -     timeout   6f1c2a9b-0000-4000-8000-000000000001

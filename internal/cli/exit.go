@@ -130,8 +130,8 @@ func apiExit(err error, cred credential) *ExitError {
 // browserOnly explains the one class of refusal no credential of this CLI
 // can get past.
 var browserOnly = "this needs you signed in through the browser: do it in the portal at " + runs.PortalURL +
-	". Approving a proposal, writing a secret and creating or editing an automation are portal-only, so that " +
-	"nothing that can read this machine's CLI session or tokens (an agent in a workspace, a CI job) can do them. " +
+	". Approving a proposal is portal-only, so that nothing that can read this machine's CLI session or tokens " +
+	"(an agent in a workspace, a CI job) can approve what an agent proposed. " +
 	"See https://nan.builders/docs/runs"
 
 // scopeHint is what to do about a platform token missing a scope.

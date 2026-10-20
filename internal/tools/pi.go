@@ -91,7 +91,7 @@ func piSettingsPath(cfgPath string) string {
 	return filepath.Join(filepath.Dir(cfgPath), "settings.json")
 }
 
-// Pi's schema takes "text" and "image" and nothing else, so mimo-v2.5 goes in
+// Pi's schema takes "text" and "image" and nothing else, so mimo-v2.6-flash goes in
 // without its audio: a third value fails validation, and Pi then refuses the
 // whole file with every other provider in it.
 func piInputs(m catalog.Model) []string {

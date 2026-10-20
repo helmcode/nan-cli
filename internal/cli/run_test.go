@@ -665,17 +665,9 @@ func TestCobraRefusalsExit64OnRunCommands(t *testing.T) {
 		{"runs", "show"},
 		{"runs", "logs", "a", "b"},
 	} {
-		rootCmd.SetArgs(args)
-		rootCmd.SetOut(io.Discard)
-		rootCmd.SetErr(io.Discard)
-		cmd, err := rootCmd.ExecuteC()
-		code, _ := exitCodeFor(cmd, err)
-		if err == nil || code != exitUsage {
-			t.Errorf("%v: exit %d (%v)", args, code, err)
+		if code, msg := execute(t, args...); code != exitUsage {
+			t.Errorf("%v: exit %d (%s)", args, code, msg)
 		}
-		runOpts = runOptions{agent: "pi", timeout: 30 * time.Minute}
-		_ = runCmd.Flags().Set("worktree", "false")
-		_ = runCmd.Flags().Set("no-worktree", "false")
 	}
 	if code, _ := exitCodeFor(meCmd, errors.New("boom")); code != 1 {
 		t.Errorf("an ordinary command's failure exits %d", code)

@@ -44,6 +44,12 @@ var licenceNames = []string{
 
 type module struct{ path, version, dir string }
 
+// embedded is third-party text compiled into the binary with go:embed, each
+// directory holding the file, its LICENSE and its NOTICE.
+var embedded = []struct{ name, what, dir string }{
+	{"OpenAI Codex", "internal/tools/codexprompt/base_instructions.md, the prompt the Codex catalogue carries", "internal/tools/codexprompt"},
+}
+
 func main() {
 	mods := linkedModules()
 	if len(mods) == 0 {
@@ -68,12 +74,31 @@ func main() {
 		fmt.Fprintf(&body, "%s\n%s\n%s\n%s\n\n%s\n\n", rule, m.path, m.version, rule, text)
 	}
 
+	// Files embedded in the binary that are not Go modules: the walk above
+	// cannot see them, and their licence travels with them all the same.
+	for _, e := range embedded {
+		notice, err := os.ReadFile(e.dir + "/NOTICE")
+		if err != nil {
+			fail(err)
+		}
+		licence, err := os.ReadFile(e.dir + "/LICENSE")
+		if err != nil {
+			fail(err)
+		}
+		counts[classify(string(licence))]++
+		fmt.Fprintf(&toc, "  %-44s %s\n", e.name, "(embedded)")
+		rule := strings.Repeat("=", 78)
+		fmt.Fprintf(&body, "%s\n%s\n%s\n%s\n\n%s\n\n%s\n\n", rule, e.name, e.what, rule,
+			strings.TrimSpace(string(notice)), strings.TrimSpace(string(licence)))
+	}
+
 	var f strings.Builder
 	fmt.Fprintf(&f, `Third-party notices for nan
 %s
 
-The distributed binary statically links the Go modules listed below, and
-their licences are reproduced here in full.
+The distributed binary statically links the Go modules listed below and
+embeds the files marked (embedded), and their licences are reproduced here
+in full.
 
 %s
 
