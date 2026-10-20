@@ -201,6 +201,10 @@ type CreateRunRequest struct {
 	Executor   string  `json:"executor,omitempty"`
 	Size       string  `json:"size,omitempty"`
 	GitHubRepo *string `json:"github_repo,omitempty"`
+	// GitHubTokenSecret (ephemeral, with GitHubRepo): the NAME of the
+	// member's secret holding a GitHub token, used only to clone a private
+	// repository and never given to the agent. Left out: anonymous clone.
+	GitHubTokenSecret string `json:"github_token_secret,omitempty"`
 }
 
 // RunInference is the inference choice of POST /v1/runs: {"source":"byok"}

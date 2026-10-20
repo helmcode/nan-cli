@@ -107,7 +107,8 @@ id=$(nan run --detach "upgrade the dependencies")
 | `--model M` | the agent's own | Model for the agent. Required with `--byok-secret` and `--ephemeral`. |
 | `--byok-secret NAME` | NaN inference | Run on your own provider key: the name of a provider key secret saved in the portal. See below. |
 | `--ephemeral` | | Run in a fresh, throwaway container instead of a workspace. See below. |
-| `--repo OWNER/NAME` | | With `--ephemeral`: the public GitHub repository the container clones. |
+| `--repo OWNER/NAME` | | With `--ephemeral`: the GitHub repository the container clones. |
+| `--github-token-secret NAME` | | With `--ephemeral` and `--repo`: the name of your secret holding a GitHub token, to clone a private repository. |
 | `--size s\|m\|l` | `s` | With `--ephemeral`: the container size. |
 | `--cwd PATH` | `/home/nan` | Folder in the workspace. |
 | `--worktree` / `--no-worktree` | auto | Work on a separate branch, or in the folder itself. See below. |
@@ -144,10 +145,9 @@ nan run --byok-secret ANTHROPIC_KEY --model claude-sonnet-4-5 "fix the flaky tes
 runs the agent in a fresh, throwaway container: it clones the repository, runs
 the agent with the model you name, streams like any run, and is destroyed at
 the end. The container can only reach the internet over HTTP and HTTPS (no
-SSH, no SMTP). A run started from the CLI gets no secrets, so the repository
-has to be public; for a private one, use an ephemeral automation (`executor:
-ephemeral`, `checkout: fresh`, `github_repo`, `model`, and an agent secret
-`GITHUB_TOKEN`). Starting one needs your session or a platform token with the
+SSH, no SMTP). For a private repository, `--github-token-secret NAME` names
+one of your secrets holding a GitHub token that can read it (`nan secrets ls`):
+it is used only to clone and is never given to the agent. Starting one needs your session or a platform token with the
 `runs:ephemeral` scope; API keys cannot. Docs:
 <https://nan.builders/docs/ephemeral-runs>.
 
@@ -171,6 +171,7 @@ rather than the columns.
 
 ```bash
 nan run --ephemeral --repo acme/api --model glm5.3 --size m "find and fix the flaky test"
+nan run --ephemeral --repo acme/private --github-token-secret GITHUB_TOKEN --model glm5.3 "review the open PRs"
 nan ephemeral usage      # this month's minutes, cost, free S-minutes left, prices
 nan ephemeral settings   # your monthly spend cap and concurrent runs (change them in the browser)
 ```
