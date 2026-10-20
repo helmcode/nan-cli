@@ -52,6 +52,10 @@ type runOptions struct {
 	ephemeral      bool
 	repo           string
 	size           string
+	// githubTokenSecret: with --ephemeral, the NAME of the member's secret
+	// holding the GitHub token that clones a private --repo.
+	githubTokenSecret    string
+	githubTokenSecretSet bool
 }
 
 var runOpts runOptions
@@ -96,10 +100,10 @@ Ephemeral runs (no workspace):
   throwaway container instead of a workspace: it clones the GitHub
   repository, runs the agent (pi, pi_gentle or hermes) with the model you
   name, streams like any run, and is destroyed at the end. The container
-  can only reach the internet over HTTP and HTTPS (no SSH, no SMTP). A run
-  started here gets no secrets, so the repository has to be public; for a
-  private one, use an ephemeral automation with an agent secret
-  GITHUB_TOKEN (nan automations create --help). --ws, --cwd, --worktree
+  can only reach the internet over HTTP and HTTPS (no SSH, no SMTP).
+  For a private repository, --github-token-secret NAME names one of your
+  secrets holding a GitHub token that can read it (nan secrets ls): it is
+  used only to clone, never given to the agent. --ws, --cwd, --worktree
   and --no-worktree do not apply.
   --size picks the container (default s), billed per started minute (a
   14 s run is 1 minute):
@@ -162,12 +166,14 @@ Docs: https://nan.builders/docs/runs`,
   id=$(nan run --detach "upgrade the dependencies")
   nan run --ws ci -f task.md    # in CI, with NAN_TOKEN set from a secret
   nan run --byok-secret ANTHROPIC_KEY --model claude-sonnet-4-5 "fix the flaky test"
-  nan run --ephemeral --repo acme/api --model glm5.3 --size m "find and fix the flaky test"`,
+  nan run --ephemeral --repo acme/api --model glm5.3 --size m "find and fix the flaky test"
+  nan run --ephemeral --repo acme/private --github-token-secret GITHUB_TOKEN --model glm5.3 "review it"`,
 	Args:        cobra.ArbitraryArgs,
 	Annotations: sysexits,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		opts := runOpts
 		opts.timeoutSet = cmd.Flags().Changed("timeout")
+		opts.githubTokenSecretSet = cmd.Flags().Changed("github-token-secret")
 		// The arguments first: a usage mistake is the thing to report, even
 		// on a machine that is not signed in.
 		req, err := buildRunRequest(promptInput{r: os.Stdin, tty: isTerminal(os.Stdin), notice: os.Stderr}, opts, args)
@@ -192,7 +198,8 @@ func init() {
 	f := runCmd.Flags()
 	f.StringVar(&runOpts.workspace, "ws", "", "Workspace to run in (default: your only workspace)")
 	f.BoolVar(&runOpts.ephemeral, "ephemeral", false, "Run in a fresh, throwaway container instead of a workspace (needs --repo and --model)")
-	f.StringVar(&runOpts.repo, "repo", "", "With --ephemeral: the public GitHub repository to clone, `OWNER/NAME`")
+	f.StringVar(&runOpts.repo, "repo", "", "With --ephemeral: the GitHub repository to clone, `OWNER/NAME`")
+	f.StringVar(&runOpts.githubTokenSecret, "github-token-secret", "", "With --ephemeral and --repo: the `NAME` of your secret holding a GitHub token, to clone a private repository (never the token itself)")
 	f.StringVar(&runOpts.size, "size", "", "With --ephemeral: the container, s, m or l (default s; see Ephemeral runs above)")
 	f.StringVar(&runOpts.agent, "agent", "pi", "Agent to run: pi, pi_gentle (Pi + Gentle Shell) or hermes, if the workspace has it installed")
 	f.StringVar(&runOpts.model, "model", "", "Model for the agent (default: the agent's own; required with --byok-secret and --ephemeral)")
@@ -262,6 +269,9 @@ func startRun(ctx context.Context, env *runsEnv, opts runOptions, req *api.Creat
 		var apiErr *api.APIError
 		if errors.As(err, &apiErr) {
 			if exit := byokRefusal(apiErr, req); exit != nil {
+				return exit
+			}
+			if exit := githubTokenRefusal(apiErr, req); exit != nil {
 				return exit
 			}
 			if exit := ephemeralExit(apiErr, env.cred); exit != nil {
@@ -537,6 +547,7 @@ func buildRunRequest(in promptInput, opts runOptions, args []string) (*api.Creat
 	if opts.ephemeral {
 		repo := opts.repo
 		req.Executor, req.Size, req.GitHubRepo = api.ExecutorEphemeral, opts.size, &repo
+		req.GitHubTokenSecret = opts.githubTokenSecret
 	}
 	if opts.timeoutSet {
 		if opts.timeout < minTimeout || opts.timeout > maxTimeout {

@@ -94,10 +94,18 @@ func TestCreateEphemeralRunBody(t *testing.T) {
 	if got["executor"] != "ephemeral" || got["size"] != "m" || got["github_repo"] != "acme/api" || got["model"] != "glm5.3" {
 		t.Errorf("body = %s", b)
 	}
+	// No token secret named: the field is left out (an anonymous clone).
+	if _, ok := got["github_token_secret"]; ok {
+		t.Errorf("sends github_token_secret nobody named: %s", b)
+	}
+	b, _ = json.Marshal(CreateRunRequest{Agent: "pi", Prompt: "x", Model: &model, Executor: ExecutorEphemeral, GitHubRepo: &repo, GitHubTokenSecret: "GH_READ"})
+	if !strings.Contains(string(b), `"github_token_secret":"GH_READ"`) {
+		t.Errorf("token secret body = %s", b)
+	}
 	// A workspace run keeps its shape: no executor, size or repository.
 	b, _ = json.Marshal(CreateRunRequest{Workspace: "develop", Agent: "pi", Prompt: "x"})
 	if s := string(b); !strings.Contains(s, `"workspace":"develop"`) || strings.Contains(s, "executor") ||
-		strings.Contains(s, "size") || strings.Contains(s, "github_repo") {
+		strings.Contains(s, "size") || strings.Contains(s, "github_repo") || strings.Contains(s, "github_token_secret") {
 		t.Errorf("workspace body = %s", s)
 	}
 }

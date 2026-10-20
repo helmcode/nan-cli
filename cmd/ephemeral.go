@@ -576,6 +576,9 @@ func (env *runsEnv) billingNote(ctx context.Context) {
 func checkEphemeralFlags(opts *runOptions) error {
 	if !opts.ephemeral {
 		switch {
+		case opts.githubTokenSecret != "" || opts.githubTokenSecretSet:
+			return usageErrorf("--github-token-secret is for ephemeral runs: add --ephemeral and --repo OWNER/NAME " +
+				"(a workspace run reads the repositories already in the workspace)")
 		case opts.repo != "":
 			return usageErrorf("--repo is for ephemeral runs: add --ephemeral (a workspace run works in the workspace's own folders; pick one with --cwd)")
 		case opts.size != "":
@@ -609,7 +612,58 @@ func checkEphemeralFlags(opts *runOptions) error {
 		}
 		opts.size = size
 	}
+	if opts.githubTokenSecret != "" || opts.githubTokenSecretSet {
+		return checkGitHubTokenSecret(opts.githubTokenSecret)
+	}
 	return nil
+}
+
+// gitHubTokenPrefixes are how GitHub tokens start: a --github-token-secret
+// that starts like one is the token itself, pasted by mistake.
+var gitHubTokenPrefixes = []string{"ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_"}
+
+func looksLikeAGitHubToken(v string) bool {
+	for _, p := range gitHubTokenPrefixes {
+		if strings.HasPrefix(v, p) {
+			return true
+		}
+	}
+	return looksLikeAKey(v)
+}
+
+// checkGitHubTokenSecret checks the NAME given to --github-token-secret.
+// The value is never repeated in an error when it is not a secret name: it
+// may be the token.
+func checkGitHubTokenSecret(name string) error {
+	if secretNamePattern.MatchString(name) {
+		return nil
+	}
+	const what = "--github-token-secret takes the NAME of a secret you saved with your GitHub token (like GITHUB_TOKEN: " +
+		"capital letters, digits and _), never the token itself; your names are in: nan secrets ls"
+	switch upper := strings.ToUpper(name); {
+	case looksLikeAGitHubToken(name):
+		return usageErrorf("%s. If that was the token, it is now in your shell history: revoke it on GitHub, "+
+			"then save the new one with nan secrets set GITHUB_TOKEN --value-stdin", what)
+	case name != "" && len(name) <= 24 && secretNamePattern.MatchString(upper):
+		return usageErrorf("%s. Did you mean %s?", what, upper)
+	}
+	return usageErrorf("%s", what)
+}
+
+// githubTokenRefusal is the platform refusing the --github-token-secret of
+// an ephemeral run: no secret by that name (404), or one that cannot hold a
+// GitHub token, like a provider key (400).
+func githubTokenRefusal(apiErr *api.APIError, req *api.CreateRunRequest) *ExitError {
+	if apiErr.Param != "github_token_secret" {
+		return nil
+	}
+	name := runs.SanitizeLine(req.GitHubTokenSecret)
+	if apiErr.Status == 404 {
+		return usageErrorf("you have no secret named %s: save your GitHub token in the portal, Settings > Secrets at %s, "+
+			"or with nan secrets set NAME --value-stdin; your secret names are in: nan secrets ls", name, secretsURL)
+	}
+	return usageErrorf("--github-token-secret %s: %s. It takes a secret that holds a GitHub token, not a provider key "+
+		"(see nan secrets ls)", name, runs.SanitizeLine(apiErr.Message))
 }
 
 // runPlace says where a run executes, for the line that announces it:
