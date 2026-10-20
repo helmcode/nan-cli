@@ -64,8 +64,14 @@ type Automation struct {
 	Enabled            bool               `json:"enabled"`
 	DisabledReason     *string            `json:"disabled_reason"`
 	UpdatedBy          string             `json:"updated_by,omitempty"`
-	CreatedAt          string             `json:"created_at"`
-	UpdatedAt          string             `json:"updated_at"`
+	// Checkout is "workspace" or "fresh" (a new clone of github_repo per run).
+	Checkout string `json:"checkout,omitempty"`
+	// Executor is where its runs execute ("workspace" or "ephemeral"), Size
+	// the container size of an ephemeral automation (nil otherwise).
+	Executor  string  `json:"executor,omitempty"`
+	Size      *string `json:"size,omitempty"`
+	CreatedAt string  `json:"created_at"`
+	UpdatedAt string  `json:"updated_at"`
 }
 
 type AutomationList struct {

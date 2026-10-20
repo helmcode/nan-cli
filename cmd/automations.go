@@ -251,12 +251,20 @@ func doAutomationsLs(ctx context.Context, env *runsEnv) error {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			runs.SanitizeLine(a.ID),
 			runs.Truncate(runs.SanitizeLine(a.Name), 40),
-			runs.Truncate(runs.SanitizeLine(a.Workspace.Label()), 40),
+			automationWhere(a),
 			runs.SanitizeLine(a.Agent),
 			automationStatus(a),
 			runs.Truncate(approvalSummary(a.ApprovalKinds), 40))
 	}
 	return tw.Flush()
+}
+
+// automationWhere is where an automation's runs execute, for a table.
+func automationWhere(a api.Automation) string {
+	if a.Executor == api.ExecutorEphemeral {
+		return "ephemeral " + sizeShort(a.Size)
+	}
+	return runs.Truncate(runs.SanitizeLine(a.Workspace.Label()), 40)
 }
 
 func automationStatus(a api.Automation) string {
@@ -313,18 +321,24 @@ func doAutomationsShow(ctx context.Context, env *runsEnv, ref string) error {
 	if a.Workspace != nil {
 		row("workspace", runs.NameAndID(a.Workspace.Name, a.Workspace.ID))
 	}
+	if a.Executor == api.ExecutorEphemeral {
+		row("executor", "ephemeral: a fresh container per run, size "+sizeLabel(a.Size))
+	}
 	agent := runs.SanitizeLine(a.Agent)
 	if a.Model != nil && *a.Model != "" {
 		agent += " · model " + runs.SanitizeLine(*a.Model)
 	}
 	row("agent", agent)
 	row("inference", inferenceLabel(a.Inference))
-	row("cwd", runs.SanitizeLine(a.Cwd))
-	worktree := "auto"
-	if a.GitIsolation != nil {
-		worktree = map[bool]string{true: "yes", false: "no"}[*a.GitIsolation]
+	if a.Executor != api.ExecutorEphemeral {
+		// An ephemeral run works in its fresh checkout: neither applies.
+		row("cwd", runs.SanitizeLine(a.Cwd))
+		worktree := "auto"
+		if a.GitIsolation != nil {
+			worktree = map[bool]string{true: "yes", false: "no"}[*a.GitIsolation]
+		}
+		row("worktree", worktree)
 	}
-	row("worktree", worktree)
 	if a.TimeoutSeconds > 0 {
 		row("timeout", (time.Duration(a.TimeoutSeconds) * time.Second).String())
 	}
@@ -514,7 +528,7 @@ func doAutomationsRun(ctx context.Context, env *runsEnv, ref string, input json.
 		if name == "" {
 			name = runs.Truncate(runs.SanitizeLine(ref), 64)
 		}
-		fmt.Fprintf(env.stderr, "run %s of %s queued on %s; Ctrl-C to detach\n", run.ID, name, runs.SanitizeLine(run.Workspace.Name))
+		fmt.Fprintf(env.stderr, "run %s of %s queued %s, Ctrl-C to detach\n", run.ID, name, runPlace(run, &api.CreateRunRequest{}))
 	}
 	return follow(ctx, env, run.ID, 0, autoRunJSON, true)
 }

@@ -1,0 +1,14 @@
+ephemeral runs, 2026-10 (inference plan)
+
+container time     49 minutes
+free minutes left  247 S-minutes of 300 (= 123 M or 61 L minutes); 53 used
+cost this month    €0.00 after your free minutes (not charged yet: billing is not active, usage is metered and shown only)
+monthly cap        €100.00 (change it in the browser, Settings at https://cloud.nan.builders/settings)
+
+prices per started minute (a 14 s run is 1 minute):
+  S  1 vCPU, 4 GiB RAM, 10 GB disk   €0.003  a minute uses 1 free S-minute
+  M  2 vCPU, 8 GiB RAM, 16 GB disk   €0.006  a minute uses 2 free S-minutes
+  L  4 vCPU, 12 GiB RAM, 20 GB disk  €0.012  a minute uses 4 free S-minutes
+
+Free minutes are S-minutes: one M minute uses 2, one L minute 4
+(100 free minutes = 100 minutes of S, 50 of M or 25 of L).

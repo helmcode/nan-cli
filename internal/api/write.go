@@ -22,6 +22,9 @@ type Features struct {
 	// Notifications is features.notifications: notification channels are
 	// available to the member.
 	Notifications bool `json:"notifications"`
+	// Ephemeral is features.ephemeral: runs in ephemeral containers are
+	// available to the member.
+	Ephemeral bool `json:"ephemeral"`
 }
 
 // Features is GET /api/auth/me, read for its feature flags.

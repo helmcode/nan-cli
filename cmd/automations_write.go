@@ -47,6 +47,24 @@ API's automation object, for example:
       exposure: actions
   approval_kinds: [github_pr_review]
 
+An ephemeral automation runs in a fresh, throwaway container instead of a
+workspace: no workspace, a fresh checkout of its repository, and a model.
+
+  name: nightly review
+  executor: ephemeral
+  size: m
+  checkout: fresh
+  github_repo: acme/api
+  agent: pi
+  model: glm5.3
+  instructions: Review the open pull requests.
+
+size is s (1 vCPU, 4 GiB), m (2 vCPU, 8 GiB) or l (4 vCPU, 12 GiB);
+s when left out. A private repository needs an agent secret GITHUB_TOKEN
+that can read it. ` + freeMinutesHelp + `.
+Creating or running one with a platform token needs the runs:ephemeral
+scope; see: nan ephemeral --help.
+
 The full list of fields is in the API reference: https://nan.builders/docs/runs`
 
 var automationsCreateCmd = &cobra.Command{
@@ -84,6 +102,10 @@ fields to change; the others keep their value. For example, to stop asking
 before pull request reviews are posted:
 
   approval_kinds: []
+
+or, for an ephemeral automation, to run it in a bigger container:
+
+  size: l
 
 ` + writeCredentialHelp + `
 
@@ -337,6 +359,9 @@ func resolveForWrite(ctx context.Context, env *runsEnv, ref string) (string, err
 }
 
 func doAutomationsCreate(ctx context.Context, env *runsEnv, body json.RawMessage) error {
+	if err := checkAutomationExecutor(body, true); err != nil {
+		return err
+	}
 	if err := requireWriteAPI(ctx, env, "automations"); err != nil {
 		return err
 	}
@@ -363,6 +388,9 @@ func warnAutomatic(env *runsEnv, a *api.Automation) {
 }
 
 func doAutomationsUpdate(ctx context.Context, env *runsEnv, ref string, body json.RawMessage, verb string) error {
+	if err := checkAutomationExecutor(body, false); err != nil {
+		return err
+	}
 	id, err := resolveForWrite(ctx, env, ref)
 	if err != nil {
 		return err

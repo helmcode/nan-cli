@@ -1,0 +1,4 @@
+ID                                    STATE      WORKSPACE    AGENT  INFERENCE  COST     CREATED           PROMPT
+6f1c2a9b-0000-4000-8000-000000000001  succeeded  ephemeral M  pi     nan        €0.018   2026-10-10 09:00  review PR 42
+6f1c2a9b-0000-4000-8000-000000000001  running    ephemeral M  pi     nan        pending  2026-10-10 09:00  review PR 42
+6f1c2a9b-0000-4000-8000-000000000001  succeeded  develop      pi     nan        -        2026-10-10 09:00  review PR 42

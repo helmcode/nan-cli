@@ -1,0 +1,19 @@
+{
+  "billing_enabled": false,
+  "cost_eur": 0,
+  "cost_eur_micros": 0,
+  "free_eur_micros_left": 741000,
+  "free_eur_micros_total": 900000,
+  "free_eur_micros_used": 159000,
+  "free_minutes_left": 247,
+  "minutes": 49,
+  "month": "2026-10",
+  "monthly_cap_eur_cents": 10000,
+  "plan": "inference",
+  "prices_eur_micros_per_minute": {
+    "l": 12000,
+    "m": 6000,
+    "s": 3000
+  },
+  "seconds": 2950
+}
