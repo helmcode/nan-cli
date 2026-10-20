@@ -88,17 +88,19 @@ jobs:
           echo "value=$tag" >> "$GITHUB_OUTPUT"
 
       # The version shown by `nan --version` is a constant in the source
-      # (internal/tui.Version). A tag that disagrees with it ships a binary
+      # (internal/build.Version). A tag that disagrees with it ships a binary
       # that lies about which build it is, and the first person to report a
       # bug reports the wrong version.
-      - name: Check the tag matches internal/tui.Version
+      - name: Check the tag matches internal/build.Version
         env:
           TAG: ${{ steps.tag.outputs.value }}
         run: |
-          declared="$(grep -oP 'const Version = "\K[^"]+' internal/tui/tui.go)"
-          tag="$TAG"
+          declared="$(grep -oP '^var Version = "\K[^"]+' internal/build/build.go)"
+          # A pre-release (v1.2.3-rc.1) is a candidate for the version the
+          # source declares, so it is checked without its suffix.
+          tag="${TAG%%-*}"
           if [ "v$declared" != "$tag" ]; then
-            echo "tag $tag does not match internal/tui.Version ($declared)" >&2
+            echo "tag $tag does not match internal/build.Version ($declared)" >&2
             echo "bump the constant or retag" >&2
             exit 1
           fi
@@ -119,16 +121,19 @@ jobs:
             # -trimpath keeps build paths out of the binary; -s -w drops the
             # symbol and DWARF tables, which is most of the size.
             CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
-              go build -trimpath -ldflags "-s -w" -o "dist/$binary" .
+              go build -trimpath -ldflags "-s -w" -o "dist/$binary" ./cmd/nan
             # Windows gets a .zip, not a .tar.gz: nothing on a stock Windows
             # unpacks a tarball by double-clicking, and scripts/install.sh is
             # bash, so nobody reaches these through the one-liner anyway.
+            # THIRD-PARTY-NOTICES.txt travels with every copy: one dependency
+            # is Apache-2.0, and its notice has to go wherever the binary goes.
+            cp THIRD-PARTY-NOTICES.txt dist/
             if [ "$os" = "windows" ]; then
-              (cd dist && zip -q "nan-cli_${VERSION}_${os}_${arch}.zip" "$binary")
+              (cd dist && zip -q "nan-cli_${VERSION}_${os}_${arch}.zip" "$binary" THIRD-PARTY-NOTICES.txt)
             else
-              tar -czf "dist/nan-cli_${VERSION}_${os}_${arch}.tar.gz" -C dist "$binary"
+              tar -czf "dist/nan-cli_${VERSION}_${os}_${arch}.tar.gz" -C dist "$binary" THIRD-PARTY-NOTICES.txt
             fi
-            rm "dist/$binary"
+            rm "dist/$binary" dist/THIRD-PARTY-NOTICES.txt
           done
           cd dist && sha256sum *.tar.gz *.zip > checksums.txt
           cat checksums.txt
@@ -182,8 +187,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.value }}
+        # A tag with a suffix (v1.2.3-rc.1) is a build for somebody to try,
+        # not a release: it goes out as a pre-release and never as latest.
+        # The installers and the update notice ask for /releases/latest,
+        # which skips pre-releases, so members keep the release they have
+        # and only whoever is given the tag installs it.
         run: |
+          set -euo pipefail
+          channel=()
+          case "$TAG" in
+            *-*) channel=(--prerelease --latest=false) ;;
+          esac
           gh release create "$TAG" \
             --title "$TAG" \
             --generate-notes \
+            "${channel[@]}" \
             dist/*.tar.gz dist/*.zip dist/checksums.txt

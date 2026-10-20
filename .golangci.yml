@@ -1,0 +1,48 @@
+# The house base config. Same set in every Go repo so a finding here means
+# the same thing as a finding there; the only per-repo line is the gci prefix.
+version: "2"
+
+# errcheck, govet, ineffassign, staticcheck and unused are on by default in v2.
+linters:
+  enable:
+    # Correctness
+    - bodyclose      # HTTP bodies left unclosed
+    - copyloopvar
+    - errorlint      # %v instead of %w, == instead of errors.Is
+    - nilerr         # returning nil when err != nil
+    - noctx          # HTTP requests with no context
+    # Security
+    - gosec
+    # Style
+    - gocritic
+    - misspell
+    - revive
+    - unconvert
+    - unparam
+    - wastedassign
+    # Performance
+    - prealloc
+
+  exclusions:
+    rules:
+      # A doc comment is obligatory in pkg/, where it shows up on
+      # pkg.go.dev. Inside internal/ it would mostly restate the name.
+      # revive's wording is "exported const X should have comment (or a
+      # comment on this block) or be unexported", so the obvious text to
+      # exclude — "should have comment or be unexported" — never matches.
+      - path: internal/
+        text: "should have comment"
+        linters: [revive]
+      - path: _test\.go
+        linters: [gosec, unparam]
+
+formatters:
+  enable:
+    - gofumpt
+    - gci
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/nxssie/nan-cli)

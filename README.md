@@ -49,28 +49,38 @@ built from.
 
 ## Usage
 
-Run `nan` to open the TUI dashboard:
+Run `nan` to open the dashboard:
 
 ```
 nan
 ```
 
-Navigate with `←/→` between tabs, `↑/↓` to scroll, `r` to refresh, `?` for help, `q` to quit.
+On a machine nobody has signed in on, it opens on the sign-in: your email, then
+the link from it, then your API key for this machine (skippable).
 
-### Tabs
+Seven areas run down the left, always on screen and numbered. `1`-`7` or `tab`
+move between them, `↑/↓` and `enter` pick a row and show what can be done with
+it, `/` finds anything by name, `e` opens the setup from anywhere, `s` signs in,
+`o` signs out (twice, to confirm), `r` reloads, `t` takes a short tour, `?`
+shows every key and `q` quits.
 
-| Tab | Description |
+| Area | What it shows |
 |---|---|
-| **Profile** | Your nan.builders account details |
-| **Usage** | Token usage across the last 24h, 30 days, and all time |
-| **Models** | Available models and your usage per model |
-| **Costs** | Estimated cost comparison against other providers |
-| **Setup** | API key management and tool auto-configuration |
-| **About** | Version and links |
+| **Home** | What needs you (sign in, a missing key, a tool not pointed at NaN, a newer release), new models, and shortcuts |
+| **Profile** | Your email (shortened), your plan, and when the membership ends if it has |
+| **Usage** | Token usage over the last 24 hours, 30 days and all time, by model |
+| **Models** | What your key can call, and your usage of each |
+| **Costs** | Estimated cost of that usage on other providers |
+| **Harnesses** | Your API key and the coding tools on this machine |
+| **About** | Version, links and where the session is kept |
 
-### Setup tab
+When a newer release is out, the header says so and Home has the command that
+updates your copy; after any other command, one line on stderr says the same.
 
-The Setup tab lets you configure AI coding tools to use the NaN API automatically. Supported tools:
+### Setting up your tools
+
+`e` in the dashboard, or `nan setup` on the command line, configures the AI
+coding tools on this machine to use the NaN API. Supported tools:
 
 - [OpenCode](https://opencode.ai)
 - [Factory AI](https://factory.ai) (`droid`)
@@ -78,13 +88,18 @@ The Setup tab lets you configure AI coding tools to use the NaN API automaticall
 - [Codex](https://github.com/openai/codex)
 - [Hermes](https://hermes-agent.nousresearch.com/)
 
-Press `e` to set your API key, `space` to toggle tools, and `c` to apply the configuration.
+Paste your key, tick the tools, and it writes them. Only installed tools are
+listed, and only the NaN part of each config is touched: everything else in
+those files is left as it was, and unticking a tool takes ours back out. The
+key is checked against the cluster before anything is written, so a mistyped
+one is caught here rather than as a 401 inside each tool later.
 
-Only installed tools are listed, and only the NaN part of each config is
-touched: everything else in those files is left as it was, and unticking a
-tool takes ours back out. The key you paste is checked against the cluster
-before you apply it, so a mistyped one is caught here rather than as a 401
-inside each tool later.
+```bash
+nan setup                                   # asks, and shows what is installed
+echo "$NAN_API_KEY" | nan setup --key - --all   # for a machine with nobody at it
+nan setup status                            # what is configured right now
+nan setup remove                            # take NaN back out of every tool
+```
 
 ## Agent runs
 
@@ -297,7 +312,7 @@ JSON object per line): <https://nan.builders/docs/runs>.
    refused.
 3. **A saved token**, from `nan auth login --api-token`.
 4. **Your session**, from `nan auth login` (the emailed sign-in link).
-5. **A saved API key**, from the Setup tab (or an `sk-...` key saved with
+5. **A saved API key**, from `nan setup` or the dashboard (or an `sk-...` key saved with
    `nan auth login --api-token`).
 
 Create platform tokens in **Settings > Tokens** at
@@ -332,14 +347,14 @@ history and in `ps`.
 
 ## Build from source
 
-Requires Go 1.26.9+ ([mise](https://mise.jdx.dev/) recommended) — the version
+Requires Go 1.27.2+ ([mise](https://mise.jdx.dev/) recommended), the version
 in `go.mod`, which is where the standard library carries the current security
 fixes:
 
 ```bash
 git clone https://github.com/helmcode/nan-cli
 cd nan-cli
-go build -o nan .
+go build -o nan ./cmd/nan
 ./nan
 ```
 

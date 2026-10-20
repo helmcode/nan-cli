@@ -174,8 +174,10 @@ func golden3(t *testing.T, name string, out any) {
 // The request of a BYOK run: inference with the secret's name and the
 // model, no top-level model; a NaN run sends no inference at all.
 func TestCreateRunRequestInference(t *testing.T) {
-	b, _ := json.Marshal(CreateRunRequest{Workspace: "w", Agent: "pi", Prompt: "p",
-		Inference: &RunInference{Source: InferenceBYOK, Secret: "K", Model: "m"}})
+	b, _ := json.Marshal(CreateRunRequest{
+		Workspace: "w", Agent: "pi", Prompt: "p",
+		Inference: &RunInference{Source: InferenceBYOK, Secret: "K", Model: "m"},
+	})
 	if want := `{"workspace":"w","agent":"pi","prompt":"p","inference":{"source":"byok","secret":"K","model":"m"}}`; string(b) != want {
 		t.Fatalf("%s", b)
 	}

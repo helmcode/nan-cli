@@ -1,7 +1,7 @@
 name: tag
 
 # Publishing a release was the one step nobody automated, and it showed: #26
-# bumped internal/tui.Version to 0.1.20 on the 17th, and four days later
+# bumped internal/build.Version to 0.1.20 on the 17th, and four days later
 # /releases/latest still answered v0.1.19. Everything downstream was fine - the
 # release workflow works, the installer works - but they only run once someone
 # remembers to push a tag, and the fixes sat in main where nobody could install
@@ -44,19 +44,19 @@ jobs:
           # The commit CI passed on, not whatever main has drifted to since.
           ref: ${{ github.event.workflow_run.head_sha }}
 
-      - name: Tag the commit if internal/tui.Version is new
+      - name: Tag the commit if internal/build.Version is new
         id: tag
         env:
           SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          declared="$(grep -oP 'const Version = "\K[^"]+' internal/tui/tui.go)"
+          declared="$(grep -oP '^var Version = "\K[^"]+' internal/build/build.go)"
           tag="v$declared"
           # The same shape the release workflow insists on. A constant that is
           # not a version we can tag is a mistake in the source, and finding
           # out here beats finding out from a tag named v0.1.20-wip.
           if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+([-][A-Za-z0-9.]+)?$'; then
-            echo "internal/tui.Version is not something we can tag: $declared" >&2
+            echo "internal/build.Version is not something we can tag: $declared" >&2
             exit 1
           fi
           echo "value=$tag" >> "$GITHUB_OUTPUT"
