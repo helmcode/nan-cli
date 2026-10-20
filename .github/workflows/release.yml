@@ -96,7 +96,9 @@ jobs:
           TAG: ${{ steps.tag.outputs.value }}
         run: |
           declared="$(grep -oP '^var Version = "\K[^"]+' internal/build/build.go)"
-          tag="$TAG"
+          # A pre-release (v1.2.3-rc.1) is a candidate for the version the
+          # source declares, so it is checked without its suffix.
+          tag="${TAG%%-*}"
           if [ "v$declared" != "$tag" ]; then
             echo "tag $tag does not match internal/build.Version ($declared)" >&2
             echo "bump the constant or retag" >&2
@@ -185,8 +187,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.value }}
+        # A tag with a suffix (v1.2.3-rc.1) is a build for somebody to try,
+        # not a release: it goes out as a pre-release and never as latest.
+        # The installers and the update notice ask for /releases/latest,
+        # which skips pre-releases, so members keep the release they have
+        # and only whoever is given the tag installs it.
         run: |
+          set -euo pipefail
+          channel=()
+          case "$TAG" in
+            *-*) channel=(--prerelease --latest=false) ;;
+          esac
           gh release create "$TAG" \
             --title "$TAG" \
             --generate-notes \
+            "${channel[@]}" \
             dist/*.tar.gz dist/*.zip dist/checksums.txt
