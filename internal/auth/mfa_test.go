@@ -272,7 +272,6 @@ func TestEveryRefusalInTheContract(t *testing.T) {
 		{"rate limited", rh(429, `{"error":"rate_limited","message":"x","retry_after":60}`, "Retry-After", "60"), "rate_limited", false, []string{"wait 1 minute", "new link"}},
 		{"rate limited, header only", rh(429, `{"error":"rate_limited","message":"x"}`, "Retry-After", "45"), "rate_limited", false, []string{"wait 45 seconds"}},
 		{"another origin", r(403, `{"error":"forbidden_origin"}`), "forbidden_origin", false, []string{"forbidden origin", "HTTP 403"}},
-		{"codes suspended", r(403, `{"error":"mfa_totp_suspended","message":"x"}`), "mfa_totp_suspended", true, []string{"recovery codes"}},
 		{"server error", r(500, `{"error":"internal_error","message":"x"}`), "internal_error", false, []string{"could not check the code", "HTTP 500"}},
 		{"two-factor turned off", r(404, "404 page not found\n"), "", false, []string{"HTTP 404", "new link"}},
 		{"not our body", r(502, "<html>"+authtest.Pending+"\x1b[31m</html>"), "", false, []string{"HTTP 502"}},

@@ -90,9 +90,7 @@ func Retryable(err error) bool {
 	switch e.Code {
 	case "mfa_code_invalid", "mfa_recovery_code_invalid", "mfa_code_already_used",
 		// Nothing was spent: the platform could not read what was sent.
-		"invalid_request",
-		// Authenticator codes refused for good; a recovery code still works.
-		"mfa_totp_suspended":
+		"invalid_request":
 		return true
 	}
 	return false
@@ -108,9 +106,6 @@ func (e *MFAError) Error() string {
 		return "that code was already used — wait for the next one in your authenticator app" + attemptsLeft(e.Attempts)
 	case "invalid_request":
 		return "nan.builders could not read that — type the 6-digit code from your authenticator app, or a recovery code (xxxx-xxxx-xxxx-xxxx)"
-	case "mfa_totp_suspended":
-		return "authenticator codes are suspended on this account after too many wrong ones — " +
-			"use one of your recovery codes, or ask NaN to reset your two-factor authentication"
 	case "mfa_challenge_exhausted":
 		return "too many wrong codes for this sign-in — " + newLinkHint
 	case "mfa_challenge_expired":
