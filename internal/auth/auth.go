@@ -216,5 +216,11 @@ func linkReasonMessage(reason string) string {
 	if message, ok := linkReasons[reason]; ok {
 		return message
 	}
+	// The reason comes out of a redirect's query, decoded, so it can carry
+	// anything - an escape sequence, a paragraph. Only something shaped like
+	// the platform's reasons is put on the terminal.
+	if !isErrorCode(reason) {
+		return "the link did not work, and nan.builders did not say why in a way this version can show — ask for a new link"
+	}
 	return "the link did not work: " + strings.ReplaceAll(reason, "_", " ")
 }

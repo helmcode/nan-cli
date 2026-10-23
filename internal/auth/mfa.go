@@ -204,7 +204,9 @@ func normalizeAnswer(input string) (field, value string, err error) {
 	return "", "", ErrNotACode
 }
 
-// isErrorCode is the platform's error-code shape, ^[a-z0-9_]+$.
+// isErrorCode is the shape of the platform's codes, ^[a-z0-9_]{1,64}$: the
+// error codes of the challenge and the reasons of a refused link alike. Only
+// those are echoed to the terminal.
 func isErrorCode(s string) bool {
 	return s != "" && len(s) <= 64 && allASCII(s, func(b byte) bool {
 		return isDigit(b) || (b >= 'a' && b <= 'z') || b == '_'

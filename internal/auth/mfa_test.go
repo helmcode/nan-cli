@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -469,5 +470,50 @@ func TestUnfinishedSignUpWithoutAFactorGetsNoSession(t *testing.T) {
 	got, err := ExchangeToken(authtest.LinkToken)
 	if err == nil || got != "" || !strings.Contains(err.Error(), "no session came back") {
 		t.Fatalf("ExchangeToken = %q, %v", got, err)
+	}
+}
+
+// The reason of a refused link is read out of a redirect's query, decoded, so
+// it can be anything. Only the platform's shape of reason is put on the
+// terminal; anything else gets a sentence of our own.
+func TestOddReasonsNeverReachTheTerminal(t *testing.T) {
+	for _, c := range []struct {
+		name, reason string
+		echoed       bool
+	}{
+		{"one of ours, unknown to this build", "a_reason_from_tomorrow", true},
+		{"the longest that is still one", strings.Repeat("a", 64), true},
+		{"an escape sequence", "\x1b[2J\x1b]0;owned\x07", false},
+		{"a new line", "invalid\nlink", false},
+		{"capitals", "Invalid_Link", false},
+		{"spaces", "please paste your token here", false},
+		{"too long", strings.Repeat("a", 65), false},
+		{"not ASCII", "enlace_inválido", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, authtest.FrontendURL+"/access-denied?reason="+url.QueryEscape(c.reason), http.StatusFound)
+			}))
+			defer srv.Close()
+			old := SignInBaseURL
+			SignInBaseURL = srv.URL
+			defer func() { SignInBaseURL = old }()
+
+			_, err := ExchangeToken(authtest.LinkToken)
+			if err == nil {
+				t.Fatal("no error")
+			}
+			msg := err.Error()
+			shown := strings.ReplaceAll(c.reason, "_", " ")
+			if c.echoed != strings.Contains(msg, shown) {
+				t.Errorf("echoed = %v, want %v: %q", !c.echoed, c.echoed, msg)
+			}
+			if strings.ContainsAny(msg, "\x1b\x07\n") {
+				t.Errorf("control characters reached the message: %q", msg)
+			}
+			if !c.echoed && !strings.Contains(msg, "ask for a new link") {
+				t.Errorf("%q does not say what to do", msg)
+			}
+		})
 	}
 }
