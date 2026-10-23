@@ -25,7 +25,7 @@ func mfaPlatform(t *testing.T, factor bool) *authtest.Platform {
 	t.Helper()
 	p := authtest.New(t)
 	p.Factor = factor
-	swap(t, &auth.Origin, p.URL)
+	swap(t, &auth.SignInBaseURL, p.URL)
 	for _, f := range []*string{&linkFlag, &totpFlag, &tokenFlag, &emailFlag} {
 		swap(t, f, "")
 	}

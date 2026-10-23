@@ -34,7 +34,7 @@ const (
 	newLinkHint = "ask for a new link and sign in again"
 )
 
-func mfaChallengeURL() string { return Origin + "/api/auth/mfa/challenge" }
+func mfaChallengeURL() string { return SignInBaseURL + "/api/auth/mfa/challenge" }
 
 // MFARequiredError is what ExchangeToken returns when the link was good and
 // the account asks for a second factor. Answer it with Complete.

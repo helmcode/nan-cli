@@ -18,9 +18,9 @@ import (
 func fakePlatform(t *testing.T) *authtest.Platform {
 	t.Helper()
 	p := authtest.New(t)
-	old := Origin
-	Origin = p.URL
-	t.Cleanup(func() { Origin = old })
+	old := SignInBaseURL
+	SignInBaseURL = p.URL
+	t.Cleanup(func() { SignInBaseURL = old })
 	return p
 }
 
@@ -356,9 +356,9 @@ func TestMFAReasonWithoutTheCookie(t *testing.T) {
 		http.Redirect(w, r, authtest.FrontendURL+"/mfa?reason=mfa_required", http.StatusFound)
 	}))
 	defer srv.Close()
-	old := Origin
-	Origin = srv.URL
-	defer func() { Origin = old }()
+	old := SignInBaseURL
+	SignInBaseURL = srv.URL
+	defer func() { SignInBaseURL = old }()
 
 	_, err := ExchangeToken(authtest.LinkToken)
 	var ch *MFARequiredError

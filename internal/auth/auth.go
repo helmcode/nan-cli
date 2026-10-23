@@ -33,19 +33,30 @@ const (
 	LinkValidity = "15 minutes"
 )
 
-// Origin is where every call of the sign-in goes. A variable and not a
-// constant for two readers only: the tests, which point the flow at a server
-// of their own, and a build for QA, which points it at the dev platform
-// without a flag or an environment variable that a released binary would
-// carry:
+// SignInBaseURL is where the three calls of the sign-in go: the link
+// request, the link exchange and the two-factor challenge. Nothing else: the
+// rest of the CLI (internal/api - nan me, logout, runs, the panel's tabs)
+// keeps its own production URLs.
 //
-//	go build -ldflags "-X github.com/nxssie/nan-cli/internal/auth.Origin=https://cloud-api-dev.nan.builders"
+// A variable and not a constant for two readers only: the tests, which point
+// the sign-in at a server of their own, and a build for QA, which points it at
+// the dev platform without a flag or an environment variable that a released
+// binary would carry:
+//
+//	go build -ldflags "-X github.com/nxssie/nan-cli/internal/auth.SignInBaseURL=https://cloud-api-dev.nan.builders" -o nan-qa .
+//	HOME=$(mktemp -d) ./nan-qa auth login --email you@example.com
+//
+// Run a QA build with a HOME of its own. It saves the dev session in
+// ~/.config/nan/session.json, over the member's production one, and every
+// command after the sign-in sends that dev session to production: the panel
+// takes the refusal for an expired session and clears it, and logout asks
+// production, not dev, to end it.
 //
 // Nothing else sets it.
-var Origin = "https://cloud-api.nan.builders"
+var SignInBaseURL = "https://cloud-api.nan.builders"
 
-func loginRequestURL() string { return Origin + "/api/auth/login/request" }
-func loginVerifyURL() string  { return Origin + "/api/auth/login/verify" }
+func loginRequestURL() string { return SignInBaseURL + "/api/auth/login/request" }
+func loginVerifyURL() string  { return SignInBaseURL + "/api/auth/login/verify" }
 
 // clientKind is what this CLI declares on the verify POST, so the platform
 // records the session it hands back as a CLI session. A CLI session can

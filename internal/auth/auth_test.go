@@ -109,9 +109,9 @@ func TestExchangeTokenDeclaresTheCLI(t *testing.T) {
 		http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 	}))
 	defer srv.Close()
-	old := Origin
-	Origin = srv.URL
-	defer func() { Origin = old }()
+	old := SignInBaseURL
+	SignInBaseURL = srv.URL
+	defer func() { SignInBaseURL = old }()
 
 	got, err := ExchangeToken("tok")
 	if err != nil || got != "sess" {

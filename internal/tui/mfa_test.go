@@ -27,9 +27,9 @@ func atTheCode(t *testing.T) (model, *authtest.Platform) {
 	t.Helper()
 	p := authtest.New(t)
 	p.Factor = true
-	old := auth.Origin
-	auth.Origin = p.URL
-	t.Cleanup(func() { auth.Origin = old })
+	old := auth.SignInBaseURL
+	auth.SignInBaseURL = p.URL
+	t.Cleanup(func() { auth.SignInBaseURL = old })
 
 	m := setupModel(t, &session.Session{})
 	m.lay = newLayout(100, 40)
