@@ -332,7 +332,7 @@ history and in `ps`.
 
 ## Build from source
 
-Requires Go 1.26.9+ ([mise](https://mise.jdx.dev/) recommended) — the version
+Requires Go 1.26.10+ ([mise](https://mise.jdx.dev/) recommended) — the version
 in `go.mod`, which is where the standard library carries the current security
 fixes:
 
