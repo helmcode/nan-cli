@@ -300,15 +300,24 @@ func recoveryCodesLeft(n int) string {
 // command exits.
 func readHiddenLine(f *os.File) ([]byte, error) {
 	fd := f.Fd()
-	if state, err := term.GetState(fd); err == nil {
+	if state, err := termGetState(fd); err == nil {
 		release := onInterrupt(func() {
-			_ = term.Restore(fd, state)
+			_ = termRestore(fd, state)
 			fmt.Fprintln(os.Stderr)
 		})
 		defer release()
 	}
-	return term.ReadPassword(fd)
+	return termReadPassword(fd)
 }
+
+// The terminal calls readHiddenLine makes, as variables so a test can stand
+// in for a terminal it does not have and see what the interrupt handler puts
+// back.
+var (
+	termGetState     = term.GetState
+	termRestore      = term.Restore
+	termReadPassword = term.ReadPassword
+)
 
 // interrupted ends the command after ctrl-c, with the status a shell gives an
 // interrupted one. A variable for the tests.
