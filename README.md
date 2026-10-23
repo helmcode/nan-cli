@@ -330,6 +330,20 @@ nan auth login --api-token < token.txt  # or pipe it in
 Never put a token on the command line itself: it would end up in your shell
 history and in `ps`.
 
+**Two-factor authentication.** With it turned on for your account (Settings >
+Account > Two-factor authentication at <https://cloud.nan.builders>),
+`nan auth login` and the dashboard's sign-in ask for the code from your
+authenticator app after the link, without echo. One of your recovery codes
+works in its place. With no terminal to ask on, pipe the code in:
+
+```bash
+echo 123456 | nan auth login --link "<the link>" --totp -
+```
+
+`--totp` takes only `-`, so a recovery code never ends up in your shell
+history. Versions before 0.1.35 cannot ask for the code: the platform refuses
+the link with `mfa enabled update nan cli`. Update, then ask for a new link.
+
 ## Build from source
 
 Requires Go 1.26.10+ ([mise](https://mise.jdx.dev/) recommended) — the version
