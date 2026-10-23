@@ -1980,7 +1980,7 @@ func TestSigningInGivesTheClientTheNewToken(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	updated, _ := m.Update(signedInMsg{nil})
+	updated, _ := m.Update(signedInMsg{})
 	after := updated.(model)
 
 	if after.sess.Token != "a-fresh-session-token" {
@@ -2247,7 +2247,7 @@ func TestSigningInLeadsStraightToTheKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	updated, _ := m.Update(signedInMsg{nil})
+	updated, _ := m.Update(signedInMsg{})
 	after := updated.(model)
 	if !after.editingKey {
 		t.Error("after signing in the member is left to work out that `e` is next")

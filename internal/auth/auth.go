@@ -20,8 +20,7 @@ import (
 )
 
 const (
-	loginRequestURL = "https://cloud-api.nan.builders/api/auth/login/request"
-	sessionCookie   = "nan_session"
+	sessionCookie = "nan_session"
 	// The domain the platform sends its sign-in links from. Subdomains count:
 	// the link lands on the web app, the API lives next door.
 	linkDomain = "nan.builders"
@@ -34,9 +33,30 @@ const (
 	LinkValidity = "15 minutes"
 )
 
-// loginVerifyURL is a variable so a test can point the exchange at a server
-// of its own.
-var loginVerifyURL = "https://cloud-api.nan.builders/api/auth/login/verify"
+// SignInBaseURL is where the three calls of the sign-in go: the link
+// request, the link exchange and the two-factor challenge. Nothing else: the
+// rest of the CLI (internal/api - nan me, logout, runs, the panel's tabs)
+// keeps its own production URLs.
+//
+// A variable and not a constant for two readers only: the tests, which point
+// the sign-in at a server of their own, and a build for QA, which points it at
+// the dev platform without a flag or an environment variable that a released
+// binary would carry:
+//
+//	go build -ldflags "-X github.com/nxssie/nan-cli/internal/auth.SignInBaseURL=https://cloud-api-dev.nan.builders" -o nan-qa .
+//	HOME=$(mktemp -d) ./nan-qa auth login --email you@example.com
+//
+// Run a QA build with a HOME of its own. It saves the dev session in
+// ~/.config/nan/session.json, over the member's production one, and every
+// command after the sign-in sends that dev session to production: the panel
+// takes the refusal for an expired session and clears it, and logout asks
+// production, not dev, to end it.
+//
+// Nothing else sets it.
+var SignInBaseURL = "https://cloud-api.nan.builders"
+
+func loginRequestURL() string { return SignInBaseURL + "/api/auth/login/request" }
+func loginVerifyURL() string  { return SignInBaseURL + "/api/auth/login/verify" }
 
 // clientKind is what this CLI declares on the verify POST, so the platform
 // records the session it hands back as a CLI session. A CLI session can
@@ -61,7 +81,7 @@ func RequestSignInLink(email string) error {
 		return err
 	}
 	client := &http.Client{Timeout: requestTimeout}
-	resp, err := client.Post(loginRequestURL, "application/json", bytes.NewReader(body))
+	resp, err := client.Post(loginRequestURL(), "application/json", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("could not reach nan.builders: %w", err)
 	}
@@ -119,6 +139,10 @@ func isLinkHost(host string) bool {
 // cookie back. This does the same POST and keeps the cookie instead of
 // following the redirect, which is the whole reason the old flow had to send
 // people into DevTools.
+//
+// An account with two-factor authentication gets no session from the link
+// alone: the answer is a challenge, returned here as *MFARequiredError, and
+// the session comes from answering it (MFARequiredError.Complete).
 func ExchangeToken(token string) (string, error) {
 	client := &http.Client{
 		Timeout: requestTimeout,
@@ -126,23 +150,39 @@ func ExchangeToken(token string) (string, error) {
 			return http.ErrUseLastResponse
 		},
 	}
-	form := url.Values{"token": {token}, "client": {clientKind}}
-	resp, err := client.PostForm(loginVerifyURL, form)
+	// mfa=1 says this build can answer a two-factor challenge. Without it the
+	// platform refuses an account that has a factor outright, with a reason
+	// that tells the member to update - which is what every build before this
+	// one gets, since none of them could ask for the code.
+	form := url.Values{"token": {token}, "client": {clientKind}, "mfa": {"1"}}
+	resp, err := client.PostForm(loginVerifyURL(), form)
 	if err != nil {
 		return "", fmt.Errorf("could not reach nan.builders: %w", err)
 	}
 	defer resp.Body.Close()
 
+	var pending string
 	for _, c := range resp.Cookies() {
 		if c.Name == sessionCookie && c.Value != "" {
 			return c.Value, nil
+		}
+		if c.Name == mfaPendingCookie && c.Value != "" {
+			pending = c.Value
 		}
 	}
 
 	// A spent or expired link redirects to the platform's access-denied page
 	// with the reason in the query, which is more useful than the status code.
+	// A link that worked for an account with a second factor redirects to the
+	// page that asks for the code, with the challenge in a cookie.
 	if location, err := resp.Location(); err == nil {
-		if reason := location.Query().Get("reason"); reason != "" {
+		reason := location.Query().Get("reason")
+		switch {
+		case reason == mfaRequiredReason && pending != "":
+			return "", &MFARequiredError{pending: pending}
+		case reason == mfaRequiredReason:
+			return "", errors.New("nan.builders asked for a two-factor code but sent no sign-in to answer it — ask for a new link and sign in again")
+		case reason != "":
 			return "", errors.New(linkReasonMessage(reason))
 		}
 	}
@@ -159,11 +199,28 @@ var linkReasons = map[string]string{
 	"invalid_link": "that link expired or was already used — a link works once and " +
 		"expires " + LinkValidity + " after it is sent, so ask for another one",
 	"missing_token": "that link is incomplete — copy the whole link out of the most recent email",
+	// What a build from before two-factor sign-in gets for an account that
+	// has it. This build says it can answer the challenge, so it should never
+	// be told this; if it is, the sentence is still the right one.
+	"mfa_enabled_update_nan_cli": "this account uses two-factor authentication, and this nan-cli cannot ask for the code — " +
+		"update it with the installer (https://github.com/helmcode/nan-cli#install) and ask for a new link",
+	// An account that has not finished signing up and has two-factor
+	// authentication on: the setup, behind the code, happens in the browser
+	// only. The link this was is spent.
+	"finish_onboarding_in_the_browser": "your NaN account is not set up yet — finish it in the browser: " +
+		"ask for a new link at https://cloud.nan.builders (this one is spent), complete the setup there, " +
+		"then sign in here again",
 }
 
 func linkReasonMessage(reason string) string {
 	if message, ok := linkReasons[reason]; ok {
 		return message
+	}
+	// The reason comes out of a redirect's query, decoded, so it can carry
+	// anything - an escape sequence, a paragraph. Only something shaped like
+	// the platform's reasons is put on the terminal.
+	if !isErrorCode(reason) {
+		return "the link did not work, and nan.builders did not say why in a way this version can show — ask for a new link"
 	}
 	return "the link did not work: " + strings.ReplaceAll(reason, "_", " ")
 }
