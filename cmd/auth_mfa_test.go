@@ -238,6 +238,29 @@ func TestTOTPFromStdin(t *testing.T) {
 	})
 }
 
+// --totp - with a terminal on stdin: the code is still read without echo,
+// and it still gets one try, as the help says.
+func TestTOTPFromATerminalStdin(t *testing.T) {
+	home := fakeHome(t, "")
+	p := mfaPlatform(t, true)
+	codes, asked := typed("000000", authtest.Code)
+	codes.fromStdin = true
+	var prompt bytes.Buffer
+	err := finishSignIn(authtest.LinkToken, codes, io.Discard, &prompt)
+	if err == nil || !strings.Contains(err.Error(), "not right") {
+		t.Fatalf("err = %v", err)
+	}
+	if *asked != 1 || len(p.Challenges()) != 1 {
+		t.Errorf("%d prompts, %d POSTs: --totp - gets one try", *asked, len(p.Challenges()))
+	}
+	if !strings.Contains(prompt.String(), "Authenticator code: ") {
+		t.Errorf("not asked on the terminal: %q", prompt.String())
+	}
+	if sess, _ := readSession(t, home); sess != nil {
+		t.Errorf("saved %v", sess)
+	}
+}
+
 // No terminal and no --totp: the link is already spent, so the message says
 // to ask for another and names the flag that would have worked.
 func TestNoTerminalAndNoFlag(t *testing.T) {

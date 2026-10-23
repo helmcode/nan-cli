@@ -38,7 +38,9 @@ var loginCmd = &cobra.Command{
 
 With two-factor authentication on, the link is followed by the code from
 your authenticator app, or one of your recovery codes. It is asked for
-without echo; with no terminal to ask on, pipe it in with --totp -.
+without echo, again after a wrong one; with no terminal to ask on, pipe it
+in with --totp -. With --totp - the code gets one try, and if stdin is a
+terminal it is still asked for there without echo.
 
 With --api-token, save a platform token instead, for a machine with nobody
 at the keyboard (a server, a CI runner). Create the token in Settings >

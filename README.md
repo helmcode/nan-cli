@@ -341,7 +341,8 @@ echo 123456 | nan auth login --link "<the link>" --totp -
 ```
 
 `--totp` takes only `-`, so a recovery code never ends up in your shell
-history. Versions before 0.1.35 cannot ask for the code: the platform refuses
+history. With `--totp -` the code gets one try, where the prompt lets you try
+again; if stdin is a terminal it is still asked for there, without echo. Versions before 0.1.35 cannot ask for the code: the platform refuses
 the link with `mfa enabled update nan cli`. Update, then ask for a new link.
 
 ## Build from source
