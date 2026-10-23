@@ -153,7 +153,17 @@ type configuredMsg struct {
 type firstRunMsg struct{}
 
 type linkSentMsg struct{ err error }
-type signedInMsg struct{ err error }
+
+// signedInMsg ends the sign-in: err when it failed, and notice for something
+// the member should read once it worked (a recovery code spent).
+type signedInMsg struct {
+	err    error
+	notice string
+}
+
+// mfaChallengeMsg is a link that worked for an account with two-factor
+// authentication: the session comes once the challenge is answered.
+type mfaChallengeMsg struct{ challenge *auth.MFARequiredError }
 
 // signedOutMsg is the platform's answer to ending the session (err nil when it
 // confirmed).
@@ -205,6 +215,11 @@ type model struct {
 	loginEmail string
 	loginMsg   string
 	loginBusy  bool
+	// The two-factor challenge the link opened, while the code is asked
+	// for. In memory only, like everything else about it.
+	loginChallenge *auth.MFARequiredError
+	// Said on the steps after the sign-in, once: a recovery code was spent.
+	loginNotice string
 }
 
 // Where a member is in the guided setup. The inner inputs still drive
@@ -262,13 +277,15 @@ func (w wizardStep) mood() mascotMood {
 }
 
 // Where a member is in the sign-in flow. It is two questions - an address and
-// the link that arrives at it.
+// the link that arrives at it - and a third for an account with two-factor
+// authentication: the code from the authenticator app.
 type loginStage int
 
 const (
 	loginOff loginStage = iota
 	loginAskEmail
 	loginAskLink
+	loginAskCode
 )
 
 func newModel(client *api.Client, sess *session.Session) model {
@@ -425,10 +442,44 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loginInput.EchoCharacter = '•'
 		return m, m.loginInput.Focus()
 
+	case mfaChallengeMsg:
+		m.loginBusy = false
+		// Left with esc while the link was being exchanged: nothing to ask.
+		if m.loginStage != loginAskLink {
+			return m, nil
+		}
+		m.loginChallenge = msg.challenge
+		m.loginStage = loginAskCode
+		m.loginMsg = "this account uses two-factor authentication — enter the 6-digit code from your" +
+			" authenticator app, or one of your recovery codes"
+		m.loginInput.SetValue("")
+		m.loginInput.Placeholder = "123456"
+		m.loginInput.Prompt = "Authenticator code: "
+		// A recovery code works until it is used, so it is not echoed either.
+		m.loginInput.EchoMode = textinput.EchoPassword
+		m.loginInput.EchoCharacter = '•'
+		return m, m.loginInput.Focus()
+
 	case signedInMsg:
 		m.loginBusy = false
 		if msg.err != nil {
 			m.loginMsg = "error: " + msg.err.Error()
+			if m.loginStage == loginAskCode {
+				if auth.Retryable(msg.err) {
+					m.loginInput.SetValue("")
+				} else {
+					// The challenge is over, and the link that opened it was
+					// spent opening it: back to the address, filled in, so
+					// enter asks for a new one.
+					m.loginChallenge = nil
+					m.wizard = wizardEmail
+					m.loginStage = loginAskEmail
+					m.loginInput.SetValue(m.loginEmail)
+					m.loginInput.Placeholder = "you@example.com"
+					m.loginInput.Prompt = "Email: "
+					m.loginInput.EchoMode = textinput.EchoNormal
+				}
+			}
 			return m, m.loginInput.Focus()
 		}
 		// Reload the session so the token is the one just written, and drop
@@ -444,6 +495,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.client = api.New(m.sess.Token)
 		wasGuided := m.wizard != wizardOff
 		m.cancelLogin()
+		m.loginNotice = msg.notice
 		if wasGuided {
 			m.wizard = wizardKey
 		}
@@ -506,6 +558,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.loginEmail = value
 					m.loginMsg = "sending a link to " + value + "…"
 					return m, sendLink(value)
+				}
+				if m.loginStage == loginAskCode {
+					m.loginMsg = "checking the code…"
+					return m, answerChallenge(m.loginChallenge, value)
 				}
 				m.loginMsg = "signing in…"
 				return m, signIn(value)
@@ -771,6 +827,8 @@ func (m *model) startLogin() tea.Cmd {
 	m.wizard = wizardEmail
 	m.loginStage = loginAskEmail
 	m.loginMsg = ""
+	m.loginNotice = ""
+	m.loginChallenge = nil
 	// A machine set up with a platform token looks signed in to whoever set
 	// it up. The dashboard cannot use one, and asking for an email with no
 	// word about it reads as the token having been lost.
@@ -832,6 +890,7 @@ func (m *model) resumeSetup() tea.Cmd {
 func (m *model) cancelLogin() {
 	m.wizard = wizardOff
 	m.loginStage = loginOff
+	m.loginChallenge = nil
 	m.loginBusy = false
 	m.loginInput.Blur()
 	m.loginInput.SetValue("")
@@ -846,22 +905,55 @@ func signIn(pasted string) tea.Cmd {
 	return func() tea.Msg {
 		token, err := auth.TokenFromLink(strings.TrimSpace(pasted))
 		if err != nil {
-			return signedInMsg{err}
+			return signedInMsg{err: err}
 		}
 		sessionToken, err := auth.ExchangeToken(token)
+		var challenge *auth.MFARequiredError
+		if errors.As(err, &challenge) {
+			return mfaChallengeMsg{challenge}
+		}
 		if err != nil {
-			return signedInMsg{err}
+			return signedInMsg{err: err}
 		}
-		current, err := session.Load()
-		if err != nil {
-			current = &session.Session{}
-		}
-		current.Token = sessionToken
-		if err := session.Save(current); err != nil {
-			return signedInMsg{err}
-		}
-		return signedInMsg{nil}
+		return signedInMsg{err: saveSessionToken(sessionToken)}
 	}
+}
+
+// answerChallenge posts the code the member typed against the challenge the
+// link opened.
+func answerChallenge(challenge *auth.MFARequiredError, code string) tea.Cmd {
+	return func() tea.Msg {
+		signIn, err := challenge.Complete(code)
+		if err != nil {
+			return signedInMsg{err: err}
+		}
+		if err := saveSessionToken(signIn.Session); err != nil {
+			return signedInMsg{err: err}
+		}
+		if !signIn.UsedRecoveryCode {
+			return signedInMsg{}
+		}
+		return signedInMsg{notice: recoveryCodesNotice(signIn.RecoveryCodesLeft)}
+	}
+}
+
+// recoveryCodesNotice is what the panel says after a recovery code got the
+// member in: each works once, and running out is the way to be locked out.
+func recoveryCodesNotice(left int) string {
+	const where = "cloud.nan.builders, Settings > Account > Two-factor authentication"
+	if left == 0 {
+		return "that was your last recovery code — make new ones before you need one: " + where
+	}
+	return fmt.Sprintf("signed in with a recovery code, %d left — you can make new ones at %s", left, where)
+}
+
+func saveSessionToken(token string) error {
+	current, err := session.Load()
+	if err != nil {
+		current = &session.Session{}
+	}
+	current.Token = token
+	return session.Save(current)
 }
 
 func (m model) fetchKeyStatus() tea.Cmd {
@@ -3380,6 +3472,9 @@ func (m model) renderWizard(l layout) string {
 			b.WriteString("\n" + m.wrapped(l, m.loginMsg) + "\n")
 		}
 	case wizardKey:
+		if m.loginNotice != "" {
+			b.WriteString(m.wrapped(l, m.loginNotice) + "\n\n")
+		}
 		if m.editingKey {
 			b.WriteString(l.indent + m.keyInput.View() + "\n")
 		}
