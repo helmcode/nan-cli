@@ -185,8 +185,11 @@ func (e *MFAError) wait() string {
 }
 
 // normalizeAnswer decides what the member typed, the way the platform does: six
-// digits once the spaces are out is an authenticator code, sixteen letters and
-// digits a recovery code - in any case, with or without its hyphens.
+// digits once the spaces are out is an authenticator code, and sixteen
+// characters of the RFC 4648 base32 alphabet (A-Z and 2-7) a recovery code - in
+// any case, with or without its hyphens. That is the alphabet the platform
+// makes them in, so a 0, 1, 8 or 9 is a typo, refused before it costs one of
+// the sign-in's attempts.
 func normalizeAnswer(input string) (field, value string, err error) {
 	compact := strings.Map(func(r rune) rune {
 		switch r {
@@ -199,7 +202,7 @@ func normalizeAnswer(input string) (field, value string, err error) {
 	if len(compact) == 6 && allASCII(compact, isDigit) {
 		return "code", compact, nil
 	}
-	if len(compact) == 16 && allASCII(compact, isAlnum) {
+	if len(compact) == 16 && allASCII(compact, isBase32) {
 		c := strings.ToLower(compact)
 		return "recovery_code", c[0:4] + "-" + c[4:8] + "-" + c[8:12] + "-" + c[12:16], nil
 	}
@@ -223,8 +226,10 @@ func allASCII(s string, ok func(byte) bool) bool {
 }
 
 func isDigit(b byte) bool { return b >= '0' && b <= '9' }
-func isAlnum(b byte) bool {
-	return isDigit(b) || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+
+// isBase32 is the RFC 4648 alphabet, in either case.
+func isBase32(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '2' && b <= '7')
 }
 
 // Complete answers the challenge with what the member typed: the code their

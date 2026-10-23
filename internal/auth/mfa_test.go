@@ -321,7 +321,10 @@ func rh(status int, body, k, v string) authtest.Refusal {
 func TestNotACodeIsNeverSent(t *testing.T) {
 	p := fakePlatform(t)
 	ch := challengeFor(t, p)
-	for _, typed := range []string{"", "12345", "1234567", "abcdef", "q7wa-z2xd-pl4r", "q7wa-z2xd-pl4r-6wze-xxxx", "246810\x00", "２４６８１０"} {
+	for _, typed := range []string{"", "12345", "1234567", "abcdef", "q7wa-z2xd-pl4r", "q7wa-z2xd-pl4r-6wze-xxxx", "246810\x00", "２４６８１０",
+		// Sixteen characters, but not the alphabet recovery codes are made
+		// in: RFC 4648 base32 has no 0, 1, 8 or 9.
+		"q7wa-z2xd-pl4r-6wz0", "q7wa-z2xd-pl4r-6wz1", "Q7WA Z2XD PL4R 6WZ8", "q7waz2xdpl4r6wz9"} {
 		if _, err := ch.Complete(typed); !errors.Is(err, ErrNotACode) || !Retryable(err) {
 			t.Errorf("Complete(%q) = %v", typed, err)
 		}
