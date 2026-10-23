@@ -204,6 +204,12 @@ var linkReasons = map[string]string{
 	// be told this; if it is, the sentence is still the right one.
 	"mfa_enabled_update_nan_cli": "this account uses two-factor authentication, and this nan-cli cannot ask for the code — " +
 		"update it with the installer (https://github.com/helmcode/nan-cli#install) and ask for a new link",
+	// An account that has not finished signing up and has two-factor
+	// authentication on: the setup, behind the code, happens in the browser
+	// only. The link this was is spent.
+	"finish_onboarding_in_the_browser": "your NaN account is not set up yet — finish it in the browser: " +
+		"ask for a new link at https://cloud.nan.builders (this one is spent), complete the setup there, " +
+		"then sign in here again",
 }
 
 func linkReasonMessage(reason string) string {

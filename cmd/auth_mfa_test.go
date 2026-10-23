@@ -261,6 +261,29 @@ func TestTOTPFromATerminalStdin(t *testing.T) {
 	}
 }
 
+// An account that has not finished signing up and has a factor finishes in
+// the browser: nan auth login asks for no code and saves nothing, and says
+// what to do next.
+func TestLoginForAnUnfinishedSignUpSendsItToTheBrowser(t *testing.T) {
+	home := fakeHome(t, "")
+	p := mfaPlatform(t, true)
+	p.Onboarding = true
+	var prompt bytes.Buffer
+	codes, asked := typed(authtest.Code)
+	err := finishSignIn(authtest.LinkToken, codes, io.Discard, &prompt)
+	const want = "your NaN account is not set up yet — finish it in the browser: ask for a new link at " +
+		"https://cloud.nan.builders (this one is spent), complete the setup there, then sign in here again"
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %v", err)
+	}
+	if *asked != 0 || prompt.Len() != 0 || len(p.Challenges()) != 0 {
+		t.Errorf("asked for a code with no challenge: %d prompts, %q", *asked, prompt.String())
+	}
+	if sess, _ := readSession(t, home); sess != nil {
+		t.Errorf("saved %v", sess)
+	}
+}
+
 // No terminal and no --totp: the link is already spent, so the message says
 // to ask for another and names the flag that would have worked.
 func TestNoTerminalAndNoFlag(t *testing.T) {

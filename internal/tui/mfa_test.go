@@ -197,3 +197,37 @@ func assertNoChallengeUnderHome(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// An account that has not finished signing up and has a factor: the panel
+// stays on the link question with the sentence that sends it to the browser,
+// and asks for no code.
+func TestThePanelSendsAnUnfinishedSignUpToTheBrowser(t *testing.T) {
+	p := authtest.New(t)
+	p.Factor, p.Onboarding = true, true
+	old := auth.SignInBaseURL
+	auth.SignInBaseURL = p.URL
+	t.Cleanup(func() { auth.SignInBaseURL = old })
+
+	m := setupModel(t, &session.Session{})
+	m.lay = newLayout(100, 40)
+	m.startLogin()
+	mod, _ := m.Update(linkSentMsg{})
+	m = mod.(model)
+	m = enter(t, m, mfaTestLink)
+
+	if m.loginStage != loginAskLink || m.loginChallenge != nil {
+		t.Fatalf("stage %v, challenge %v", m.loginStage, m.loginChallenge != nil)
+	}
+	const want = "error: your NaN account is not set up yet — finish it in the browser: ask for a new link at " +
+		"https://cloud.nan.builders (this one is spent), complete the setup there, then sign in here again"
+	if m.loginMsg != want {
+		t.Errorf("loginMsg = %q", m.loginMsg)
+	}
+	flat := strings.Join(strings.Fields(m.View()), " ")
+	if !strings.Contains(flat, "finish it in the browser") {
+		t.Errorf("the screen does not say it:\n%s", m.View())
+	}
+	if s, err := session.Load(); err == nil && s.Token != "" {
+		t.Errorf("saved a session: %+v", s)
+	}
+}

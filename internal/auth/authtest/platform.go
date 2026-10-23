@@ -43,6 +43,9 @@ type Platform struct {
 	// Factor: the account has a confirmed authenticator. Without it the link
 	// alone signs in, exactly as before two-factor sign-in existed.
 	Factor bool
+	// Onboarding: the member is invited or registered and has not finished
+	// signing up, so a link gets them the onboarding token, never a session.
+	Onboarding bool
 	// RecoveryCodes the account has not used yet, in canonical form
 	// (xxxx-xxxx-xxxx-xxxx).
 	RecoveryCodes []string
@@ -143,11 +146,21 @@ func (p *Platform) verify(w http.ResponseWriter, r *http.Request) {
 	}
 	p.spent = true
 
+	cli := r.PostForm.Get("client") == "cli"
 	switch {
+	case p.Onboarding && !p.Factor:
+		// Unchanged by two-factor sign-in: the onboarding token, which is not
+		// a session, and the page that uses it.
+		http.SetCookie(w, &http.Cookie{Name: "nan_onboarding", Value: "fake-onboarding-token", Path: "/", Secure: true, HttpOnly: true})
+		http.Redirect(w, r, FrontendURL+"/onboarding", http.StatusFound)
+	case p.Onboarding && cli:
+		// "CLI contract" step 8: with a factor, onboarding is finished in the
+		// browser, whatever mfa says. No cookie of any kind.
+		http.Redirect(w, r, FrontendURL+"/access-denied?reason=finish_onboarding_in_the_browser", http.StatusFound)
 	case !p.Factor:
 		http.SetCookie(w, &http.Cookie{Name: "nan_session", Value: Session, Path: "/", Domain: ".nan.builders", Secure: true, HttpOnly: true})
 		http.Redirect(w, r, FrontendURL+"/", http.StatusFound)
-	case r.PostForm.Get("client") == "cli" && r.PostForm.Get("mfa") != "1":
+	case cli && r.PostForm.Get("mfa") != "1":
 		http.Redirect(w, r, FrontendURL+"/access-denied?reason=mfa_enabled_update_nan_cli", http.StatusFound)
 	default:
 		// A new challenge replaces any earlier one (D8).

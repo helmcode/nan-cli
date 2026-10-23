@@ -436,3 +436,38 @@ func TestTheChallengeNeverPrintsItsCookie(t *testing.T) {
 		}
 	}
 }
+
+// An account that has not finished signing up and has a factor is sent to the
+// browser, with or without mfa=1 ("CLI contract" step 8): no challenge, no
+// cookie, and a sentence that says what to do with a link that is spent.
+func TestUnfinishedSignUpWithAFactorIsSentToTheBrowser(t *testing.T) {
+	p := fakePlatform(t)
+	p.Factor, p.Onboarding = true, true
+	got, err := ExchangeToken(authtest.LinkToken)
+	var ch *MFARequiredError
+	if err == nil || got != "" || errors.As(err, &ch) {
+		t.Fatalf("ExchangeToken = %q, %v", got, err)
+	}
+	if err.Error() != linkReasons["finish_onboarding_in_the_browser"] {
+		t.Errorf("message = %q", err)
+	}
+	for _, want := range []string{"browser", "new link", "cloud.nan.builders", "spent", "sign in here again"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%q does not say %q", err, want)
+		}
+	}
+	if n := len(p.Challenges()); n != 0 {
+		t.Errorf("%d challenge POSTs with no challenge to answer", n)
+	}
+}
+
+// Without a factor nothing changed: the onboarding token is not a session,
+// and the CLI does not take it for one.
+func TestUnfinishedSignUpWithoutAFactorGetsNoSession(t *testing.T) {
+	p := fakePlatform(t)
+	p.Onboarding = true
+	got, err := ExchangeToken(authtest.LinkToken)
+	if err == nil || got != "" || !strings.Contains(err.Error(), "no session came back") {
+		t.Fatalf("ExchangeToken = %q, %v", got, err)
+	}
+}
