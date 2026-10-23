@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
 
 	"github.com/charmbracelet/x/term"
@@ -285,6 +286,50 @@ func recoveryCodesLeft(n int) string {
 	return fmt.Sprintf("You signed in with a recovery code: %d left. You can make new ones in the browser: %s.", n, where)
 }
 
+// readHiddenLine reads a line from the terminal f without echo.
+//
+// term.ReadPassword turns echo off and only puts it back when it returns. A
+// ctrl-c in between ends the process first, and the shell it hands back to is
+// left without echo: whatever is typed next is invisible until `reset`. So for
+// as long as the prompt is up, an interrupt puts the terminal back before the
+// command exits.
+func readHiddenLine(f *os.File) ([]byte, error) {
+	fd := f.Fd()
+	if state, err := term.GetState(fd); err == nil {
+		release := onInterrupt(func() {
+			_ = term.Restore(fd, state)
+			fmt.Fprintln(os.Stderr)
+		})
+		defer release()
+	}
+	return term.ReadPassword(fd)
+}
+
+// interrupted ends the command after ctrl-c, with the status a shell gives an
+// interrupted one. A variable for the tests.
+var interrupted = func() { os.Exit(130) }
+
+// onInterrupt runs undo and then interrupted if ctrl-c arrives before release
+// is called. Until then the interrupt is this function's to handle, not the
+// runtime's, which would exit without undoing anything.
+func onInterrupt(undo func()) (release func()) {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-sig:
+			undo()
+			interrupted()
+		case <-done:
+		}
+	}()
+	return func() {
+		signal.Stop(sig)
+		close(done)
+	}
+}
+
 // codeInput is where the second factor comes from: a hidden prompt on a
 // terminal, or one line of stdin with --totp -.
 type codeInput struct {
@@ -300,7 +345,7 @@ func newCodeInput(f *os.File, readLine func() (string, error)) codeInput {
 	return codeInput{
 		tty:        term.IsTerminal(f.Fd()),
 		fromStdin:  totpFlag == "-",
-		readHidden: func() ([]byte, error) { return term.ReadPassword(f.Fd()) },
+		readHidden: func() ([]byte, error) { return readHiddenLine(f) },
 		readLine:   readLine,
 	}
 }
@@ -415,7 +460,7 @@ func newTokenInput(f *os.File) tokenInput {
 	return tokenInput{
 		r:          f,
 		tty:        term.IsTerminal(f.Fd()),
-		readHidden: func() ([]byte, error) { return term.ReadPassword(f.Fd()) },
+		readHidden: func() ([]byte, error) { return readHiddenLine(f) },
 	}
 }
 
