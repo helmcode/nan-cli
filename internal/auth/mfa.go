@@ -253,6 +253,11 @@ func (e *MFARequiredError) Complete(input string) (*SignIn, error) {
 	req.Header.Set("Accept", "application/json")
 	req.AddCookie(&http.Cookie{Name: mfaPendingCookie, Value: e.pending})
 
+	// Never a redirect. Go forwards the Cookie header to a redirect on the
+	// same host, whatever the port, and a 307 or 308 replays the body with the
+	// code in it: following one would hand the challenge and its answer to
+	// wherever it points. The contract has no redirect here, so one is an
+	// answer like any other refusal.
 	client := &http.Client{
 		Timeout: requestTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error {

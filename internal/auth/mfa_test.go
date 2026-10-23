@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -346,6 +348,45 @@ func TestNormalizeAnswer(t *testing.T) {
 		if err != nil || field != c.field || value != c.value {
 			t.Errorf("normalizeAnswer(%q) = %q %q %v", c.in, field, value, err)
 		}
+	}
+}
+
+// A redirect from the challenge route is not followed. Go would forward the
+// Cookie header to it - same host, other port - and a 307 or 308 would replay
+// the body with the code, so the server it points at answers like a
+// successful challenge: following it would also look like a sign-in.
+func TestTheChallengeDoesNotFollowRedirects(t *testing.T) {
+	for _, status := range []int{http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var reached []string
+			var mu sync.Mutex
+			elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				mu.Lock()
+				reached = append(reached, fmt.Sprintf("%s cookie=%q body=%q", r.Method, r.Header.Get("Cookie"), body))
+				mu.Unlock()
+				http.SetCookie(w, &http.Cookie{Name: "nan_session", Value: "a-session-from-elsewhere"})
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"redirect":"/","recovery_codes_remaining":null}`)
+			}))
+			defer elsewhere.Close()
+
+			p := fakePlatform(t)
+			ch := challengeFor(t, p)
+			p.Next = &authtest.Refusal{Status: status, Header: map[string]string{"Location": elsewhere.URL + "/api/auth/mfa/challenge"}}
+
+			in, err := ch.Complete(authtest.Code)
+			if err == nil {
+				t.Errorf("signed in through a %d: %+v", status, in)
+			} else if Retryable(err) || !strings.Contains(err.Error(), fmt.Sprintf("HTTP %d", status)) {
+				t.Errorf("err = %v", err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(reached) != 0 {
+				t.Errorf("followed the %d: the server it pointed at got %v", status, reached)
+			}
+		})
 	}
 }
 
