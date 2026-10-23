@@ -334,16 +334,24 @@ history and in `ps`.
 Account > Two-factor authentication at <https://cloud.nan.builders>),
 `nan auth login` and the dashboard's sign-in ask for the code from your
 authenticator app after the link, without echo. One of your recovery codes
-works in its place. With no terminal to ask on, pipe the code in:
+works in its place. When nan cannot ask, pipe the code in. Never type the code
+into the command itself, where it would stay in your shell history: read it
+into a variable without echo, or redirect it from a file or a password
+manager's command line.
 
 ```bash
-echo 123456 | nan auth login --link "<the link>" --totp -
+read -rs code   # type or paste it; it is not shown
+printf '%s\n' "$code" | nan auth login --link "<the link>" --totp -
+nan auth login --link "<the link>" --totp - < code.txt
 ```
 
-`--totp` takes only `-`, so a recovery code never ends up in your shell
-history. With `--totp -` the code gets one try, where the prompt lets you try
-again; if stdin is a terminal it is still asked for there, without echo. Versions before 0.1.35 cannot ask for the code: the platform refuses
-the link with `mfa enabled update nan cli`. Update, then ask for a new link.
+`--totp` never takes the code as an argument: its only value is `-`, which
+reads one line of stdin. With `--totp -` the code gets one try, where the
+prompt lets you try again; if stdin is a terminal it is still asked for there,
+without echo.
+
+Versions before 0.1.35 cannot ask for the code: the platform refuses the link
+with `mfa enabled update nan cli`. Update, then ask for a new link.
 
 ## Build from source
 

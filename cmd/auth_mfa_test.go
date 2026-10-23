@@ -337,6 +337,35 @@ func TestTOTPFlagSpellings(t *testing.T) {
 	}
 }
 
+// No example of --totp - shows the code typed into the command, which would
+// put it in the shell history the flag exists to keep it out of: not the
+// help, not the hint the errors print, not the README.
+func TestTOTPExamplesKeepTheCodeOffTheCommandLine(t *testing.T) {
+	readme, err := os.ReadFile(filepath.Join("..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, text := range map[string]string{
+		"nan auth login --help": loginCmd.Example + "\n" + loginCmd.Long,
+		"the errors' hint":      totpHint,
+		"README.md":             string(readme),
+	} {
+		var examples int
+		for _, line := range strings.Split(text, "\n") {
+			if !strings.Contains(line, "--totp -") {
+				continue
+			}
+			examples++
+			if strings.Contains(line, "echo ") || strings.Contains(line, "<code>") || strings.Contains(line, authtest.Code) {
+				t.Errorf("%s puts the code on the command line: %q", name, strings.TrimSpace(line))
+			}
+		}
+		if examples == 0 {
+			t.Errorf("%s has no --totp - example left to check", name)
+		}
+	}
+}
+
 // The challenge cookie is a credential for ten minutes and is kept in memory
 // only. Whatever the sign-in wrote under HOME - on success and on failure -
 // does not contain it, and neither does anything it printed.

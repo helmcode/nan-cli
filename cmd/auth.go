@@ -54,7 +54,7 @@ replaces the one the Setup tab saved.`,
 	Example: `  nan auth login --email you@example.com
   nan auth login --api-token              # paste the token; it is not shown
   nan auth login --api-token < token.txt
-  echo 123456 | nan auth login --link "<the link>" --totp -   # two-factor, no prompt`,
+  read -rs code; printf '%s\n' "$code" | nan auth login --link "<the link>" --totp -   # two-factor, no prompt from nan`,
 	RunE: runLogin,
 }
 
@@ -197,16 +197,18 @@ func runLogin(cmd *cobra.Command, args []string) error {
 
 // checkTOTPFlag refuses the --totp spellings that cannot work.
 //
-// Only "-": a recovery code is good until it is used, and one written on the
-// command line is in the shell's history and in `ps` for as long as that
-// lasts. And not next to another flag that reads stdin, because the first one
+// Only "-": --totp never takes the code as an argument. A recovery code is
+// good until it is used, and one written on the command line is in the
+// shell's history and in `ps` for as long as that lasts. The examples keep it
+// off the command line too - read into a variable, or from a file - because
+// `echo <code> |` would put it in the history just the same. And not next to another flag that reads stdin, because the first one
 // would take everything and leave the code nothing.
 func checkTOTPFlag() error {
 	switch {
 	case totpFlag == "":
 		return nil
 	case totpFlag != "-":
-		return fmt.Errorf(`--totp only takes "-", reading the code from stdin, so a recovery code never lands in your shell history:%s`, totpHint)
+		return fmt.Errorf(`--totp only takes "-": it never takes the code as an argument, where it would stay in your shell history and in ps. Read it from stdin:%s`, totpHint)
 	case tokenFlag != "":
 		return fmt.Errorf("--totp cannot be combined with --token: a saved session token skips the sign-in, and its code")
 	case linkFlag == "-":
@@ -215,7 +217,10 @@ func checkTOTPFlag() error {
 	return nil
 }
 
-const totpHint = "\n\n  echo <code> | nan auth login --link \"<the link>\" --totp -"
+// totpHint is how to pipe the code in without typing it into the command:
+// the variable is filled without echo and never appears in the history.
+const totpHint = "\n\n  read -rs code; printf '%s\\n' \"$code\" | nan auth login --link \"<the link>\" --totp -\n\n" +
+	"or redirect it from a file or a password manager: --totp - < code.txt"
 
 // finishSignIn spends the link, answers the two-factor challenge when the
 // account has one, and saves the session.
