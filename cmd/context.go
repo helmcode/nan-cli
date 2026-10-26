@@ -93,6 +93,8 @@ var (
 	ctxConcurrency = 4
 	// ctxSingleMax is the largest blob sent as one PUT.
 	ctxSingleMax int64 = api.ContextPartSize
+	// ctxExecKnown is whether the file system carries an executable bit.
+	ctxExecKnown = runtime.GOOS != "windows"
 )
 
 var (
@@ -106,6 +108,7 @@ var (
 	ctxPushAllowSecrets bool
 	ctxPushDryRun       bool
 	ctxPushSkipInvalid  bool
+	ctxPushAllowEmpty   bool
 
 	ctxPullForce bool
 
@@ -123,8 +126,9 @@ var ctxVerbHints = map[string]string{
 const ctxCredentialHelp = `Authentication, first match wins: --token-file, your session from
 nan auth login, NAN_TOKEN, a platform token saved with nan auth login
 --api-token. A platform token needs contexts:read to list, show and pull,
-and contexts:write to create, push, edit and delete. Workspace keys never
-read or write contexts.`
+and contexts:write to create, push, edit and delete. API keys (sk-) are
+not used by these commands, and workspace keys never read or write
+contexts.`
 
 var contextCmd = &cobra.Command{
 	Use:     "context",
@@ -240,7 +244,10 @@ private keys) is refused with the file and line; keep credentials in nan
 secrets, or publish anyway with --allow-secrets (the agent can read and
 copy anything in a context).
 
-With --create, a context that does not exist yet is created first.
+With --create, a context that does not exist yet is created first. A DIR
+that is a symbolic link is followed once (links inside it are refused). A
+folder with no files is refused over a version that has some, since it
+would remove them all; --allow-empty publishes it anyway.
 
 ` + ctxCredentialHelp + `
 
@@ -328,6 +335,7 @@ func init() {
 		c.Flags().BoolVar(&ctxPushAllowSecrets, "allow-secrets", false, "Publish even if a text file looks like it holds a credential")
 		c.Flags().BoolVar(&ctxPushSkipInvalid, "skip-invalid", false, "Leave refused files out instead of stopping")
 	}
+	ctxPushCmd.Flags().BoolVar(&ctxPushAllowEmpty, "allow-empty", false, "Publish an empty folder over a version that has files (removes them all)")
 	f := ctxPushCmd.Flags()
 	f.BoolVar(&ctxPushCreate, "create", false, "Create the context if it does not exist")
 	f.BoolVar(&ctxPushForce, "force", false, "Publish on top of a version someone else published meanwhile")
@@ -339,12 +347,24 @@ func init() {
 }
 
 type pushOptions struct {
-	create, force, allowSecrets, dryRun, skipInvalid, json bool
+	create, force, allowSecrets, dryRun, skipInvalid, allowEmpty, json bool
 }
 
 func pushOptionsFromFlags() pushOptions {
 	return pushOptions{create: ctxPushCreate, force: ctxPushForce, allowSecrets: ctxPushAllowSecrets, dryRun: ctxPushDryRun,
-		skipInvalid: ctxPushSkipInvalid, json: ctxJSON}
+		skipInvalid: ctxPushSkipInvalid, allowEmpty: ctxPushAllowEmpty, json: ctxJSON}
+}
+
+var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// checkContextRef refuses a NAME|id that is neither a context name nor an
+// id before it becomes part of a request path.
+func checkContextRef(ref string) error {
+	if contexts.ValidContextName(ref) || uuidPattern.MatchString(ref) {
+		return nil
+	}
+	return usageErrorf("%q is neither a context name (lowercase letters, digits and dashes) nor a context id (see: nan context ls)",
+		runs.Truncate(runs.SanitizeLine(ref), 80))
 }
 
 func contextNameRule(name string) string {
@@ -464,6 +484,9 @@ func doContextLs(ctx context.Context, env *runsEnv) error {
 }
 
 func doContextShow(ctx context.Context, env *runsEnv, ref string) error {
+	if err := checkContextRef(ref); err != nil {
+		return err
+	}
 	d, err := env.client.GetContext(ctx, ref)
 	if err != nil {
 		return ctxExit(err, env, scopeContextsRead)
@@ -536,7 +559,7 @@ func doContextCreate(ctx context.Context, env *runsEnv, name string) error {
 	if !contexts.ValidContextName(name) {
 		return usageErrorf("%s", contextNameRule(name))
 	}
-	opts := pushOptions{allowSecrets: ctxPushAllowSecrets, skipInvalid: ctxPushSkipInvalid, json: ctxJSON}
+	opts := pushOptions{allowSecrets: ctxPushAllowSecrets, skipInvalid: ctxPushSkipInvalid, allowEmpty: ctxPushAllowEmpty, json: ctxJSON}
 	var local *localTree
 	if ctxCreateFrom != "" {
 		// The folder is checked before the context exists, so a folder that
@@ -545,6 +568,7 @@ func doContextCreate(ctx context.Context, env *runsEnv, name string) error {
 		if local, err = scanLocal(env, ctxCreateFrom, opts.skipInvalid); err != nil {
 			return err
 		}
+		defer local.close()
 	}
 	idem := newIdempotencyKey()
 	var c *api.Context
@@ -569,6 +593,9 @@ func doContextCreate(ctx context.Context, env *runsEnv, name string) error {
 }
 
 func doContextEdit(ctx context.Context, env *runsEnv, ref string, patch api.ContextPatch) error {
+	if err := checkContextRef(ref); err != nil {
+		return err
+	}
 	d, err := env.client.GetContext(ctx, ref)
 	if err != nil {
 		return ctxExit(err, env, scopeContextsRead)
@@ -585,6 +612,9 @@ func doContextEdit(ctx context.Context, env *runsEnv, ref string, patch api.Cont
 }
 
 func doContextRm(ctx context.Context, env *runsEnv, ref string) error {
+	if err := checkContextRef(ref); err != nil {
+		return err
+	}
 	d, err := env.client.GetContext(ctx, ref)
 	if err != nil {
 		return ctxExit(err, env, scopeContextsRead)
@@ -605,10 +635,25 @@ func doContextRm(ctx context.Context, env *runsEnv, ref string) error {
 // localFile is one file of the folder being pushed.
 type localFile struct {
 	path string // NFC, '/'-separated, relative to the folder
-	abs  string
+	rel  string // the name on disk, relative to root
+	root *os.Root
 	size int64
 	exec bool
-	sha  string
+	// execKnown is false where the file system has no executable bit
+	// (Windows): the bit then comes from the version being replaced.
+	execKnown bool
+	sha       string
+}
+
+// open reads the file through the folder's root: a name swapped for a
+// symlink after the scan is refused instead of followed.
+func (f localFile) open() (*os.File, error) {
+	if st, err := f.root.Lstat(f.rel); err != nil {
+		return nil, err
+	} else if !st.Mode().IsRegular() {
+		return nil, fmt.Errorf("it is no longer a regular file")
+	}
+	return f.root.Open(f.rel)
 }
 
 // refusedFile is one file push will not publish, with its reason.
@@ -618,6 +663,13 @@ type refusedFile struct {
 
 type localTree struct {
 	files []localFile
+	root  *os.Root
+}
+
+func (t *localTree) close() {
+	if t != nil && t.root != nil {
+		_ = t.root.Close()
+	}
 }
 
 func (t *localTree) totalBytes() int64 {
@@ -633,6 +685,20 @@ func (t *localTree) totalBytes() int64 {
 // (exit 65) unless skipInvalid; dotfiles are always skipped with a notice.
 func scanLocal(env *runsEnv, dir string, skipInvalid bool) (*localTree, error) {
 	shown := runs.SanitizeLine(dir)
+	lst, err := os.Lstat(dir)
+	if err != nil {
+		return nil, usageErrorf("cannot read %s: %v", shown, unwrapPath(err))
+	}
+	if lst.Mode()&fs.ModeSymlink != 0 {
+		// The folder the member named is behind a link (a dotfile manager,
+		// ~/work -> /Volumes/...): walk what it points at. WalkDir would
+		// otherwise see one non-directory and report an empty tree.
+		target, err := filepath.EvalSymlinks(dir)
+		if err != nil {
+			return nil, usageErrorf("cannot read %s: %v", shown, unwrapPath(err))
+		}
+		dir = target
+	}
 	st, err := os.Stat(dir)
 	if err != nil {
 		return nil, usageErrorf("cannot read %s: %v", shown, unwrapPath(err))
@@ -640,12 +706,26 @@ func scanLocal(env *runsEnv, dir string, skipInvalid bool) (*localTree, error) {
 	if !st.IsDir() {
 		return nil, usageErrorf("%s is not a folder", shown)
 	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, usageErrorf("cannot open %s: %v", shown, unwrapPath(err))
+	}
+	tree, err := scanRoot(env, dir, root, skipInvalid)
+	if err != nil {
+		_ = root.Close()
+		return nil, err
+	}
+	return tree, nil
+}
+
+func scanRoot(env *runsEnv, dir string, root *os.Root, skipInvalid bool) (*localTree, error) {
+	shown := runs.SanitizeLine(dir)
 	var (
 		files   []localFile
 		refused []refusedFile
 		dotted  []string
 	)
-	err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -679,8 +759,8 @@ func scanLocal(env *runsEnv, dir string, skipInvalid bool) (*localTree, error) {
 		if ierr != nil {
 			return ierr
 		}
-		files = append(files, localFile{path: name, abs: p, size: info.Size(),
-			exec: runtime.GOOS != "windows" && info.Mode().Perm()&0o111 != 0})
+		files = append(files, localFile{path: name, rel: rel, root: root, size: info.Size(),
+			execKnown: ctxExecKnown, exec: ctxExecKnown && info.Mode().Perm()&0o111 != 0})
 		return nil
 	})
 	if err != nil {
@@ -730,13 +810,13 @@ func scanLocal(env *runsEnv, dir string, skipInvalid bool) (*localTree, error) {
 			kept = append(kept, f)
 		}
 	}
-	tree := &localTree{files: kept}
+	tree := &localTree{files: kept, root: root}
 	if err := checkTreeLimits(tree); err != nil {
 		return nil, err
 	}
 	for i := range tree.files {
 		f := &tree.files[i]
-		sum, size, err := hashFile(f.abs)
+		sum, size, err := hashFile(*f)
 		if err != nil {
 			return nil, exitf(exitFailed, "cannot read %s: %v", runs.SanitizeLine(f.path), unwrapPath(err))
 		}
@@ -824,8 +904,8 @@ func checkTreeLimits(t *localTree) error {
 	return nil
 }
 
-func hashFile(p string) (string, int64, error) {
-	f, err := os.Open(p)
+func hashFile(lf localFile) (string, int64, error) {
+	f, err := lf.open()
 	if err != nil {
 		return "", 0, err
 	}
@@ -841,10 +921,14 @@ func hashFile(p string) (string, int64, error) {
 // ─── push ──────────────────────────────────────────────────────────────────
 
 func doContextPush(ctx context.Context, env *runsEnv, ref, dir string, opts pushOptions) error {
+	if err := checkContextRef(ref); err != nil {
+		return err
+	}
 	local, err := scanLocal(env, dir, opts.skipInvalid)
 	if err != nil {
 		return err
 	}
+	defer local.close()
 	d, err := env.client.GetContext(ctx, ref)
 	if ctxCode(err) == "context_not_found" && opts.create {
 		if !contexts.ValidContextName(ref) {
@@ -926,6 +1010,33 @@ func printDiff(w io.Writer, d treeDiff, sizes map[string]int64) {
 	}
 }
 
+// inheritExec takes the executable bit of a file whose content did not
+// change from the version being replaced, where the file system cannot say
+// (Windows): pushing an unchanged pulled tree must not strip +x.
+func inheritExec(remote []api.ContextFile, local *localTree) {
+	have := make(map[string]api.ContextFile, len(remote))
+	for _, f := range remote {
+		have[f.Path] = f
+	}
+	for i := range local.files {
+		f := &local.files[i]
+		if r, ok := have[f.path]; ok && !f.execKnown && r.SHA256 == f.sha {
+			f.exec = r.Executable
+		}
+	}
+}
+
+// checkNotEmptied refuses to publish no files over a version that has some
+// unless --allow-empty: an empty or wrong folder would otherwise remove the
+// whole context, and automations follow the latest version.
+func checkNotEmptied(d *api.ContextDetail, local *localTree, opts pushOptions) error {
+	if len(local.files) > 0 || len(d.Files) == 0 || opts.allowEmpty {
+		return nil
+	}
+	return usageErrorf("the folder has no files to publish: that would remove all %d %s of context %s (automations use the latest version). "+
+		"Check the folder, or add --allow-empty to empty the context", len(d.Files), pluralWord(len(d.Files), "file", "files"), runs.SanitizeLine(d.Name))
+}
+
 // uploadPlan is the blobs a push sends: one local file per missing sha.
 type uploadPlan struct {
 	files []localFile
@@ -976,6 +1087,10 @@ func pushTree(ctx context.Context, env *runsEnv, d *api.ContextDetail, local *lo
 	sizes := map[string]int64{}
 	for _, f := range local.files {
 		sizes[f.path] = f.size
+	}
+	inheritExec(d.Files, local)
+	if err := checkNotEmptied(d, local, opts); err != nil {
+		return err
 	}
 	diff := diffTree(d.Files, local)
 	if diff.empty() && d.Version > 0 {
@@ -1070,6 +1185,10 @@ func pushTree(ctx context.Context, env *runsEnv, d *api.ContextDetail, local *lo
 			}
 			fmt.Fprintf(env.stderr, "context %s changed to version %d meanwhile; publishing on top of it (--force). Against it, this push:\n",
 				name, latest.Version)
+			inheritExec(latest.Files, local)
+			if err := checkNotEmptied(latest, local, opts); err != nil {
+				return err
+			}
 			diff = diffTree(latest.Files, local)
 			printDiff(env.stderr, diff, sizes)
 			req.BaseVersion = latest.Version
@@ -1172,7 +1291,7 @@ func uploadOne(ctx context.Context, env *runsEnv, f localFile) error {
 // openChecked opens a file being uploaded and makes sure it is still the
 // size it was hashed at (the platform verifies the sha256 too).
 func openChecked(f localFile) (*os.File, error) {
-	fh, err := os.Open(f.abs)
+	fh, err := f.open()
 	if err != nil {
 		return nil, exitf(exitFailed, "cannot read %s: %v", runs.SanitizeLine(f.path), unwrapPath(err))
 	}
@@ -1205,7 +1324,16 @@ type uploadState struct {
 
 var shaPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-func uploadStatePath(sha string) (string, error) {
+// uploadAccount keys the remembered uploads by API host and credential (a
+// hash, never the credential itself): an upload id is only ever sent back
+// to the account and endpoint that issued it.
+func uploadAccount(env *runsEnv) string {
+	h := sha256.New()
+	_, _ = io.WriteString(h, env.client.BaseURL()+"\x00"+env.cred.session+"\x00"+env.cred.bearer)
+	return hex.EncodeToString(h.Sum(nil))[:32]
+}
+
+func uploadStatePath(env *runsEnv, sha string) (string, error) {
 	if !shaPattern.MatchString(sha) {
 		return "", fmt.Errorf("bad sha")
 	}
@@ -1213,11 +1341,11 @@ func uploadStatePath(sha string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, sha+".json"), nil
+	return filepath.Join(dir, uploadAccount(env), sha+".json"), nil
 }
 
-func loadUploadState(sha string, size int64) *uploadState {
-	p, err := uploadStatePath(sha)
+func loadUploadState(env *runsEnv, sha string, size int64) *uploadState {
+	p, err := uploadStatePath(env, sha)
 	if err != nil {
 		return nil
 	}
@@ -1232,8 +1360,8 @@ func loadUploadState(sha string, size int64) *uploadState {
 	return &s
 }
 
-func saveUploadState(sha string, s uploadState) {
-	p, err := uploadStatePath(sha)
+func saveUploadState(env *runsEnv, sha string, s uploadState) {
+	p, err := uploadStatePath(env, sha)
 	if err != nil {
 		return
 	}
@@ -1244,8 +1372,8 @@ func saveUploadState(sha string, s uploadState) {
 	_ = os.WriteFile(p, b, 0o600)
 }
 
-func clearUploadState(sha string) {
-	if p, err := uploadStatePath(sha); err == nil {
+func clearUploadState(env *runsEnv, sha string) {
+	if p, err := uploadStatePath(env, sha); err == nil {
 		_ = os.Remove(p)
 	}
 }
@@ -1269,7 +1397,7 @@ func putMultipart(ctx context.Context, env *runsEnv, f localFile) error {
 	shown := runs.SanitizeLine(f.path)
 
 	var up *api.ContextUpload
-	if s := loadUploadState(f.sha, f.size); s != nil {
+	if s := loadUploadState(env, f.sha, f.size); s != nil {
 		st, err := env.client.UploadStatus(ctx, f.sha, s.UploadID)
 		switch {
 		case err == nil && validUpload(st, f.size):
@@ -1280,9 +1408,9 @@ func putMultipart(ctx context.Context, env *runsEnv, f localFile) error {
 			// An upload this client cannot continue: drop it, or its marker
 			// would refuse the new one (upload_in_progress).
 			_ = env.client.AbortUpload(ctx, f.sha, s.UploadID)
-			clearUploadState(f.sha)
+			clearUploadState(env, f.sha)
 		case ctxCode(err) == "upload_not_found", ctxCode(err) == "upload_expired":
-			clearUploadState(f.sha)
+			clearUploadState(env, f.sha)
 		default:
 			return err
 		}
@@ -1303,7 +1431,7 @@ func putMultipart(ctx context.Context, env *runsEnv, f localFile) error {
 		if !validUpload(up, f.size) {
 			return exitf(exitUnavailable, "nan.builders answered an upload of %s this CLI cannot send; update nan (nan --version)", shown)
 		}
-		saveUploadState(f.sha, uploadState{UploadID: up.UploadID, Size: f.size})
+		saveUploadState(env, f.sha, uploadState{UploadID: up.UploadID, Size: f.size})
 	}
 
 	failures := 0
@@ -1321,7 +1449,7 @@ func putMultipart(ctx context.Context, env *runsEnv, f localFile) error {
 			return ctx.Err()
 		}
 		if code := ctxCode(err); code == "upload_not_found" || code == "upload_expired" {
-			clearUploadState(f.sha)
+			clearUploadState(env, f.sha)
 			return err
 		}
 		failures++
@@ -1356,17 +1484,20 @@ func putMultipart(ctx context.Context, env *runsEnv, f localFile) error {
 	})
 	if err != nil {
 		if code := ctxCode(err); code == "upload_not_found" || code == "upload_expired" || code == "blob_hash_mismatch" {
-			clearUploadState(f.sha)
+			clearUploadState(env, f.sha)
 		}
 		return err
 	}
-	clearUploadState(f.sha)
+	clearUploadState(env, f.sha)
 	return nil
 }
 
 // ─── pull ──────────────────────────────────────────────────────────────────
 
 func doContextPull(ctx context.Context, env *runsEnv, ref, dir string) error {
+	if err := checkContextRef(ref); err != nil {
+		return err
+	}
 	shown := runs.SanitizeLine(dir)
 	if st, err := os.Stat(dir); err == nil {
 		if !st.IsDir() {
@@ -1402,9 +1533,15 @@ func doContextPull(ctx context.Context, env *runsEnv, ref, dir string) error {
 	files := append([]api.ContextFile(nil), d.Files...)
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	var total int64
-	for _, f := range files {
+	for i, f := range files {
 		if err := pullOne(ctx, env, root, d, f); err != nil {
-			return err
+			if i == 0 {
+				return err
+			}
+			var exit *ExitError
+			errors.As(err, &exit)
+			return &ExitError{Code: exit.Code, Err: fmt.Errorf("%v. %d of %d files were already written to %s; run the pull again with --force to finish it",
+				exit.Err, i, len(files), shown)}
 		}
 		total += f.Size
 	}
@@ -1415,18 +1552,25 @@ func doContextPull(ctx context.Context, env *runsEnv, ref, dir string) error {
 
 // checkServerTree refuses a file list a well-behaved platform never sends:
 // paths the shared validator refuses (absolute, .., case collisions,
-// reserved names, ...), bad hashes or sizes. Nothing is written then.
+// reserved names, ...), bad hashes or sizes, more than a version holds.
+// Nothing is written then.
 func checkServerTree(env *runsEnv, files []api.ContextFile) error {
 	if len(files) > ctxMaxFiles {
 		return exitf(exitDataErr, "nan.builders sent %d files, more than a context holds; nothing was written", len(files))
 	}
 	paths := make([]string, len(files))
 	var bad []string
+	var total int64
 	for i, f := range files {
 		paths[i] = f.Path
 		if !shaPattern.MatchString(f.SHA256) || f.Size < 0 || f.Size > api.ContextMaxFileBytes {
 			bad = append(bad, fmt.Sprintf("%s: bad hash or size", runs.SanitizeLine(f.Path)))
+			continue
 		}
+		total += f.Size
+	}
+	if total > ctxMaxTotalBytes {
+		return exitf(exitDataErr, "nan.builders sent %s of files, more than a context version holds (250 MiB); nothing was written", humanBytes(total))
 	}
 	for _, pe := range contexts.ValidateTree(paths) {
 		bad = append(bad, fmt.Sprintf("%s: %s", runs.SanitizeLine(pe.Path), pe.Reason))
@@ -1441,32 +1585,35 @@ func checkServerTree(env *runsEnv, files []api.ContextFile) error {
 	return exitf(exitDataErr, "nan.builders sent %d %s this CLI will not write; nothing was written", len(bad), pluralWord(len(bad), "path", "paths"))
 }
 
+// pullOne downloads one file into a temporary name next to it, checks it,
+// sets its mode and renames it into place: a failed download never leaves
+// a half file nor removes one the member had. An existing link or folder at
+// the path is never replaced.
 func pullOne(ctx context.Context, env *runsEnv, root *os.Root, d *api.ContextDetail, f api.ContextFile) error {
 	shown := runs.SanitizeLine(f.Path)
 	local := filepath.FromSlash(f.Path)
-	if parent := filepath.Dir(local); parent != "." {
+	parent := filepath.Dir(local)
+	if parent != "." {
 		if err := root.MkdirAll(parent, 0o755); err != nil {
 			return exitf(exitFailed, "cannot create the folder of %s: %v", shown, unwrapPath(err))
 		}
 	}
-	flags := os.O_WRONLY | os.O_CREATE | os.O_EXCL
-	if ctxPullForce {
-		flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	switch st, err := root.Lstat(local); {
+	case err == nil && (st.Mode()&fs.ModeSymlink != 0 || !st.Mode().IsRegular()):
+		return exitf(exitFailed, "%s is a link or a folder in the target folder; it was left as it is and nothing was written there", shown)
+	case err == nil && !ctxPullForce:
+		return exitf(exitFailed, "%s already exists (use --force to replace files)", shown)
+	case err != nil && !errors.Is(err, fs.ErrNotExist):
+		return exitf(exitFailed, "cannot write %s: %v", shown, unwrapPath(err))
 	}
-	mode := os.FileMode(0o644)
-	if f.Executable {
-		mode = 0o755
-	}
-	out, err := root.OpenFile(local, flags, mode)
+	tmp := filepath.Join(parent, ".nan-pull-"+newIdempotencyKey()[len("nan-cli-"):])
+	out, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		if errors.Is(err, fs.ErrExist) {
-			return exitf(exitFailed, "%s already exists; nothing more was written (use --force to replace files)", shown)
-		}
 		return exitf(exitFailed, "cannot write %s: %v", shown, unwrapPath(err))
 	}
 	fail := func(e *ExitError) error {
 		out.Close()
-		_ = root.Remove(local)
+		_ = root.Remove(tmp)
 		return e
 	}
 	var body io.ReadCloser
@@ -1488,11 +1635,22 @@ func pullOne(ctx context.Context, env *runsEnv, root *os.Root, d *api.ContextDet
 		return fail(exitf(exitUnavailable, "the download of %s does not match its sha256 and size; it was not kept", shown))
 	}
 	if err := out.Close(); err != nil {
+		_ = root.Remove(tmp)
 		return exitf(exitFailed, "cannot write %s: %v", shown, err)
 	}
-	if f.Executable && runtime.GOOS != "windows" {
-		// The umask may have taken the bits off the mode OpenFile asked for.
-		_ = root.Chmod(local, 0o755)
+	mode := os.FileMode(0o644)
+	if f.Executable {
+		mode = 0o755
+	}
+	// Both ways: a replaced file that was executable and no longer is
+	// loses the bit.
+	if err := root.Chmod(tmp, mode); err != nil && runtime.GOOS != "windows" {
+		_ = root.Remove(tmp)
+		return exitf(exitFailed, "cannot write %s: %v", shown, err)
+	}
+	if err := root.Rename(tmp, local); err != nil {
+		_ = root.Remove(tmp)
+		return exitf(exitFailed, "cannot write %s: %v", shown, unwrapPath(err))
 	}
 	return nil
 }

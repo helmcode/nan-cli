@@ -77,15 +77,6 @@ type ContextList struct {
 	Usage ContextUsage `json:"usage"`
 }
 
-// ContextVersionInfo is one retained version.
-type ContextVersionInfo struct {
-	Version    int    `json:"version"`
-	TreeSHA256 string `json:"tree_sha256"`
-	FileCount  int    `json:"file_count"`
-	TotalBytes int64  `json:"total_bytes"`
-	CreatedAt  string `json:"created_at"`
-}
-
 // SecretFinding is where a text blob looks like it holds a credential. The
 // platform never returns the match itself.
 type SecretFinding struct {
@@ -260,6 +251,9 @@ func (c *RunsClient) rawRequest(ctx context.Context, method, path string, body i
 	return req, nil
 }
 
+// BaseURL is where this client sends its requests.
+func (c *RunsClient) BaseURL() string { return c.baseURL }
+
 func contextPath(id string) string { return "/v1/contexts/" + url.PathEscape(id) }
 
 func blobPath(sha string) string { return "/v1/contexts/blobs/" + url.PathEscape(sha) }
@@ -306,13 +300,6 @@ func (c *RunsClient) UpdateContext(ctx context.Context, id string, p ContextPatc
 func (c *RunsClient) DeleteContext(ctx context.Context, id string) error {
 	_, err := c.ctxJSON(ctx, http.MethodDelete, contextPath(id), nil, nil, "")
 	return err
-}
-
-// ContextVersions is GET /v1/contexts/{id}/versions, newest first.
-func (c *RunsClient) ContextVersions(ctx context.Context, id string) ([]ContextVersionInfo, error) {
-	var out []ContextVersionInfo
-	_, err := c.ctxJSON(ctx, http.MethodGet, contextPath(id)+"/versions", nil, &out, "")
-	return out, err
 }
 
 // CheckBlobs is POST /v1/contexts/blobs/check: which of shas the platform

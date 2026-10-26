@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/nxssie/nan-cli/internal/api"
+	"github.com/nxssie/nan-cli/internal/contexts"
 )
 
 // fakeCtx is an in-memory /v1/contexts with the shapes, codes and status
@@ -74,6 +76,34 @@ type fakeCtx struct {
 	corrupt map[string]bool
 	// failPart answers 500 to the first PUT of these part numbers.
 	failPart map[int]bool
+	srv      *httptest.Server
+}
+
+// server starts the fake once; every run against it sees the same URL, so
+// the remembered uploads (keyed by API host and account) carry over.
+func (f *fakeCtx) server(t *testing.T) *httptest.Server {
+	if f.srv == nil {
+		f.srv = httptest.NewServer(f)
+		t.Cleanup(f.srv.Close)
+	}
+	return f.srv
+}
+
+// stateFile is where a push run against f remembers an upload of sha.
+func (f *fakeCtx) stateFile(t *testing.T, stateDir, sha string) string {
+	h := sha256.Sum256([]byte(f.server(t).URL + "\x00" + "sess-cli" + "\x00"))
+	return filepath.Join(stateDir, hex.EncodeToString(h[:])[:32], sha+".json")
+}
+
+// strict decodes a JSON body like cloud-api: unknown fields are a 400.
+func strict(w http.ResponseWriter, body []byte, v any) bool {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		ctxFail(w, 400, "invalid_request", "body has an unknown or malformed field", nil, 0)
+		return false
+	}
+	return true
 }
 
 func newFakeCtx() *fakeCtx {
@@ -194,6 +224,10 @@ func (f *fakeCtx) blobView(sha string) map[string]any {
 
 func (f *fakeCtx) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	isRaw := r.Header.Get("Content-Type") == "application/octet-stream"
+	if r.Method == http.MethodPut && r.ContentLength < 0 {
+		ctxFail(w, 411, "invalid_request", "Content-Length is required", nil, 0)
+		return
+	}
 	body, _ := io.ReadAll(r.Body)
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -230,8 +264,13 @@ func (f *fakeCtx) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		ctxJSONResp(w, 200, map[string]any{"data": data, "usage": map[string]any{"stored_bytes": 1536, "quota_bytes": 500 << 20}})
 	case rest == "" && r.Method == http.MethodPost:
-		var in struct{ Name, Description string }
-		_ = json.Unmarshal(body, &in)
+		var in struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		}
+		if !strict(w, body, &in) {
+			return
+		}
 		if f.find(in.Name) != nil {
 			ctxFail(w, 409, "context_name_taken", "You already have a context with this name.", nil, 0)
 			return
@@ -258,13 +297,18 @@ func (f *fakeCtx) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			v["files"] = files
 			ctxJSONResp(w, 200, v)
 		case "PATCH ":
-			var in map[string]*string
-			_ = json.Unmarshal(body, &in)
-			if in["name"] != nil {
-				c.Name = *in["name"]
+			var in struct {
+				Name        *string `json:"name"`
+				Description *string `json:"description"`
 			}
-			if in["description"] != nil {
-				c.Description = *in["description"]
+			if !strict(w, body, &in) {
+				return
+			}
+			if in.Name != nil {
+				c.Name = *in.Name
+			}
+			if in.Description != nil {
+				c.Description = *in.Description
 			}
 			ctxJSONResp(w, 200, c.view())
 		case "DELETE ":
@@ -299,10 +343,21 @@ func (f *fakeCtx) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				f.onPublish(f, f.publishes)
 			}
 			var in api.PublishRequest
-			_ = json.Unmarshal(body, &in)
-			if in.BaseVersion != c.Version {
-				ctxFail(w, 409, "version_conflict", "The context changed since you loaded it; reload and publish again.",
-					map[string]any{"current_version": c.Version}, 0)
+			if !strict(w, body, &in) {
+				return
+			}
+			// cloud-api's order (service.Publish): the tree (paths, then
+			// blobs), then base_version.
+			paths := make([]string, len(in.Files))
+			for i, fl := range in.Files {
+				paths[i] = fl.Path
+			}
+			if bad := contexts.ValidateTree(paths); len(bad) > 0 {
+				refused := []any{}
+				for _, b := range bad {
+					refused = append(refused, map[string]any{"path": b.Path, "reason": string(b.Reason)})
+				}
+				ctxFail(w, 400, "invalid_path", "Some file names are not allowed.", map[string]any{"files": refused}, 0)
 				return
 			}
 			var missing []string
@@ -313,6 +368,11 @@ func (f *fakeCtx) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			if len(missing) > 0 {
 				ctxFail(w, 409, "blob_missing", "Some files are no longer stored; upload them again and publish.", map[string]any{"sha256": missing}, 0)
+				return
+			}
+			if in.BaseVersion != c.Version {
+				ctxFail(w, 409, "version_conflict", "The context changed since you loaded it; reload and publish again.",
+					map[string]any{"current_version": c.Version}, 0)
 				return
 			}
 			if !in.AllowSecretLike {
@@ -345,7 +405,9 @@ func (f *fakeCtx) serveBlobs(w http.ResponseWriter, r *http.Request, parts []str
 		var in struct {
 			SHA256 []string `json:"sha256"`
 		}
-		_ = json.Unmarshal(body, &in)
+		if !strict(w, body, &in) {
+			return
+		}
 		missing := []string{}
 		for _, s := range in.SHA256 {
 			if _, ok := f.blobs[s]; !ok {
@@ -381,7 +443,9 @@ func (f *fakeCtx) serveBlobs(w http.ResponseWriter, r *http.Request, parts []str
 			Size     int64  `json:"size"`
 			Filename string `json:"filename"`
 		}
-		_ = json.Unmarshal(body, &in)
+		if !strict(w, body, &in) {
+			return
+		}
 		id := fmt.Sprintf("u0000000-0000-4000-8000-%012d", len(f.uploads)+1)
 		u := &fakeUpload{sha: sha, size: in.Size, partSize: f.partSize, next: 1}
 		f.uploads[id] = u
@@ -456,8 +520,7 @@ type ctxSetup struct {
 
 func runCtx(t *testing.T, fake *fakeCtx, setup ctxSetup, args ...string) ctxRun {
 	t.Helper()
-	srv := httptest.NewServer(fake)
-	t.Cleanup(srv.Close)
+	srv := fake.server(t)
 	fakeHome(t, cliSession)
 	t.Setenv(tokenEnvVar, "")
 	swap(t, &runsBaseURL, srv.URL)

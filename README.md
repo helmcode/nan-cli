@@ -274,7 +274,7 @@ automations:
 nan context ls [--json]
 nan context show <NAME|id> [--json]
 nan context create NAME [--description TEXT] [--from DIR] [--json]
-nan context push <NAME|id> DIR [--create] [--dry-run] [--force] [--allow-secrets] [--skip-invalid] [--json]
+nan context push <NAME|id> DIR [--create] [--dry-run] [--force] [--allow-secrets] [--skip-invalid] [--allow-empty] [--json]
 nan context pull <NAME|id> DIR [--force]
 nan context edit <NAME|id> [--name NEW] [--description TEXT] [--json]
 nan context rm <NAME|id> [--yes]
@@ -284,7 +284,8 @@ nan context rm <NAME|id> [--yes]
 skipped; other refused names are listed with their reason and the push exits
 65 unless `--skip-invalid`), uploads only what NaN does not already hold
 (large files in resumable 16 MiB parts) and publishes a new version. Text
-that looks like a credential is refused unless `--allow-secrets`. `pull`
+that looks like a credential is refused unless `--allow-secrets`, and an
+empty folder never empties a context unless `--allow-empty`. `pull`
 writes into an empty folder only, after checking every path with the same
 rules. Without contexts on your account, these commands exit 64 and point at
 the portal. Docs: <https://nan.builders/docs/contexts>.

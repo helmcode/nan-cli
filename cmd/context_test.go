@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -366,8 +367,8 @@ func TestContextPushMultipartResumesAfterAFailedPart(t *testing.T) {
 	if starts := fake.sent("POST", "/v1/contexts/blobs/"+sha+"/uploads"); len(starts) != 2 { // start + complete
 		t.Errorf("start/complete %v", starts)
 	}
-	if entries, _ := os.ReadDir(r.stateDir); len(entries) != 0 {
-		t.Errorf("upload state left behind: %v", entries)
+	if _, err := os.Stat(fake.stateFile(t, r.stateDir, sha)); !os.IsNotExist(err) {
+		t.Errorf("upload state left behind: %v", err)
 	}
 }
 
@@ -383,9 +384,7 @@ func TestContextPushMultipartResumesAcrossRuns(t *testing.T) {
 	const id = "u0000000-0000-4000-8000-000000000042"
 	fake.uploads[id] = &fakeUpload{sha: sha, size: int64(len(big)), partSize: 4, next: 2, data: []byte("0123")}
 	state := t.TempDir()
-	if err := os.WriteFile(filepath.Join(state, sha+".json"), []byte(`{"upload_id":"`+id+`","size":10}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeState(t, fake.stateFile(t, state, sha), id, 10)
 	dir := writeTree(t, map[string]string{"files/big.csv": big})
 	r := runCtx(t, fake, ctxSetup{stateDir: state}, "context", "push", "acme-api", dir)
 	mustCtxExit(t, r, 0)
@@ -408,13 +407,21 @@ func TestContextPushMultipartResumesAcrossRuns(t *testing.T) {
 	fake2 := newFakeCtx()
 	fake2.partSize = 4
 	fake2.seed("acme-api", 1, nil)
-	if err := os.WriteFile(filepath.Join(state, sha+".json"), []byte(`{"upload_id":"`+id+`","size":10}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeState(t, fake2.stateFile(t, state, sha), id, 10)
 	r = runCtx(t, fake2, ctxSetup{stateDir: state}, "context", "push", "acme-api", dir)
 	mustCtxExit(t, r, 0)
 	if string(fake2.blobs[sha]) != big {
 		t.Errorf("stored %q", fake2.blobs[sha])
+	}
+}
+
+func writeState(t *testing.T, path, id string, size int) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(fmt.Sprintf(`{"upload_id":%q,"size":%d}`, id, size)), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -491,6 +498,15 @@ func TestContextPushBlobMissingReuploads(t *testing.T) {
 	wantAll(t, "stderr", r.stderr, "1 file is no longer stored on nan.builders; uploading again")
 	if puts := fake.sent("PUT", "/v1/contexts/blobs/"+gone); len(puts) != 2 {
 		t.Errorf("uploads of the missing blob: %d", len(puts))
+	}
+	// It asks again, for exactly the blobs the publish named, and sends
+	// only those: the other file goes up once.
+	checks := fake.sent("POST", "/v1/contexts/blobs/check")
+	if len(checks) != 2 || checks[1].Body != `{"sha256":["`+gone+`"]}` {
+		t.Errorf("checks %+v", checks)
+	}
+	if puts := fake.sent("PUT", "/v1/contexts/blobs/"+shaOf([]byte("a\n"))); len(puts) != 1 {
+		t.Errorf("uploads of the file still stored: %d", len(puts))
 	}
 	if pubs := fake.sent("POST", "/v1/contexts/"+fakeCtxID+"/versions"); len(pubs) != 2 {
 		t.Errorf("publishes %d", len(pubs))
