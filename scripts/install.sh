@@ -4,7 +4,11 @@ set -euo pipefail
 # Overridable so a fork can install its own build, and so the failure paths
 # below can be exercised against a repo that is not there.
 REPO="${REPO:-helmcode/nan-cli}"
-INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+# The directory the one-liner uses. Kept separate from INSTALL_DIR because
+# check_path only edits a shell profile for this default: a custom INSTALL_DIR
+# is a deliberate choice and must not come with a silent profile edit.
+DEFAULT_INSTALL_DIR="$HOME/.local/bin"
+INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
 VERSION="${VERSION:-}"
 
 if [ -t 1 ]; then
@@ -137,6 +141,14 @@ verify_provenance() {
     return 0
   fi
 
+  # "unknown command" or similar means gh is too old for attestation — skip
+  case "$out" in
+    *"unknown command"*|*"command not found"*|*"subcommand not found"*)
+      info "gh does not support attestation (too old), skipping provenance check"
+      return 0
+      ;;
+  esac
+
   # Nothing recorded against these bytes, which is a 404 from the attestations
   # API. Two different things look identical from out here: a release from
   # before this repo signed anything, and an archive that is not the one it
@@ -180,20 +192,88 @@ install_bin() {
   sudo install -d "$dest_dir" && sudo install -m 755 "$src" "$dest_dir/nan"
 }
 
-check_path() {
-  local dir="$1"
-  case ":$PATH:" in
-    *":$dir:"*) ;;
+shell_profile() {
+  local shell_name
+  shell_name="$(basename "${SHELL:-}" 2>/dev/null || echo "")"
+  case "$shell_name" in
+    zsh)
+      echo "$HOME/.zshrc"
+      ;;
+    bash)
+      if [ -f "$HOME/.bashrc" ]; then
+        echo "$HOME/.bashrc"
+      elif [ -f "$HOME/.bash_profile" ]; then
+        echo "$HOME/.bash_profile"
+      else
+        echo "$HOME/.bashrc"
+      fi
+      ;;
+    fish)
+      echo "${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
+      ;;
     *)
-      warn "$dir is not in your PATH"
-      warn "add this to your shell profile:"
-      printf "    export PATH=\"%s:\$PATH\"\n" "$dir"
+      echo "$HOME/.profile"
       ;;
   esac
 }
 
+check_path() {
+  local dir="$1"
+  case ":$PATH:" in
+    *":$dir:"*)
+      info "$dir is already in PATH"
+      return
+      ;;
+  esac
+
+  if [ "$dir" != "$DEFAULT_INSTALL_DIR" ]; then
+    warn "$dir is not in PATH. To add it, append this line to your shell profile:"
+    printf "    export PATH=\"%s:\$PATH\"\n" "$dir"
+    warn "the installer did not modify any profile for a custom INSTALL_DIR"
+    return
+  fi
+
+  local profile line
+  profile="$(shell_profile)"
+  line="fish_add_path \"$dir\""
+  if [ "$(basename "${SHELL:-}" 2>/dev/null || echo "")" != "fish" ]; then
+    line="export PATH=\"$dir:\$PATH\""
+  fi
+  if grep -qF "$dir" "$profile" 2>/dev/null; then
+    info "$dir is already in $profile"
+    return
+  fi
+  local profile_dir
+  profile_dir="$(dirname "$profile")"
+  if [ ! -d "$profile_dir" ]; then
+    mkdir -p "$profile_dir" 2>/dev/null || true
+  fi
+  printf '\n# Added by nan-cli installer\n%s\n' "$line" >> "$profile"
+  log "added $dir to PATH in $profile"
+  warn "this shell was not changed; run 'source $profile' or open a new terminal"
+}
+
+warn_if_shadowed() {
+  local found="$1" install_dir="$2"
+  if [ -z "$found" ]; then
+    return
+  fi
+  local found_dir
+  found_dir="$(cd "$(dirname "$found")" 2>/dev/null && pwd)" || found_dir=""
+  local install_dir_resolved
+  install_dir_resolved="$(cd "$install_dir" 2>/dev/null && pwd)" || install_dir_resolved=""
+  if [ "$found_dir" = "$install_dir_resolved" ]; then
+    return
+  fi
+  warn "another nan at $found is earlier in PATH and will run until PATH is fixed"
+  if [ "$found" = "/usr/local/bin/nan" ]; then
+    warn "remove the old one: sudo rm /usr/local/bin/nan"
+  fi
+  warn "opening a new terminal will put $install_dir first once your profile is sourced"
+}
+
 main() {
-  local os arch version archive url checksums_url expected_checksum
+  local os arch version archive url checksums_url expected_checksum existing_nan
 
   os="$(detect_os)"
   arch="$(detect_arch)"
@@ -227,11 +307,16 @@ main() {
 
   tar xz -C "$tmpdir" -f "$tmpdir/$archive"
 
+  existing_nan="$(type -P nan 2>/dev/null || true)"
+
   info "installing to ${INSTALL_DIR}/nan..."
   install_bin "$tmpdir/nan" "$INSTALL_DIR"
 
   log "installed ${BOLD}${version}${RESET} to ${INSTALL_DIR}/nan"
+  warn_if_shadowed "$existing_nan" "$INSTALL_DIR"
   check_path "$INSTALL_DIR"
 }
 
-main "$@"
+if [ -z "${BASH_SOURCE[0]:-}" ] || [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi
