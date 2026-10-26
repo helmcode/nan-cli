@@ -84,6 +84,9 @@ func jsonCases(t *testing.T) map[string][]jsonCase {
 	if err := os.WriteFile(hook, []byte(testHookURL+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// A folder to push: skipped and refused files print their notes on
+	// stderr only.
+	ctxDir := writeTree(t, map[string]string{"AGENTS.md": "Use tabs.\n", "files/.env": "S=1\n", "CLAUDE.md": "x\n"})
 	return map[string][]jsonCase{
 		"nan approvals ls":   {{args: []string{"approvals", "ls", "--json"}}},
 		"nan approvals show": {{args: []string{"approvals", "show", testRunID, "--json"}}},
@@ -118,6 +121,14 @@ func jsonCases(t *testing.T) map[string][]jsonCase {
 			// goes to stderr only.
 			{args: []string{"notifications", "add", "ci", "--kind", "https", "--url-stdin", "--event", "run.failed", "--json"}, stdin: testHookHTTPS},
 		},
+		"nan context create": {{args: []string{"context", "create", "new-ctx", "--json"}}},
+		"nan context edit":   {{args: []string{"context", "edit", "acme-api", "--description", "new", "--json"}}},
+		"nan context ls":     {{args: []string{"context", "ls", "--json"}}},
+		"nan context push": {
+			{args: []string{"context", "push", "acme-api", ctxDir, "--skip-invalid", "--json"}},
+			{args: []string{"context", "push", "acme-api", ctxDir, "--skip-invalid", "--dry-run", "--json"}},
+		},
+		"nan context show":             {{args: []string{"context", "show", "acme-api", "--json"}}},
 		"nan notifications deliveries": {{args: []string{"notifications", "deliveries", "ci receiver", "--limit", "3", "--json"}}},
 		"nan notifications edit": {
 			{args: []string{"notifications", "edit", "team alerts", "--disable", "--json"}},
@@ -288,8 +299,14 @@ func runJSONCase(t *testing.T, c jsonCase) (code int, msg, stdout, stderr string
 		phase2.runGet = awaitingRunJSON()
 	}
 	writeHandler := write.handler(t)
+	ctxFake := newFakeCtx()
+	ctxFake.seed("acme-api", 2, map[string]string{"files/a.md": "a\n"})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
+		if strings.HasPrefix(p, "/v1/contexts") {
+			ctxFake.ServeHTTP(w, r)
+			return
+		}
 		toWrite := p == "/api/auth/me" || p == "/api/account/secrets" || strings.HasPrefix(p, "/v1/secrets") ||
 			strings.HasPrefix(p, "/v1/notification-channels") ||
 			strings.HasSuffix(p, "/triggers") || strings.Contains(p, "/triggers/") ||
