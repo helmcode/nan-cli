@@ -17,9 +17,10 @@ import (
 // These are the pins both repositories must share. x/text is v0.39.0, the
 // first release without GO-2026-5970 (an infinite loop in unicode/norm on
 // invalid UTF-8, reached by these rules). The cross-repo check lives in
-// cloud-api's CI, which reads this repository's public go.mod and compares
-// it (and its copy of path.go) with its own: this repository is public and
-// cannot read cloud-api. When cloud-api moves x/text or its Go toolchain's
+// cloud-api's CI (scripts/check-nan-cli-text-parity.sh, helmcode/nan-cloud-api
+// #397): it reads this repository's public go.mod and compares the x/text
+// version and unicode.Version under the go version declared here with its
+// own. This repository is public and cannot read cloud-api. When cloud-api moves x/text or its Go toolchain's
 // Unicode tables, this record and go.mod move with it.
 const (
 	cloudAPIXText   = "v0.39.0"
