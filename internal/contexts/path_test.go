@@ -9,7 +9,7 @@ import (
 
 // Parity table: copied from cloud-api internal/contexts/path_test.go (the
 // middleware name-shape test is left out: nan-cli has no route table). The
-// copy must stay in step with the server; see scripts/check-cloud-api-pins.sh.
+// copy must stay in step with the server; cloud-api's CI checks that it does.
 //
 // Stored paths (devops AGENT-CONTEXT.md section 1.5): every refusal carries its
 // per-file reason; the table covers the Unicode rules and the exact maxima.

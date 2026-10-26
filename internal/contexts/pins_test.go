@@ -16,9 +16,11 @@ import (
 //
 // These are the pins both repositories must share. x/text is v0.39.0, the
 // first release without GO-2026-5970 (an infinite loop in unicode/norm on
-// invalid UTF-8, reached by these rules); cloud-api has to move to it too.
-// When either side moves, scripts/check-cloud-api-pins.sh fails in CI until
-// this record and go.mod match cloud-api again.
+// invalid UTF-8, reached by these rules). The cross-repo check lives in
+// cloud-api's CI, which reads this repository's public go.mod and compares
+// it (and its copy of path.go) with its own: this repository is public and
+// cannot read cloud-api. When cloud-api moves x/text or its Go toolchain's
+// Unicode tables, this record and go.mod move with it.
 const (
 	cloudAPIXText   = "v0.39.0"
 	cloudAPIUnicode = "15.0.0"
