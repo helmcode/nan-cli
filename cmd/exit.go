@@ -82,6 +82,9 @@ func apiExit(err error, cred credential) *ExitError {
 	if !errors.As(err, &apiErr) {
 		return &ExitError{Code: exitUnavailable, Err: err}
 	}
+	if exit := ephemeralExit(apiErr, cred); exit != nil {
+		return exit
+	}
 	msg := runs.SanitizeLine(apiErr.Error())
 	switch apiErr.Code {
 	case "tier_restricted":

@@ -151,6 +151,9 @@ func writeExit(err error, cred credential, what, scope string) *ExitError {
 	if !errors.As(err, &apiErr) {
 		return apiExit(err, cred)
 	}
+	if exit := ephemeralExit(apiErr, cred); exit != nil {
+		return exit
+	}
 	msg := runs.SanitizeLine(apiErr.Message)
 	switch apiErr.Code {
 	case "browser_session_required":

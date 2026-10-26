@@ -366,9 +366,13 @@ func AutomationURL(id string) string {
 }
 
 // RunURL is a run's page in the portal, where its proposal is approved.
-// The workspace id is part of the path; without a well-formed one this
-// falls back to the approvals inbox.
+// The workspace id is part of the path, except for an ephemeral run (no
+// workspace: /runs/<id>); without a well-formed id this falls back to the
+// approvals inbox.
 func RunURL(run *api.Run) string {
+	if run.Ephemeral() && isUUID(run.ID) {
+		return PortalURL + "/runs/" + strings.ToLower(run.ID)
+	}
 	if !isUUID(run.ID) || !isUUID(run.Workspace.ID) {
 		return ApprovalsURL
 	}

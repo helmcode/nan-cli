@@ -36,6 +36,9 @@ type fakePlatform struct {
 	dropFirst    bool     // close the first stream after its events, without `end`
 	streamStatus int
 	cancelStatus int
+	// ephemeral makes every run an ephemeral one (size m, acme/api, no
+	// workspace), metered once it is terminal.
+	ephemeral bool
 
 	created      map[string]any
 	idemKey      string
@@ -50,6 +53,13 @@ func (f *fakePlatform) run(state string) string {
 	ec := "null"
 	if f.finalError != "" && api.Terminal(state) {
 		ec = fmt.Sprintf("%q", f.finalError)
+	}
+	if f.ephemeral {
+		cost := "null"
+		if api.Terminal(state) {
+			cost = `{"eur":0.018,"eur_micros":18000,"billed_seconds":180}`
+		}
+		return fmt.Sprintf(`{"id":%q,"object":"run","workspace":null,"executor":"ephemeral","size":"m","cost":%s,"github_repo":"acme/api","agent":"pi","model":"glm5.3","trigger":"cli","state":%q,"queue_position":null,"prompt_preview":"review","cwd":"/home/nan/work","git_isolation":null,"timeout_seconds":1800,"cancel_requested":false,"exit_code":null,"error_code":%s,"result":null,"usage":null,"last_seq":2,"created_at":"2026-10-10T12:00:00Z","started_at":null,"finished_at":null}`, testRunID, cost, state, ec)
 	}
 	return fmt.Sprintf(`{"id":%q,"object":"run","workspace":{"id":"w1","name":"develop"},"agent":"pi","model":null,"trigger":"cli","state":%q,"queue_position":null,"prompt_preview":"review","cwd":"/home/nan","git_isolation":null,"timeout_seconds":1800,"cancel_requested":false,"exit_code":null,"error_code":%s,"result":null,"usage":{"tokens_in":null,"tokens_out":null,"source":null},"last_seq":2,"created_at":"2026-10-10T12:00:00Z","started_at":null,"finished_at":null}`, testRunID, state, ec)
 }

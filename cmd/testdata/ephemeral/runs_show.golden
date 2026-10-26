@@ -1,0 +1,22 @@
+id             6f1c2a9b-0000-4000-8000-000000000001
+state          succeeded
+executor       ephemeral: a fresh container, size M (2 vCPU, 8 GiB RAM, 16 GB disk)
+agent          pi · model glm5.3
+inference      NaN
+trigger        cli
+repository     acme/api
+timeout        30m0s
+created        2026-10-10 09:00
+started        2026-10-10 09:00
+branch         nan-run/6f1c2a9b
+commit         aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+changed files  3
+cost           €0.018 for 3 started minutes of size M, before your free minutes (nan ephemeral usage)
+
+note: not charged yet: billing is not active, usage is metered and shown only
+
+prompt:
+  review PR 42 in full
+
+summary:
+  done

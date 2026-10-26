@@ -57,6 +57,8 @@ var hintFragments = []string{
 	"send a test",
 	"nan notifications",
 	"turned off",
+	"change these in the browser",
+	"cost:",
 }
 
 // jsonFixtures writes the files the write commands read.
@@ -112,6 +114,8 @@ func jsonCases(t *testing.T) map[string][]jsonCase {
 			{args: []string{"automations", "triggers", "rotate", testAutoID, triggerUUID, "--json"}},
 			{args: []string{"automations", "triggers", "rotate", testAutoID, triggerUUID, "--url", "--secret", "--no-grace", "--json"}},
 		},
+		"nan ephemeral settings": {{args: []string{"ephemeral", "settings", "--json"}}},
+		"nan ephemeral usage":    {{args: []string{"ephemeral", "usage", "--json"}}},
 		"nan notifications add": {
 			{args: []string{"notifications", "add", "deploys", "--kind", "slack", "--url-file", hook, "--json"}},
 			// The one-time signing secret is in the JSON; the note about it
@@ -134,6 +138,7 @@ func jsonCases(t *testing.T) map[string][]jsonCase {
 		"nan run": {
 			{args: []string{"run", "review", "--json"}, lines: true},
 			{args: []string{"run", "review", "--detach", "--json"}, code: exitDetached},
+			{args: []string{"run", "--ephemeral", "--repo", "acme/api", "--model", "glm5.3", "--size", "m", "review", "--json"}, lines: true},
 		},
 		"nan runs cancel": {{args: []string{"runs", "cancel", testRunID, "--json"}}},
 		"nan runs logs": {
@@ -290,6 +295,15 @@ func runJSONCase(t *testing.T, c jsonCase) (code int, msg, stdout, stderr string
 	writeHandler := write.handler(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
+		if name, ok := strings.CutPrefix(p, "/api/ephemeral/"); ok {
+			b, err := os.ReadFile(filepath.Join("..", "internal", "api", "testdata", "ephemeral", "ephemeral_"+name+".json"))
+			if err != nil {
+				http.NotFound(w, r)
+				return
+			}
+			_, _ = w.Write(b)
+			return
+		}
 		toWrite := p == "/api/auth/me" || p == "/api/account/secrets" || strings.HasPrefix(p, "/v1/secrets") ||
 			strings.HasPrefix(p, "/v1/notification-channels") ||
 			strings.HasSuffix(p, "/triggers") || strings.Contains(p, "/triggers/") ||
