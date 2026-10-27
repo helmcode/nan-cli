@@ -107,9 +107,10 @@ id=$(nan run --detach "upgrade the dependencies")
 | `--model M` | the agent's own | Model for the agent. Required with `--byok-secret` and `--ephemeral`. |
 | `--byok-secret NAME` | NaN inference | Run on your own provider key: the name of a provider key secret saved in the portal. See below. |
 | `--ephemeral` | | Run in a fresh, throwaway container instead of a workspace. See below. |
-| `--repo OWNER/NAME` | | With `--ephemeral`: the GitHub repository the container clones. |
+| `--repo OWNER/NAME` | | With `--ephemeral`: the GitHub repository the container clones. Can be left out with `--context`. |
 | `--github-token-secret NAME` | | With `--ephemeral` and `--repo`: the name of your secret holding a GitHub token, to clone a private repository. |
 | `--size s\|m\|l` | `s` | With `--ephemeral`: the container size. |
+| `--context NAME` | | Load one of your [agent contexts](#agent-contexts), by name or id. Repeat it for more, at most 5, loaded in the order given. |
 | `--cwd PATH` | `/home/nan` | Folder in the workspace. |
 | `--worktree` / `--no-worktree` | auto | Work on a separate branch, or in the folder itself. See below. |
 | `--timeout D` | `30m` | Stop the run after this long, `1m` to `2h`. |
@@ -147,7 +148,9 @@ the agent with the model you name, streams like any run, and is destroyed at
 the end. The container can only reach the internet over HTTP and HTTPS (no
 SSH, no SMTP). For a private repository, `--github-token-secret NAME` names
 one of your secrets holding a GitHub token that can read it (`nan secrets ls`):
-it is used only to clone and is never given to the agent. Starting one needs your session or a platform token with the
+it is used only to clone and is never given to the agent. With `--context`,
+`--repo` can be left out: the agent then works in an empty folder with its
+contexts and clones nothing. Starting one needs your session or a platform token with the
 `runs:ephemeral` scope; API keys cannot. Docs:
 <https://nan.builders/docs/ephemeral-runs>.
 
@@ -172,6 +175,7 @@ rather than the columns.
 ```bash
 nan run --ephemeral --repo acme/api --model glm5.3 --size m "find and fix the flaky test"
 nan run --ephemeral --repo acme/private --github-token-secret GITHUB_TOKEN --model glm5.3 "review the open PRs"
+nan run --ephemeral --context release-notes --model glm5.3 "write this week's release notes"   # no repository
 nan ephemeral usage      # this month's minutes, cost, free S-minutes left, prices
 nan ephemeral settings   # your monthly spend cap and concurrent runs (change them in the browser)
 ```
@@ -218,8 +222,9 @@ and manage your secrets (values go in, only names and metadata come out):
 ```bash
 nan automations ls [--json]
 nan automations show <id|name> [--json]
-nan automations create -f automation.yaml                   # YAML or JSON, - for stdin
+nan automations create -f automation.yaml [--context NAME ...] [--checkout none]   # YAML or JSON, - for stdin
 nan automations edit <id|name> -f changes.yaml              # only the fields in the file change
+nan automations edit <id|name> --context NAME [--context NAME ...] [--checkout none]   # no -f needed
 nan automations enable|disable <id|name>
 nan automations rm <id|name> [--yes]
 nan automations triggers ls <id|name> [--json]
@@ -303,6 +308,51 @@ A platform token needs `notifications:read` to read and
 notifications on your account, these commands exit 64 and point at the
 portal. Docs: <https://nan.builders/docs/notifications>.
 
+### Agent contexts
+
+Keep instructions (`AGENTS.md`), skills (`skills/<name>/SKILL.md`) and
+reference files (`files/...`) on NaN as a versioned context for your runs and
+automations:
+
+```bash
+nan context ls [--json]
+nan context show <NAME|id> [--json]
+nan context create NAME [--description TEXT] [--from DIR] [--json]
+nan context push <NAME|id> DIR [--create] [--dry-run] [--force] [--allow-secrets] [--skip-invalid] [--allow-empty] [--json]
+nan context pull <NAME|id> DIR [--force]
+nan context edit <NAME|id> [--name NEW] [--description TEXT] [--json]
+nan context rm <NAME|id> [--yes]
+```
+
+`push` checks every file name before uploading anything (dotfiles are
+skipped; other refused names are listed with their reason and the push exits
+65 unless `--skip-invalid`), uploads only what NaN does not already hold
+(large files in resumable 16 MiB parts) and publishes a new version. Text
+that looks like a credential is refused unless `--allow-secrets`, and an
+empty folder never empties a context unless `--allow-empty`. `pull`
+writes into an empty folder only, after checking every path with the same
+rules. Without contexts on your account, these commands exit 64 and point at
+the portal. Docs: <https://nan.builders/docs/contexts>.
+
+Use them in runs and automations with `--context NAME` (repeatable, at most 5,
+loaded in the order given, each at its latest version when the run starts):
+
+```bash
+nan run --context acme-api --context style-guide "review PR 42"
+nan run --ephemeral --context release-notes --model glm5.3 "write the release notes"   # no --repo needed
+nan automations create -f review.yaml --context acme-api
+nan automations create -f notes.yaml --checkout none --context release-notes   # ephemeral, no repository
+nan automations edit "PR review api" --context acme-api --context style-guide  # replaces its contexts
+```
+
+An ephemeral run or automation without a repository (`--checkout none`, the
+file's `checkout: none`) needs at least one context. A file's `contexts:`
+field and `--context` are the same thing: give them in one place. Every
+mistake (a sixth context, the same one twice, a name that is not a context
+name) exits 64 before anything is sent; so does a context the platform does
+not find, two contexts that define the same skill, or contexts too large for
+one run together (250 MiB, 5000 files, 64 KiB of instructions).
+
 ### Exit codes
 
 `nan run`, `nan runs logs -f` and `nan automations run` exit with the run's outcome, so a script can
@@ -316,7 +366,7 @@ branch on it without parsing text:
 | 3 | cancelled (after a double Ctrl-C: cancel requested — `nan runs show` has the final state) |
 | 4 | the workspace is not set up for it: agent not installed, no inference key, bad configuration |
 | 10 | awaiting approval: an automation run whose proposed actions wait for you (`nan runs proposal <id>`, approve in the portal) |
-| 64 | usage error (also: more than one workspace and no `--ws`) |
+| 64 | usage error (also: more than one workspace and no `--ws`; a `--context` that does not exist, repeats a skill of another, or makes the run too large) |
 | 65 | not signed in, session expired, or not allowed (also: a token without `runs:ephemeral`, ephemeral runs not available to you) |
 | 69 | nan.builders unavailable, the stream was lost after retries (the run goes on; the id is printed), or an ephemeral run would pass your monthly spend cap |
 | 75 | `--detach`, or Ctrl-C: the run was accepted and is still going |
@@ -369,9 +419,32 @@ nan auth login --api-token < token.txt  # or pipe it in
 Never put a token on the command line itself: it would end up in your shell
 history and in `ps`.
 
+**Two-factor authentication.** With it turned on for your account (Settings >
+Account > Two-factor authentication at <https://cloud.nan.builders>),
+`nan auth login` and the dashboard's sign-in ask for the code from your
+authenticator app after the link, without echo. One of your recovery codes
+works in its place. When nan cannot ask, pipe the code in. Never type the code
+into the command itself, where it would stay in your shell history: read it
+into a variable without echo, or redirect it from a file or a password
+manager's command line.
+
+```bash
+read -rs code   # type or paste it; it is not shown
+printf '%s\n' "$code" | nan auth login --link "<the link>" --totp -
+nan auth login --link "<the link>" --totp - < code.txt
+```
+
+`--totp` never takes the code as an argument: its only value is `-`, which
+reads one line of stdin. With `--totp -` the code gets one try, where the
+prompt lets you try again; if stdin is a terminal it is still asked for there,
+without echo.
+
+Versions before 0.1.35 cannot ask for the code: the platform refuses the link
+with `mfa enabled update nan cli`. Update, then ask for a new link.
+
 ## Build from source
 
-Requires Go 1.26.9+ ([mise](https://mise.jdx.dev/) recommended) — the version
+Requires Go 1.26.10+ ([mise](https://mise.jdx.dev/) recommended) — the version
 in `go.mod`, which is where the standard library carries the current security
 fixes:
 

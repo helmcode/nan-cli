@@ -1,0 +1,11 @@
+{
+  "agent": "pi",
+  "prompt": "write the release notes",
+  "model": "glm5.3",
+  "trigger": "cli",
+  "executor": "ephemeral",
+  "size": "m",
+  "contexts": [
+    "acme-api"
+  ]
+}

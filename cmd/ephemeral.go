@@ -244,9 +244,11 @@ func ephemeralScopeHint(cred credential) string {
 // before it is sent, so a mistake costs a clear message instead of a round
 // trip: executor is workspace or ephemeral, size is s, m or l and only for
 // ephemeral, and (on create, where the file is the whole automation) an
-// ephemeral automation has no workspace, a fresh checkout of a github_repo
-// and a model. An edit holds only the fields that change: the platform
-// checks the result.
+// ephemeral automation has no workspace, a model, and either a fresh
+// checkout of a github_repo or checkout "none" with at least one agent
+// context. contexts, when present, is at most 5 context names or ids.
+// An edit holds only the fields that change: the platform checks the
+// result.
 func checkAutomationExecutor(body json.RawMessage, create bool) error {
 	var f map[string]json.RawMessage
 	if err := json.Unmarshal(body, &f); err != nil {
@@ -276,17 +278,37 @@ func checkAutomationExecutor(body json.RawMessage, create bool) error {
 	if hasSize && size != "" && hasExecutor && executor == api.ExecutorWorkspace {
 		return usageErrorf(`size is for ephemeral automations only: set executor: ephemeral, or remove size`)
 	}
+	ctxCount, err := checkBodyContexts(f["contexts"])
+	if err != nil {
+		return err
+	}
+	checkout, _, _ := str("checkout")
+	repo, _, _ := str("github_repo")
+	if checkout == "none" {
+		switch {
+		case repo != "":
+			return usageErrorf(`checkout "none" is an automation without a repository: remove github_repo (or set it to null), or use checkout: fresh`)
+		case executor == api.ExecutorWorkspace || (create && executor == ""):
+			return usageErrorf(`checkout "none" is only for ephemeral automations (executor: ephemeral): a workspace automation works in its workspace`)
+		case create && ctxCount == 0:
+			return usageErrorf(`checkout "none" (no repository) needs at least one agent context: add --context NAME or contexts: [NAME]`)
+		}
+	}
 	if !create || executor != api.ExecutorEphemeral {
 		return nil
 	}
 	if ws, has, _ := str("workspace"); has && ws != "" {
 		return usageErrorf("an ephemeral automation has no workspace: remove workspace (it runs in a fresh container)")
 	}
-	if checkout, _, _ := str("checkout"); checkout != "fresh" {
-		return usageErrorf(`an ephemeral automation works on a fresh checkout: set checkout: fresh and github_repo: OWNER/NAME`)
-	}
-	if repo, _, _ := str("github_repo"); repo == "" {
-		return usageErrorf(`an ephemeral automation needs github_repo: OWNER/NAME, the repository each run clones`)
+	switch checkout {
+	case "none":
+	case "fresh":
+		if repo == "" {
+			return usageErrorf(`an ephemeral automation needs github_repo: OWNER/NAME, the repository each run clones`)
+		}
+	default:
+		return usageErrorf(`an ephemeral automation works on a fresh checkout: set checkout: fresh and github_repo: OWNER/NAME; ` +
+			`or, without a repository, on its agent contexts: checkout: none and --context NAME`)
 	}
 	if cwd, has, _ := str("cwd"); has && cwd != "" {
 		return usageErrorf("an ephemeral automation works in its fresh checkout: remove cwd")
@@ -303,6 +325,19 @@ func checkAutomationExecutor(body json.RawMessage, create bool) error {
 		return usageErrorf("an ephemeral automation must name its model (model: ID): a container has no workspace configuration to default to")
 	}
 	return nil
+}
+
+// checkBodyContexts checks an automation file's contexts field: a list of
+// at most 5 context names or ids. It returns how many there are.
+func checkBodyContexts(raw json.RawMessage) (int, error) {
+	if raw == nil || string(raw) == "null" {
+		return 0, nil
+	}
+	var refs []string
+	if err := json.Unmarshal(raw, &refs); err != nil {
+		return 0, usageErrorf("contexts must be a list of context names or ids, like contexts: [acme-api]")
+	}
+	return len(refs), checkContextRefs(refs, "contexts:")
 }
 
 func sizeList() string {
@@ -593,10 +628,13 @@ func checkEphemeralFlags(opts *runOptions) error {
 		return usageErrorf("an ephemeral run works in its fresh clone of --repo: drop --cwd")
 	case opts.worktree || opts.noWorktree:
 		return usageErrorf("an ephemeral run works on a fresh clone, never a git worktree: drop --worktree/--no-worktree")
-	case opts.repo == "":
-		return usageErrorf("--ephemeral needs --repo OWNER/NAME: the GitHub repository the container clones")
+	case opts.repo == "" && len(opts.contexts) == 0:
+		return usageErrorf("--ephemeral needs --repo OWNER/NAME, the GitHub repository the container clones, " +
+			"or --context NAME, an agent context to work on without a repository (see: nan context ls)")
+	case opts.repo == "" && (opts.githubTokenSecret != "" || opts.githubTokenSecretSet):
+		return usageErrorf("--github-token-secret clones a private --repo: a run without --repo clones nothing, so drop it or add --repo OWNER/NAME")
 	}
-	if !validGitHubRepo(opts.repo) {
+	if opts.repo != "" && !validGitHubRepo(opts.repo) {
 		if repo, ok := repoFromURL(opts.repo); ok {
 			return usageErrorf("--repo takes OWNER/NAME, not a URL: did you mean --repo %s?", repo)
 		}

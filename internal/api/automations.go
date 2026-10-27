@@ -64,7 +64,9 @@ type Automation struct {
 	Enabled            bool               `json:"enabled"`
 	DisabledReason     *string            `json:"disabled_reason"`
 	UpdatedBy          string             `json:"updated_by,omitempty"`
-	// Checkout is "workspace" or "fresh" (a new clone of github_repo per run).
+	// Checkout is "workspace", "fresh" (a new clone of github_repo per run)
+	// or "none" (an ephemeral automation without a repository, working on
+	// its agent contexts).
 	Checkout string `json:"checkout,omitempty"`
 	// Executor is where its runs execute ("workspace" or "ephemeral"), Size
 	// the container size of an ephemeral automation (nil otherwise).

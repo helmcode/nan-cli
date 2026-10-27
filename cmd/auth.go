@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
 
 	"github.com/charmbracelet/x/term"
@@ -23,6 +24,7 @@ var (
 	linkFlag      string
 	keepToolsFlag bool
 	apiTokenFlag  bool
+	totpFlag      string
 )
 
 var authCmd = &cobra.Command{
@@ -35,6 +37,12 @@ var loginCmd = &cobra.Command{
 	Short: "Log in by email, or save a platform token with --api-token",
 	Long: `Log in with a sign-in link sent to your email.
 
+With two-factor authentication on, the link is followed by the code from
+your authenticator app, or one of your recovery codes. It is asked for
+without echo, again after a wrong one; with no terminal to ask on, pipe it
+in with --totp -. With --totp - the code gets one try, and if stdin is a
+terminal it is still asked for there without echo.
+
 With --api-token, save a platform token instead, for a machine with nobody
 at the keyboard (a server, a CI runner). Create the token in Settings >
 Tokens at https://cloud.nan.builders. It is read from stdin only, so it
@@ -45,7 +53,8 @@ need the email sign-in. An API key (sk-...) can be saved the same way; it
 replaces the one the Setup tab saved.`,
 	Example: `  nan auth login --email you@example.com
   nan auth login --api-token              # paste the token; it is not shown
-  nan auth login --api-token < token.txt`,
+  nan auth login --api-token < token.txt
+  read -rs code; printf '%s\n' "$code" | nan auth login --link "<the link>" --totp -   # two-factor, no prompt from nan`,
 	RunE: runLogin,
 }
 
@@ -63,6 +72,7 @@ func init() {
 	loginCmd.Flags().StringVar(&linkFlag, "link", "", `Finish the login with the link from the email ("-" reads it from stdin, keeping the token out of your shell history)`)
 	loginCmd.Flags().StringVar(&tokenFlag, "token", "", `Save a nan_session token directly, skipping the email ("-" reads it from stdin, keeping it out of your shell history)`)
 	loginCmd.Flags().BoolVar(&apiTokenFlag, "api-token", false, "Save a platform token (nan_pat_...) or API key (sk-...) for nan run and nan runs, read from stdin")
+	loginCmd.Flags().StringVar(&totpFlag, "totp", "", `With two-factor authentication on, read the code (or a recovery code) from stdin instead of asking: "-" is the only value`)
 	logoutCmd.Flags().BoolVar(&keepToolsFlag, "keep-tools", false, "Leave the API key in the tools this CLI configured")
 }
 
@@ -72,10 +82,13 @@ func init() {
 // and the command then asked for a cookie that no longer existed.
 func runLogin(cmd *cobra.Command, args []string) error {
 	if apiTokenFlag {
-		if tokenFlag != "" || linkFlag != "" || emailFlag != "" {
-			return fmt.Errorf("--api-token cannot be combined with --email, --link or --token")
+		if tokenFlag != "" || linkFlag != "" || emailFlag != "" || totpFlag != "" {
+			return fmt.Errorf("--api-token cannot be combined with --email, --link, --token or --totp")
 		}
 		return loginWithAPIToken(cmd.Context(), newTokenInput(os.Stdin), os.Stdout, os.Stderr)
+	}
+	if err := checkTOTPFlag(); err != nil {
+		return err
 	}
 	if tokenFlag != "" {
 		token, err := flagValue(tokenFlag)
@@ -97,11 +110,11 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
-		sessionToken, err := auth.ExchangeToken(token)
-		if err != nil {
-			return err
-		}
-		return saveToken(sessionToken)
+		// A code is a line of a few characters; nothing past this is one.
+		stdin := bufio.NewReader(io.LimitReader(os.Stdin, 1024))
+		return finishSignIn(token, newCodeInput(os.Stdin, func() (string, error) {
+			return stdin.ReadString('\n')
+		}), os.Stdout, os.Stderr)
 	}
 
 	in := bufio.NewScanner(os.Stdin)
@@ -169,11 +182,206 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// The code comes from the same scanner as the two answers before it: a
+	// pipe that carries all three has already been read into its buffer.
+	return finishSignIn(token, newCodeInput(os.Stdin, func() (string, error) {
+		if in.Scan() {
+			return in.Text(), nil
+		}
+		if err := in.Err(); err != nil {
+			return "", err
+		}
+		return "", io.EOF
+	}), os.Stdout, os.Stderr)
+}
+
+// checkTOTPFlag refuses the --totp spellings that cannot work.
+//
+// Only "-": --totp never takes the code as an argument. A recovery code is
+// good until it is used, and one written on the command line is in the
+// shell's history and in `ps` for as long as that lasts. The examples keep it
+// off the command line too - read into a variable, or from a file - because
+// `echo <code> |` would put it in the history just the same. And not next to another flag that reads stdin, because the first one
+// would take everything and leave the code nothing.
+func checkTOTPFlag() error {
+	switch {
+	case totpFlag == "":
+		return nil
+	case totpFlag != "-":
+		return fmt.Errorf(`--totp only takes "-": it never takes the code as an argument, where it would stay in your shell history and in ps. Read it from stdin:%s`, totpHint)
+	case tokenFlag != "":
+		return fmt.Errorf("--totp cannot be combined with --token: a saved session token skips the sign-in, and its code")
+	case linkFlag == "-":
+		return fmt.Errorf("--link - and --totp - cannot both read stdin: pass the link as an argument (it works once, and is spent by this command):%s", totpHint)
+	}
+	return nil
+}
+
+// totpHint is how to pipe the code in without typing it into the command:
+// the variable is filled without echo and never appears in the history.
+const totpHint = "\n\n  read -rs code; printf '%s\\n' \"$code\" | nan auth login --link \"<the link>\" --totp -\n\n" +
+	"or redirect it from a file or a password manager: --totp - < code.txt"
+
+// finishSignIn spends the link, answers the two-factor challenge when the
+// account has one, and saves the session.
+func finishSignIn(token string, codes codeInput, out, prompt io.Writer) error {
 	sessionToken, err := auth.ExchangeToken(token)
+	var challenge *auth.MFARequiredError
+	if !errors.As(err, &challenge) {
+		if err != nil {
+			return err
+		}
+		return saveToken(sessionToken)
+	}
+
+	signIn, err := answerChallenge(challenge, codes, prompt)
 	if err != nil {
 		return err
 	}
-	return saveToken(sessionToken)
+	if err := saveToken(signIn.Session); err != nil {
+		return err
+	}
+	if signIn.UsedRecoveryCode {
+		fmt.Fprintln(out, recoveryCodesLeft(signIn.RecoveryCodesLeft))
+	}
+	return nil
+}
+
+// answerChallenge asks for the code until the platform takes one or the
+// sign-in ends. Asking again is for a member at a terminal: a code piped in
+// with --totp - gets one try, and anything else ends with the refusal.
+func answerChallenge(challenge *auth.MFARequiredError, codes codeInput, prompt io.Writer) (*auth.SignIn, error) {
+	if !codes.tty && !codes.fromStdin {
+		// The link is spent by now - the platform consumed it to open the
+		// challenge - so this cannot just say "run it again with the flag".
+		return nil, fmt.Errorf("this account uses two-factor authentication, and there is no terminal here to ask for the code. "+
+			"The link is spent: ask for a new one, and pipe the code in with --totp -:%s", totpHint)
+	}
+	interactive := codes.tty && !codes.fromStdin
+	if interactive {
+		fmt.Fprintln(prompt, "This account uses two-factor authentication. Enter the 6-digit code from your")
+		fmt.Fprintln(prompt, "authenticator app, or one of your recovery codes.")
+	}
+	for {
+		input, err := codes.read(prompt)
+		if err != nil {
+			return nil, err
+		}
+		signIn, err := challenge.Complete(input)
+		if err == nil {
+			return signIn, nil
+		}
+		if !interactive || !auth.Retryable(err) {
+			return nil, err
+		}
+		fmt.Fprintln(prompt, "error: "+err.Error())
+	}
+}
+
+// recoveryCodesLeft is what the login says after a recovery code got the
+// member in: each works once, and running out is the way to be locked out.
+func recoveryCodesLeft(n int) string {
+	const where = "cloud.nan.builders, Settings > Account > Two-factor authentication"
+	switch n {
+	case 0:
+		return "That was your last recovery code. Make new ones before you need one: " + where + "."
+	case 1:
+		return "You signed in with a recovery code: 1 left. Make new ones in the browser: " + where + "."
+	}
+	return fmt.Sprintf("You signed in with a recovery code: %d left. You can make new ones in the browser: %s.", n, where)
+}
+
+// readHiddenLine reads a line from the terminal f without echo.
+//
+// term.ReadPassword turns echo off and only puts it back when it returns. A
+// ctrl-c in between ends the process first, and the shell it hands back to is
+// left without echo: whatever is typed next is invisible until `reset`. So for
+// as long as the prompt is up, an interrupt puts the terminal back before the
+// command exits.
+func readHiddenLine(f *os.File) ([]byte, error) {
+	fd := f.Fd()
+	if state, err := termGetState(fd); err == nil {
+		release := onInterrupt(func() {
+			_ = termRestore(fd, state)
+			fmt.Fprintln(os.Stderr)
+		})
+		defer release()
+	}
+	return termReadPassword(fd)
+}
+
+// The terminal calls readHiddenLine makes, as variables so a test can stand
+// in for a terminal it does not have and see what the interrupt handler puts
+// back.
+var (
+	termGetState     = term.GetState
+	termRestore      = term.Restore
+	termReadPassword = term.ReadPassword
+)
+
+// interrupted ends the command after ctrl-c, with the status a shell gives an
+// interrupted one. A variable for the tests.
+var interrupted = func() { os.Exit(130) }
+
+// onInterrupt runs undo and then interrupted if ctrl-c arrives before release
+// is called. Until then the interrupt is this function's to handle, not the
+// runtime's, which would exit without undoing anything.
+func onInterrupt(undo func()) (release func()) {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-sig:
+			undo()
+			interrupted()
+		case <-done:
+		}
+	}()
+	return func() {
+		signal.Stop(sig)
+		close(done)
+	}
+}
+
+// codeInput is where the second factor comes from: a hidden prompt on a
+// terminal, or one line of stdin with --totp -.
+type codeInput struct {
+	tty        bool
+	fromStdin  bool
+	readHidden func() ([]byte, error)
+	readLine   func() (string, error)
+}
+
+// newCodeInput asks f, hidden when it is a terminal; readLine is the next
+// line of the same stdin, for --totp -.
+func newCodeInput(f *os.File, readLine func() (string, error)) codeInput {
+	return codeInput{
+		tty:        term.IsTerminal(f.Fd()),
+		fromStdin:  totpFlag == "-",
+		readHidden: func() ([]byte, error) { return readHiddenLine(f) },
+		readLine:   readLine,
+	}
+}
+
+func (in codeInput) read(prompt io.Writer) (string, error) {
+	if in.tty {
+		fmt.Fprint(prompt, "Authenticator code: ")
+		raw, err := in.readHidden()
+		fmt.Fprintln(prompt)
+		if err != nil {
+			return "", fmt.Errorf("could not read the code: %w", err)
+		}
+		return strings.TrimSpace(string(raw)), nil
+	}
+	line, err := in.readLine()
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", fmt.Errorf("could not read the code from stdin: %w", err)
+	}
+	if line = strings.TrimSpace(line); line == "" {
+		return "", fmt.Errorf("no code arrived on stdin. The link is spent: ask for a new one, and pipe the code in:%s", totpHint)
+	}
+	return line, nil
 }
 
 // A flag whose value is a credential, with "-" meaning stdin.
@@ -266,7 +474,7 @@ func newTokenInput(f *os.File) tokenInput {
 	return tokenInput{
 		r:          f,
 		tty:        term.IsTerminal(f.Fd()),
-		readHidden: func() ([]byte, error) { return term.ReadPassword(f.Fd()) },
+		readHidden: func() ([]byte, error) { return readHiddenLine(f) },
 	}
 }
 

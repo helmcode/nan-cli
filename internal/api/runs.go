@@ -130,6 +130,19 @@ type Run struct {
 	Executor string   `json:"executor,omitempty"`
 	Size     *string  `json:"size,omitempty"`
 	Cost     *RunCost `json:"cost,omitempty"`
+
+	// Contexts are the agent contexts the run pinned at admission, in run
+	// order (absent on an older platform).
+	Contexts []RunContext `json:"contexts,omitempty"`
+}
+
+// RunContext is one agent context a run loaded: the version pinned when
+// the run was admitted, and that version's tree hash.
+type RunContext struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Version    int    `json:"version"`
+	TreeSHA256 string `json:"tree_sha256"`
 }
 
 // Executors, as the platform names them.
@@ -205,6 +218,10 @@ type CreateRunRequest struct {
 	// member's secret holding a GitHub token, used only to clone a private
 	// repository and never given to the agent. Left out: anonymous clone.
 	GitHubTokenSecret string `json:"github_token_secret,omitempty"`
+
+	// Contexts: 0..5 of the member's agent contexts by name or id, in
+	// order. An ephemeral run without GitHubRepo needs at least one.
+	Contexts []string `json:"contexts,omitempty"`
 }
 
 // RunInference is the inference choice of POST /v1/runs: {"source":"byok"}

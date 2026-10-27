@@ -1,0 +1,12 @@
+{
+  "agent": "pi",
+  "checkout": "none",
+  "contexts": [
+    "acme-api"
+  ],
+  "executor": "ephemeral",
+  "instructions": "Write the notes.",
+  "model": "glm5.3",
+  "name": "weekly notes",
+  "size": "s"
+}

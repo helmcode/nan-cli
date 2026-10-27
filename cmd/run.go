@@ -5,15 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/nxssie/nan-cli/internal/api"
+	"github.com/nxssie/nan-cli/internal/contexts"
 	"github.com/nxssie/nan-cli/internal/runs"
 	"github.com/spf13/cobra"
 )
@@ -56,6 +59,9 @@ type runOptions struct {
 	// holding the GitHub token that clones a private --repo.
 	githubTokenSecret    string
 	githubTokenSecretSet bool
+	// contexts: the agent contexts the run loads (--context, repeatable),
+	// by name or id, in order.
+	contexts []string
 }
 
 var runOpts runOptions
@@ -95,6 +101,15 @@ Your own provider key (BYOK):
   it holds. A token can trigger an automation that uses your key instead.
   Hermes cannot use an Anthropic key yet: use pi or pi_gentle with it.
 
+Agent contexts:
+  --context NAME loads one of your agent contexts into the run: its
+  instructions, skills and files, at its latest version. Repeat it to load
+  more, at most 5; they load in the order given. NAME is a context name or
+  id from: nan context ls. Two contexts cannot define the same skill, and
+  together they must fit a run (250 MiB, 5000 files, 64 KiB of
+  instructions). Make one with: nan context create.
+  Docs: ` + contextsDocs + `
+
 Ephemeral runs (no workspace):
   --ephemeral --repo OWNER/NAME --model ID runs the agent in a fresh,
   throwaway container instead of a workspace: it clones the GitHub
@@ -105,6 +120,8 @@ Ephemeral runs (no workspace):
   secrets holding a GitHub token that can read it (nan secrets ls): it is
   used only to clone, never given to the agent. --ws, --cwd, --worktree
   and --no-worktree do not apply.
+  With --context, --repo can be left out: without --repo the agent works
+  in an empty folder with its contexts and clones nothing.
   --size picks the container (default s), billed per started minute (a
   14 s run is 1 minute):
 ` + sizeTable("    ") + `  Free minutes every month: Community 100, Inference 300, Premium 1000.
@@ -152,7 +169,8 @@ Exit codes:
       key, bad configuration, an agent that cannot use your provider key)
   10  awaiting approval: an automation run whose proposed actions wait for
       you (nan runs proposal <id>; approve in the portal)
-  64  usage error
+  64  usage error, or a --context that does not exist or does not fit
+      with the others (same skill twice, too large together)
   65  not signed in, or not allowed (a token for a run with your own key, a
       token without runs:ephemeral, ephemeral runs not available to you)
   69  nan.builders unavailable, the stream was lost (the run goes on), or
@@ -167,7 +185,9 @@ Docs: https://nan.builders/docs/runs`,
   nan run --ws ci -f task.md    # in CI, with NAN_TOKEN set from a secret
   nan run --byok-secret ANTHROPIC_KEY --model claude-sonnet-4-5 "fix the flaky test"
   nan run --ephemeral --repo acme/api --model glm5.3 --size m "find and fix the flaky test"
-  nan run --ephemeral --repo acme/private --github-token-secret GITHUB_TOKEN --model glm5.3 "review it"`,
+  nan run --ephemeral --repo acme/private --github-token-secret GITHUB_TOKEN --model glm5.3 "review it"
+  nan run --context acme-api --context style-guide "review PR 42"
+  nan run --ephemeral --context release-notes --model glm5.3 "write this week's release notes"`,
 	Args:        cobra.ArbitraryArgs,
 	Annotations: sysexits,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -197,9 +217,10 @@ func init() {
 	rootCmd.AddCommand(runCmd)
 	f := runCmd.Flags()
 	f.StringVar(&runOpts.workspace, "ws", "", "Workspace to run in (default: your only workspace)")
-	f.BoolVar(&runOpts.ephemeral, "ephemeral", false, "Run in a fresh, throwaway container instead of a workspace (needs --repo and --model)")
+	f.BoolVar(&runOpts.ephemeral, "ephemeral", false, "Run in a fresh, throwaway container instead of a workspace (needs --model, and --repo or --context)")
 	f.StringVar(&runOpts.repo, "repo", "", "With --ephemeral: the GitHub repository to clone, `OWNER/NAME`")
 	f.StringVar(&runOpts.githubTokenSecret, "github-token-secret", "", "With --ephemeral and --repo: the `NAME` of your secret holding a GitHub token, to clone a private repository (never the token itself)")
+	f.StringArrayVar(&runOpts.contexts, "context", nil, "Load one of your agent contexts, by `NAME` or id (repeat for more, at most 5; see: nan context ls)")
 	f.StringVar(&runOpts.size, "size", "", "With --ephemeral: the container, s, m or l (default s; see Ephemeral runs above)")
 	f.StringVar(&runOpts.agent, "agent", "pi", "Agent to run: pi, pi_gentle (Pi + Gentle Shell) or hermes, if the workspace has it installed")
 	f.StringVar(&runOpts.model, "model", "", "Model for the agent (default: the agent's own; required with --byok-secret and --ephemeral)")
@@ -268,6 +289,9 @@ func startRun(ctx context.Context, env *runsEnv, opts runOptions, req *api.Creat
 	if err != nil {
 		var apiErr *api.APIError
 		if errors.As(err, &apiErr) {
+			if exit := contextRefusal(apiErr, req.Contexts, "--context"); exit != nil {
+				return exit
+			}
 			if exit := byokRefusal(apiErr, req); exit != nil {
 				return exit
 			}
@@ -318,6 +342,13 @@ func startRun(ctx context.Context, env *runsEnv, opts runOptions, req *api.Creat
 			agent += ", your key " + runs.SanitizeLine(in.Secret) + ", model " + runs.SanitizeLine(in.Model)
 		case ephemeral && req.Model != nil:
 			agent += ", model " + runs.SanitizeLine(*req.Model)
+		}
+		if len(req.Contexts) > 0 {
+			names := make([]string, len(req.Contexts))
+			for i, c := range req.Contexts {
+				names[i] = runs.SanitizeLine(c)
+			}
+			agent += ", contexts " + strings.Join(names, ", ")
 		}
 		fmt.Fprintf(env.stderr, "run %s queued %s (%s), Ctrl-C to detach\n", id, runPlace(run, req), agent)
 	}
@@ -507,6 +538,9 @@ func buildRunRequest(in promptInput, opts runOptions, args []string) (*api.Creat
 			return nil, err
 		}
 	}
+	if err := checkContextRefs(opts.contexts, "--context"); err != nil {
+		return nil, err
+	}
 	if err := checkEphemeralFlags(&opts); err != nil {
 		return nil, err
 	}
@@ -545,9 +579,15 @@ func buildRunRequest(in promptInput, opts runOptions, args []string) (*api.Creat
 		req.GitIsolation = &iso
 	}
 	if opts.ephemeral {
-		repo := opts.repo
-		req.Executor, req.Size, req.GitHubRepo = api.ExecutorEphemeral, opts.size, &repo
+		req.Executor, req.Size = api.ExecutorEphemeral, opts.size
+		if opts.repo != "" {
+			repo := opts.repo
+			req.GitHubRepo = &repo
+		}
 		req.GitHubTokenSecret = opts.githubTokenSecret
+	}
+	if len(opts.contexts) > 0 {
+		req.Contexts = slices.Clone(opts.contexts)
 	}
 	if opts.timeoutSet {
 		if opts.timeout < minTimeout || opts.timeout > maxTimeout {
@@ -635,4 +675,82 @@ func defaultWorkspace(ctx context.Context, env *runsEnv) (string, error) {
 		names[i] = w.Name
 	}
 	return "", usageErrorf("you have %d workspaces; pick one with --ws:\n%s", len(list), joinNames(names))
+}
+
+// maxRunContexts is how many agent contexts a run or an automation loads
+// (cloud-api ctxpath.MaxContextsPerRun).
+const maxRunContexts = 5
+
+// checkContextRefs checks the contexts a run or an automation names (with
+// the flag or file field they came from, for the message): at most 5, each
+// a context name or id, none twice. Whether they exist is the platform's
+// to say.
+func checkContextRefs(refs []string, from string) error {
+	if len(refs) > maxRunContexts {
+		return usageErrorf("%s: at most %d contexts, not %d", from, maxRunContexts, len(refs))
+	}
+	seen := make(map[string]bool, len(refs))
+	for _, ref := range refs {
+		if ref == "" {
+			return usageErrorf("%s is empty: give a context name or id (see: nan context ls)", from)
+		}
+		key := ref
+		switch {
+		case runIDPattern.MatchString(ref):
+			key = strings.ToLower(ref)
+		case !contexts.ValidContextName(ref):
+			return usageErrorf("%s %q is not a context name (lowercase letters, digits and dashes) or a context id; see: nan context ls",
+				from, runs.Truncate(runs.SanitizeLine(ref), 80))
+		}
+		if seen[key] {
+			return usageErrorf("%s %q is given twice: each context loads once", from, runs.Truncate(runs.SanitizeLine(ref), 80))
+		}
+		seen[key] = true
+	}
+	return nil
+}
+
+// contextRefusal reads the platform's refusal of the contexts a run or an
+// automation named (refs, in the order sent). nil when it is about
+// something else.
+func contextRefusal(apiErr *api.APIError, refs []string, from string) *ExitError {
+	msg := runs.Truncate(runs.SanitizeLine(apiErr.Message), 200)
+	ref, named := contextAt(apiErr.Param, refs)
+	switch apiErr.Code {
+	case "context_not_found":
+		if named {
+			return usageErrorf("context %q not found: see your contexts with nan context ls", ref)
+		}
+		return usageErrorf("one of the contexts was not found: see your contexts with nan context ls")
+	case "context_skill_conflict":
+		return usageErrorf("two of the contexts define the same skill (%s): load only one of them with %s, "+
+			"or rename the skill in one and push it again (nan context push)", msg, from)
+	case "context_too_large":
+		return usageErrorf("the contexts are too large for one run together (%s): a run takes up to 250 MiB, "+
+			"5000 files and 64 KiB of instructions; load fewer contexts", msg)
+	}
+	if apiErr.Status == http.StatusBadRequest && (apiErr.Param == "contexts" || strings.HasPrefix(apiErr.Param, "contexts[")) {
+		if named {
+			return usageErrorf("%s %q refused: %s", from, ref, msg)
+		}
+		return usageErrorf("%s refused: %s", from, msg)
+	}
+	return nil
+}
+
+// contextAt is the context a "contexts[i]" param points at, sanitised.
+func contextAt(param string, refs []string) (string, bool) {
+	idx, ok := strings.CutPrefix(param, "contexts[")
+	if !ok {
+		return "", false
+	}
+	idx, ok = strings.CutSuffix(idx, "]")
+	if !ok {
+		return "", false
+	}
+	i, err := strconv.Atoi(idx)
+	if err != nil || i < 0 || i >= len(refs) {
+		return "", false
+	}
+	return runs.Truncate(runs.SanitizeLine(refs[i]), 80), true
 }
