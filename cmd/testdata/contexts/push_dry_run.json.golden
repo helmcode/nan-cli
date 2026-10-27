@@ -1,0 +1,20 @@
+{
+  "context": "acme-api",
+  "base_version": 3,
+  "changes": {
+    "added": [
+      "files/new.md",
+      "skills/pr-review/SKILL.md"
+    ],
+    "changed": [
+      "AGENTS.md"
+    ],
+    "removed": [
+      "files/old.md"
+    ]
+  },
+  "upload": {
+    "files": 3,
+    "bytes": 86
+  }
+}

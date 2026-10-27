@@ -1,0 +1,10 @@
+skipped .git (dotfiles are not kept in a context)
+skipped files/.env (dotfiles are not kept in a context)
+skipped files/sub/.hidden (dotfiles are not kept in a context)
+refused CLAUDE.md: bad_top_level (rename it to AGENTS.md: that is the file the agents read)
+refused README.md: bad_top_level (only AGENTS.md lives at the top; put reference files under files/)
+refused files/con.txt: reserved_name
+refused files/rocket🚀.md: bad_character
+refused notes/a.md: bad_top_level (put reference files under files/ and skills under skills/<name>/)
+refused skills/Bad Skill/SKILL.md: bad_character (a skill folder name is lowercase letters, digits and dashes)
+refused skills/no-skill-md/SKILL.md: skill_invalid (every skill folder needs a SKILL.md)
