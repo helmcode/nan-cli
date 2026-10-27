@@ -1,0 +1,10 @@
+{
+  "agent": "pi",
+  "contexts": [
+    "acme-api",
+    "style-guide"
+  ],
+  "instructions": "Review it.",
+  "name": "PR review api",
+  "workspace": "develop"
+}

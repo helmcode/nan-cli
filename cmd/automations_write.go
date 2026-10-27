@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"text/tabwriter"
 
@@ -29,6 +30,10 @@ var (
 	trigRotateHard       bool
 	trigRotateWhsecFile  string
 	trigRotateWhsecStdin bool
+	// --context (repeatable) and --checkout on create and edit, merged
+	// into the file's body.
+	autoWriteContexts []string
+	autoWriteCheckout string
 )
 
 const automationFileHelp = `The file is YAML or JSON (- reads it from stdin) with the fields of the
@@ -67,6 +72,16 @@ scope; see: nan ephemeral --help.
 
 The full list of fields is in the API reference: https://nan.builders/docs/runs`
 
+const automationContextsHelp = `Agent contexts:
+  --context NAME (repeat it, at most 5) sets the agent contexts every run
+  of the automation loads, in that order, at their latest version; it is
+  the file's contexts: [NAME, ...] field, so give them in one place only.
+  NAME is a context name or id from: nan context ls.
+  --checkout none makes an ephemeral automation without a repository: no
+  github_repo, and its runs work in an empty folder with their contexts,
+  so it needs at least one --context. It is the file's checkout: none.
+  Docs: ` + contextsDocs
+
 var automationsCreateCmd = &cobra.Command{
 	Use:   "create -f FILE",
 	Short: "Create an automation from a YAML or JSON file",
@@ -78,16 +93,23 @@ An automation receives the secrets you assign it, and approval_kinds: []
 lets every action it proposes apply without asking you. Then add a trigger
 with nan automations triggers add.
 
+` + automationContextsHelp + `
+
 ` + writeCredentialHelp + `
 
 Docs: ` + writeDocs,
 	Example: `  nan automations create -f pr-review.yaml
-  nan automations create -f - < pr-review.json`,
+  nan automations create -f - < pr-review.json
+  nan automations create -f review.yaml --context acme-api --context style-guide
+  nan automations create -f notes.yaml --checkout none --context release-notes`,
 	Args:        cobra.NoArgs,
 	Annotations: sysexits,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		body, err := readBodyFile(autoWriteFile)
 		if err != nil {
+			return err
+		}
+		if body, err = applyAutomationFlags(cmd, body, true); err != nil {
 			return err
 		}
 		return withWriteEnv(func(env *runsEnv) error { return doAutomationsCreate(cmd.Context(), env, body) })
@@ -107,13 +129,30 @@ or, for an ephemeral automation, to run it in a bigger container:
 
   size: l
 
+With --context or --checkout, -f can be left out: the flags are the
+change. --context replaces the automation's contexts with the ones given
+(contexts: [] in a file removes them all); --checkout none also sets
+github_repo to null unless the file says otherwise.
+
+` + automationContextsHelp + `
+
 ` + writeCredentialHelp + `
 
 Docs: ` + writeDocs,
+	Example: `  nan automations edit "PR review api" -f patch.yaml
+  nan automations edit "PR review api" --context acme-api --context style-guide
+  nan automations edit "weekly notes" --checkout none --context release-notes`,
 	Args:        oneAutomation,
 	Annotations: sysexits,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		body, err := readBodyFile(autoWriteFile)
+		body := json.RawMessage(`{}`)
+		if autoWriteFile != "" || !automationFlagsSet(cmd) {
+			var err error
+			if body, err = readBodyFile(autoWriteFile); err != nil {
+				return err
+			}
+		}
+		body, err := applyAutomationFlags(cmd, body, false)
 		if err != nil {
 			return err
 		}
@@ -319,6 +358,10 @@ func init() {
 		triggersAddCmd, triggersEditCmd, triggersRotateCmd} {
 		c.Flags().BoolVar(&autoWriteJSON, "json", false, "Print the API's answer as JSON")
 	}
+	for _, c := range []*cobra.Command{automationsCreateCmd, automationsEditCmd} {
+		c.Flags().StringArrayVar(&autoWriteContexts, "context", nil, "An agent context its runs load, by `NAME` or id (repeat for more, at most 5; replaces the file's contexts)")
+		c.Flags().StringVar(&autoWriteCheckout, "checkout", "", "The file's checkout field: none for an ephemeral automation without a repository (needs --context)")
+	}
 	automationsRmCmd.Flags().BoolVar(&autoRmYes, "yes", false, "Delete without asking")
 	triggersRmCmd.Flags().BoolVar(&trigRmYes, "yes", false, "Delete without asking")
 	triggersLsCmd.Flags().BoolVar(&trigLsJSON, "json", false, "Print the triggers as JSON")
@@ -367,6 +410,9 @@ func doAutomationsCreate(ctx context.Context, env *runsEnv, body json.RawMessage
 	}
 	a, raw, err := env.client.CreateAutomation(ctx, body)
 	if err != nil {
+		if exit := automationContextExit(err, body); exit != nil {
+			return exit
+		}
 		return writeExit(err, env.cred, "automations", scopeAutomationsWrite)
 	}
 	if autoWriteJSON {
@@ -397,6 +443,9 @@ func doAutomationsUpdate(ctx context.Context, env *runsEnv, ref string, body jso
 	}
 	a, raw, err := env.client.UpdateAutomation(ctx, id, body)
 	if err != nil {
+		if exit := automationContextExit(err, body); exit != nil {
+			return exit
+		}
 		return automationWriteExit(err, ref, env.cred)
 	}
 	if autoWriteJSON {
@@ -575,4 +624,74 @@ func triggerWriteExit(err error, ref, triggerID string, cred credential) *ExitEr
 			triggerID, runs.Truncate(runs.SanitizeLine(ref), 64), runs.Truncate(runs.SanitizeLine(ref), 64))
 	}
 	return writeExit(err, cred, "automations", scopeAutomationsWrite)
+}
+
+// automationFlagsSet reports whether --context or --checkout was given.
+func automationFlagsSet(cmd *cobra.Command) bool {
+	return cmd.Flags().Changed("context") || cmd.Flags().Changed("checkout")
+}
+
+// automationCheckouts are the checkout modes of an automation.
+var automationCheckouts = []string{"workspace", "fresh", "none"}
+
+// applyAutomationFlags merges --context and --checkout into the body of
+// create or edit. Without them the body goes out exactly as written. A
+// field given both in the file and as a flag is a mistake: which one wins
+// would be a guess.
+func applyAutomationFlags(cmd *cobra.Command, body json.RawMessage, create bool) (json.RawMessage, error) {
+	if !automationFlagsSet(cmd) {
+		return body, nil
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(body, &m); err != nil || m == nil {
+		return nil, usageErrorf("the file must hold one object (the automation's fields)")
+	}
+	if cmd.Flags().Changed("context") {
+		if _, ok := m["contexts"]; ok {
+			return nil, usageErrorf("contexts is in the file and given with --context: give them once, in one place")
+		}
+		if err := checkContextRefs(autoWriteContexts, "--context"); err != nil {
+			return nil, err
+		}
+		m["contexts"], _ = json.Marshal(autoWriteContexts)
+	}
+	if cmd.Flags().Changed("checkout") {
+		if !slices.Contains(automationCheckouts, autoWriteCheckout) {
+			return nil, usageErrorf("--checkout must be workspace, fresh or none (none: an ephemeral automation without a repository), not %q",
+				runs.Truncate(runs.SanitizeLine(autoWriteCheckout), 32))
+		}
+		if _, ok := m["checkout"]; ok {
+			return nil, usageErrorf("checkout is in the file and given with --checkout: give it once, in one place")
+		}
+		m["checkout"], _ = json.Marshal(autoWriteCheckout)
+		if _, ok := m["github_repo"]; !ok && !create && autoWriteCheckout == "none" {
+			// A repository-less automation has no repository: an edit
+			// that turns one into it drops the one it had.
+			m["github_repo"] = json.RawMessage("null")
+		}
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return nil, usageErrorf("could not build the request: %v", err)
+	}
+	return out, nil
+}
+
+// bodyContexts are the contexts a create or edit body names (nil when none
+// or not a list of strings).
+func bodyContexts(body json.RawMessage) []string {
+	var f struct {
+		Contexts []string `json:"contexts"`
+	}
+	_ = json.Unmarshal(body, &f)
+	return f.Contexts
+}
+
+// automationContextExit reads a refusal of the contexts an automation names.
+func automationContextExit(err error, body json.RawMessage) *ExitError {
+	var apiErr *api.APIError
+	if !errors.As(err, &apiErr) {
+		return nil
+	}
+	return contextRefusal(apiErr, bodyContexts(body), "--context")
 }

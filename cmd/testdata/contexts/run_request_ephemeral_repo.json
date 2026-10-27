@@ -1,0 +1,12 @@
+{
+  "agent": "pi",
+  "prompt": "fix the flaky test",
+  "model": "glm5.3",
+  "trigger": "cli",
+  "executor": "ephemeral",
+  "github_repo": "acme/api",
+  "contexts": [
+    "style-guide",
+    "acme-api"
+  ]
+}

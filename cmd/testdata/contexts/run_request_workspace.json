@@ -1,0 +1,10 @@
+{
+  "workspace": "develop",
+  "agent": "pi",
+  "prompt": "review the open pull requests",
+  "trigger": "cli",
+  "contexts": [
+    "acme-api",
+    "style-guide"
+  ]
+}

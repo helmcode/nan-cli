@@ -1,0 +1,7 @@
+{
+  "checkout": "none",
+  "contexts": [
+    "acme-api"
+  ],
+  "github_repo": null
+}

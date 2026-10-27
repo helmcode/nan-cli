@@ -583,6 +583,21 @@ func TestCheckAutomationExecutor(t *testing.T) {
 		{"no repo", `{"executor":"ephemeral","checkout":"fresh","model":"m"}`, true, "github_repo: OWNER/NAME"},
 		{"cwd", `{"executor":"ephemeral","checkout":"fresh","github_repo":"a/b","model":"m","cwd":"/home/nan/x"}`, true, "remove cwd"},
 		{"no model", `{"executor":"ephemeral","checkout":"fresh","github_repo":"a/b"}`, true, "must name its model"},
+		// Agent contexts (C2): checkout "none" is an ephemeral automation
+		// without a repository, with at least one context.
+		{"none with a context", `{"executor":"ephemeral","checkout":"none","contexts":["acme-api"],"model":"m"}`, true, ""},
+		{"none without a context", `{"executor":"ephemeral","checkout":"none","model":"m"}`, true, "at least one agent context"},
+		{"none with an empty list", `{"executor":"ephemeral","checkout":"none","contexts":[],"model":"m"}`, true, "at least one agent context"},
+		{"none with a repo", `{"executor":"ephemeral","checkout":"none","github_repo":"a/b","contexts":["c"],"model":"m"}`, true, "remove github_repo"},
+		{"none, repo null", `{"executor":"ephemeral","checkout":"none","github_repo":null,"contexts":["c"],"model":"m"}`, true, ""},
+		{"none on a workspace automation", `{"workspace":"develop","checkout":"none","contexts":["c"]}`, true, "only for ephemeral"},
+		{"edit: none alone", `{"checkout":"none","github_repo":null}`, false, ""},
+		{"edit: none to workspace", `{"executor":"workspace","checkout":"none"}`, false, "only for ephemeral"},
+		{"none still needs a model", `{"executor":"ephemeral","checkout":"none","contexts":["c"]}`, true, "must name its model"},
+		{"contexts on a workspace automation", `{"workspace":"develop","contexts":["a","b"]}`, true, ""},
+		{"edit: contexts cleared", `{"contexts":[]}`, false, ""},
+		{"six contexts", `{"contexts":["a1","a2","a3","a4","a5","a6"]}`, false, "at most 5"},
+		{"contexts not a list", `{"contexts":"a"}`, false, "list of context names"},
 	} {
 		err := checkAutomationExecutor(json.RawMessage(tc.body), tc.create)
 		switch {
