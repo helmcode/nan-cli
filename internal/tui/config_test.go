@@ -80,7 +80,7 @@ func assertNotWorldReadable(t *testing.T, path string) {
 
 func TestOpencodeConfigPublishesEveryModelWithItsWindow(t *testing.T) {
 	path := tempConfig(t, "opencode.json")
-	if err := writeOpencodeConfig(path, testKey); err != nil {
+	if err := writeOpencodeConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -137,7 +137,7 @@ func TestOpencodeConfigRepairsAnEntryWrittenByAnOlderVersion(t *testing.T) {
 	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeOpencodeConfig(path, testKey); err != nil {
+	if err := writeOpencodeConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -180,7 +180,7 @@ func TestOpencodeConfigTakesOutARetiredModel(t *testing.T) {
 	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeOpencodeConfig(path, testKey); err != nil {
+	if err := writeOpencodeConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	models := readJSON(t, path)["provider"].(map[string]any)["nan"].(map[string]any)["models"].(map[string]any)
@@ -202,7 +202,7 @@ func TestOpencodeConfigKeepsWhatItDoesNotOwn(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"theme":"tokyonight","provider":{}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeOpencodeConfig(path, testKey); err != nil {
+	if err := writeOpencodeConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	if theme := readJSON(t, path)["theme"]; theme != "tokyonight" {
@@ -231,7 +231,7 @@ func piModels(t *testing.T, path string) map[string]map[string]any {
 
 func TestPiConfigIsAModelsJsonWithTheRealWindows(t *testing.T) {
 	path := tempConfig(t, "models.json")
-	if err := writePiConfig(path, testKey); err != nil {
+	if err := writePiConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -255,7 +255,7 @@ func TestPiConfigIsAModelsJsonWithTheRealWindows(t *testing.T) {
 
 func TestPiConfigWritesOnlyTheModalitiesPiAccepts(t *testing.T) {
 	path := tempConfig(t, "models.json")
-	if err := writePiConfig(path, testKey); err != nil {
+	if err := writePiConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	// Pi's schema is `("text" | "image")[]`. A third value fails validation and
@@ -276,7 +276,7 @@ func TestPiConfigLeavesOtherProvidersAlone(t *testing.T) {
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writePiConfig(path, testKey); err != nil {
+	if err := writePiConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	providers := readJSON(t, path)["providers"].(map[string]any)
@@ -303,7 +303,7 @@ func TestPiConfigIsRecognisedAsConfigured(t *testing.T) {
 	if isNaNConfigured("Pi", path) {
 		t.Error("an absent file reads as configured")
 	}
-	if err := writePiConfig(path, testKey); err != nil {
+	if err := writePiConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	if !isNaNConfigured("Pi", path) {
@@ -313,7 +313,7 @@ func TestPiConfigIsRecognisedAsConfigured(t *testing.T) {
 
 func TestCodexConfigSpeaksAWireProtocolCodexStillLoads(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
@@ -358,7 +358,7 @@ wire_api = "chat"
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
@@ -391,7 +391,7 @@ wire_api = "responses"
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
@@ -412,7 +412,7 @@ trust_level = "trusted"
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
@@ -436,7 +436,7 @@ func TestCodexConfigDoesNotTouchAnExistingChoice(t *testing.T) {
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
@@ -475,7 +475,7 @@ wire_api = "chat"
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
@@ -511,7 +511,7 @@ wire_api = "responses"
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
@@ -563,7 +563,7 @@ wire_api = "responses"
 // travel with the model it belongs to.
 func TestCodexProfilesGiveEveryModelItsOwnWindow(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
@@ -598,7 +598,7 @@ func TestCodexProfilesOfARetiredModelGoAway(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
@@ -616,7 +616,7 @@ func TestCodexProfilesOfARetiredModelGoAway(t *testing.T) {
 // ends the turn empty. The profiles are what keeps those tools out.
 func TestCodexProfilesLeaveOutTheToolsTheClusterCannotStream(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
@@ -658,7 +658,7 @@ func TestCodexProfileNamesAreNamesCodexAccepts(t *testing.T) {
 // eight more files to rotate, and eight more to leak.
 func TestCodexProfilesCarryNoKey(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
@@ -675,7 +675,7 @@ func TestCodexProfilesCarryNoKey(t *testing.T) {
 
 func TestCodexRemovalTakesTheProfilesAndNothingElse(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
@@ -706,7 +706,7 @@ func TestCodexRemovalTakesTheProfilesAndNothingElse(t *testing.T) {
 // for a model they no longer have.
 func TestCodexRemovalTakesTheWindowFromTheRootTable(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	if err := removeCodexConfig(path); err != nil {
@@ -752,7 +752,7 @@ wire_api = "responses"
 // provider that no longer resolves.
 func TestCodexRemovalTakesTheProfilesWithNoSectionLeft(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
@@ -774,7 +774,7 @@ func TestCodexRemovalTakesTheProfilesWithNoSectionLeft(t *testing.T) {
 // Same, with no config.toml at all.
 func TestCodexRemovalTakesTheProfilesWithNoConfigLeft(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
@@ -815,7 +815,7 @@ model_context_window = %d
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
@@ -838,7 +838,7 @@ model_context_window = %d
 
 func TestFactoryConfigMarksWhatCannotSeeImages(t *testing.T) {
 	path := tempConfig(t, "settings.json")
-	if err := writeFactoryConfig(path, testKey); err != nil {
+	if err := writeFactoryConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	cfg := readJSON(t, path)
@@ -887,7 +887,7 @@ func TestFactoryConfigTakesOutARetiredModel(t *testing.T) {
 	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeFactoryConfig(path, testKey); err != nil {
+	if err := writeFactoryConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	seen := map[string]bool{}
@@ -920,9 +920,9 @@ func TestEveryModelIsWrittenTheSameEverywhere(t *testing.T) {
 	factoryPath := filepath.Join(dir, "settings.json")
 	piPath := filepath.Join(dir, "models.json")
 	for _, err := range []error{
-		writeOpencodeConfig(opencodePath, testKey),
-		writeFactoryConfig(factoryPath, testKey),
-		writePiConfig(piPath, testKey),
+		writeOpencodeConfig(opencodePath, testKey, catalog.ChatModels()),
+		writeFactoryConfig(factoryPath, testKey, catalog.ChatModels()),
+		writePiConfig(piPath, testKey, catalog.ChatModels()),
 	} {
 		if err != nil {
 			t.Fatal(err)
@@ -1197,7 +1197,7 @@ func TestHomeSaysHowToMoveAround(t *testing.T) {
 // squarely in the failure the docs call the most common one.
 func TestPiConfigWritesTheDefaultsOrPiStillAnswers401(t *testing.T) {
 	path := tempConfig(t, "models.json")
-	if err := writePiConfig(path, testKey); err != nil {
+	if err := writePiConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1220,7 +1220,7 @@ func TestPiConfigKeepsTheSettingsItDoesNotOwn(t *testing.T) {
 	if err := os.WriteFile(settingsPath, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writePiConfig(path, testKey); err != nil {
+	if err := writePiConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1241,7 +1241,7 @@ func TestPiRemovalTakesTheDefaultItWrote(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "models.json")
 	settingsPath := filepath.Join(dir, "settings.json")
-	if err := writePiConfig(path, testKey); err != nil {
+	if err := writePiConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	if err := removePiConfig(path); err != nil {
@@ -2567,7 +2567,7 @@ func TestARefusedKeyOpensTheFieldAgain(t *testing.T) {
 
 func TestCodexProfilesPointAtACatalogOfTheClustersModels(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
@@ -2650,7 +2650,7 @@ func TestCodexCatalogPromptIsTheOneCodexAlreadySent(t *testing.T) {
 
 func TestCodexRemovalTakesTheCatalog(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	if err := removeCodexConfig(path); err != nil {
@@ -2680,7 +2680,7 @@ func TestOpencodeConfigCorrectsAWindowWeGotWrong(t *testing.T) {
 	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeOpencodeConfig(path, testKey); err != nil {
+	if err := writeOpencodeConfig(path, testKey, catalog.ChatModels()); err != nil {
 		t.Fatal(err)
 	}
 	models := readJSON(t, path)["provider"].(map[string]any)["nan"].(map[string]any)["models"].(map[string]any)

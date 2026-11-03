@@ -60,8 +60,7 @@ type codexCatalogEntry struct {
 	IncludeAppsUsageInstructions bool `json:"include_apps_usage_instructions"`
 }
 
-func codexCatalog() ([]byte, error) {
-	models := catalog.ChatModels()
+func codexCatalog(models []catalog.Model) ([]byte, error) {
 	entries := make([]codexCatalogEntry, 0, len(models))
 	for i, m := range models {
 		entries = append(entries, codexCatalogEntry{

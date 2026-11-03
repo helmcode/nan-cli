@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	catalog "github.com/nxssie/nan-cli/internal/models"
 )
 
 // The tools' configs are theirs, not ours: by the time `nan` writes a key into
@@ -89,7 +91,7 @@ func TestAConfigThatDoesNotParseIsLeftExactlyAsItIs(t *testing.T) {
 	for _, c := range []struct {
 		name  string
 		file  string
-		write func(path, key string) error
+		write func(path, key string, offered []catalog.Model) error
 	}{
 		{"Factory AI", "settings.json", writeFactoryConfig},
 		{"OpenCode", "opencode.json", writeOpencodeConfig},
@@ -101,7 +103,7 @@ func TestAConfigThatDoesNotParseIsLeftExactlyAsItIs(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			err := c.write(path, testKey)
+			err := c.write(path, testKey, catalog.ChatModels())
 			if err == nil {
 				t.Fatal("a config that does not parse was written over without a word")
 			}

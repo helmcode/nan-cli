@@ -144,6 +144,20 @@ func ChatModels() []Model {
 	return out
 }
 
+func ChatModelsIn(ids []string) []Model {
+	served := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		served[id] = true
+	}
+	var out []Model
+	for _, m := range ChatModels() {
+		if served[m.ID] {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
 // Retired are ids the cluster served once and no longer does. Asking for one
 // gets `401 This API key does not have access to the requested model`, which
 // reads like a problem with the key and is not. The writers that merge into a

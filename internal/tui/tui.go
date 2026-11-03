@@ -2062,6 +2062,7 @@ func configureTools(apiKey string, enabledTools map[string]bool) (string, []stri
 		return true
 	}
 	tools := detectTools()
+	models := modelsForKey(apiKey)
 	var written []string
 	var failed []toolFailure
 	added, removed := 0, 0
@@ -2073,13 +2074,13 @@ func configureTools(apiKey string, enabledTools map[string]bool) (string, []stri
 			var err error
 			switch t.name {
 			case "Factory AI":
-				err = writeFactoryConfig(t.configPath, apiKey)
+				err = writeFactoryConfig(t.configPath, apiKey, models)
 			case "OpenCode":
-				err = writeOpencodeConfig(t.configPath, apiKey)
+				err = writeOpencodeConfig(t.configPath, apiKey, models)
 			case "Pi":
-				err = writePiConfig(t.configPath, apiKey)
+				err = writePiConfig(t.configPath, apiKey, models)
 			case "Codex":
-				err = writeCodexConfig(t.configPath, apiKey)
+				err = writeCodexConfig(t.configPath, apiKey, models)
 			case "Hermes":
 				err = writeHermesConfig(filepath.Dir(t.configPath), apiKey)
 			}
@@ -2126,6 +2127,31 @@ func configureTools(apiKey string, enabledTools map[string]bool) (string, []stri
 		return "nothing to sync", written, nil
 	}
 	return strings.Join(parts, "  ·  "), written, failed
+}
+
+var listModels = api.ListModels
+
+func modelsForKey(apiKey string) []catalog.Model {
+	ids, err := listModels(apiKey)
+	if err != nil {
+		return catalog.ChatModels()
+	}
+	if offered := catalog.ChatModelsIn(ids); len(offered) > 0 {
+		return offered
+	}
+	return catalog.ChatModels()
+}
+
+func withheldFromKey(id string, models []catalog.Model) bool {
+	if _, known := catalog.Get(id); !known {
+		return false
+	}
+	for _, m := range models {
+		if m.ID == id {
+			return false
+		}
+	}
+	return true
 }
 
 // The files that end up holding the key, per tool. Hermes is the odd one: its
@@ -2355,7 +2381,7 @@ func readJSONConfig(path string) (map[string]any, error) {
 	return cfg, nil
 }
 
-func writeFactoryConfig(cfgPath, apiKey string) error {
+func writeFactoryConfig(cfgPath, apiKey string, offered []catalog.Model) error {
 	// A map, so unknown top-level fields (logoAnimation, etc.) survive.
 	cfg, err := readJSONConfig(cfgPath)
 	if err != nil {
@@ -2381,7 +2407,7 @@ func writeFactoryConfig(cfgPath, apiKey string) error {
 	for _, m := range models {
 		if base, _ := m["baseUrl"].(string); strings.Contains(base, "api.nan.builders") {
 			id, _ := m["model"].(string)
-			if catalog.IsRetired(id) {
+			if catalog.IsRetired(id) || withheldFromKey(id, offered) {
 				changed = true
 				continue
 			}
@@ -2403,7 +2429,7 @@ func writeFactoryConfig(cfgPath, apiKey string) error {
 	}
 
 	// Append only missing models
-	for _, nm := range catalog.ChatModels() {
+	for _, nm := range offered {
 		if !existingIDs[nm.ID] {
 			idx := nextIndex
 			nextIndex++
@@ -2448,7 +2474,7 @@ func writeFactoryConfig(cfgPath, apiKey string) error {
 	return writeConfigFile(cfgPath, data)
 }
 
-func writeOpencodeConfig(cfgPath, apiKey string) error {
+func writeOpencodeConfig(cfgPath, apiKey string, offered []catalog.Model) error {
 	cfg, err := readJSONConfig(cfgPath)
 	if err != nil {
 		return err
@@ -2465,7 +2491,7 @@ func writeOpencodeConfig(cfgPath, apiKey string) error {
 	// raises nothing anyone sees, which is why nan.builders/docs/opencode
 	// spells the field out and why this writes it.
 	nanModels := map[string]any{}
-	for _, m := range catalog.ChatModels() {
+	for _, m := range offered {
 		nanModels[m.ID] = map[string]any{
 			"name": m.Name,
 			"limit": map[string]any{
@@ -2489,7 +2515,7 @@ func writeOpencodeConfig(cfgPath, apiKey string) error {
 				}
 				changed := false
 				for id := range existing {
-					if catalog.IsRetired(id) {
+					if catalog.IsRetired(id) || withheldFromKey(id, offered) {
 						delete(existing, id)
 						changed = true
 					}
@@ -2565,7 +2591,7 @@ func writeOpencodeConfig(cfgPath, apiKey string) error {
 // validates models.json against its own schema and names the field that is
 // wrong, nothing this CLI writes has to execute on a member's machine, and the
 // two ways of setting Pi up stop being two things to keep in step.
-func writePiConfig(cfgPath, apiKey string) error {
+func writePiConfig(cfgPath, apiKey string, offered []catalog.Model) error {
 	// Unlike the extension file, models.json is shared: other providers live in
 	// it and none of them are ours to touch.
 	cfg, err := readJSONConfig(cfgPath)
@@ -2578,8 +2604,8 @@ func writePiConfig(cfgPath, apiKey string) error {
 		providers = map[string]any{}
 	}
 
-	models := make([]map[string]any, 0, len(catalog.ChatModels()))
-	for _, m := range catalog.ChatModels() {
+	models := make([]map[string]any, 0, len(offered))
+	for _, m := range offered {
 		models = append(models, map[string]any{
 			"id":            m.ID,
 			"name":          m.Name,
@@ -2720,7 +2746,7 @@ func removePiDefaults(settingsPath string) error {
 	return writeConfigFile(settingsPath, out)
 }
 
-func writeCodexConfig(cfgPath, apiKey string) error {
+func writeCodexConfig(cfgPath, apiKey string, offered []catalog.Model) error {
 	data, _ := os.ReadFile(cfgPath)
 	codexModel, _ := catalog.Get(catalog.Coding)
 
@@ -2749,7 +2775,7 @@ func writeCodexConfig(cfgPath, apiKey string) error {
 				return err
 			}
 		}
-		return writeCodexProfiles(filepath.Dir(cfgPath))
+		return writeCodexProfiles(filepath.Dir(cfgPath), offered)
 	}
 
 	// If no existing config, write a complete starter config.
@@ -2767,7 +2793,7 @@ wire_api = "responses"
 		if err := writeConfigFile(cfgPath, []byte(content)); err != nil {
 			return err
 		}
-		return writeCodexProfiles(filepath.Dir(cfgPath))
+		return writeCodexProfiles(filepath.Dir(cfgPath), offered)
 	}
 
 	// Existing config: only append the provider section; preserve user's model/provider choices.
@@ -2782,7 +2808,7 @@ wire_api = "responses"
 	if err := writeConfigFile(cfgPath, []byte(withCodexContextWindow(content, codexModel.Context))); err != nil {
 		return err
 	}
-	return writeCodexProfiles(filepath.Dir(cfgPath))
+	return writeCodexProfiles(filepath.Dir(cfgPath), offered)
 }
 
 // One file per chat model, so every model on the cluster is a flag away with
@@ -2808,20 +2834,20 @@ wire_api = "responses"
 // cluster anyway. Here and not in config.toml, because these files are ours
 // and leave with the disconnect - a web_search = "disabled" at the root
 // would stay behind and take search from the member's OpenAI sessions too.
-func writeCodexProfiles(codexHome string) error {
+func writeCodexProfiles(codexHome string, offered []catalog.Model) error {
 	// Starting from none, so a model the cluster retired does not leave its
 	// profile behind to answer 401 on `--profile`.
 	if err := removeCodexProfiles(codexHome); err != nil {
 		return err
 	}
-	models, err := codexCatalog()
+	models, err := codexCatalog(offered)
 	if err != nil {
 		return err
 	}
 	if err := writeConfigFile(filepath.Join(codexHome, codexCatalogFile), models); err != nil {
 		return err
 	}
-	for _, m := range catalog.ChatModels() {
+	for _, m := range offered {
 		body := fmt.Sprintf(`# Written by the NaN CLI. Disconnecting Codex removes it.
 model = %q
 model_provider = "nan"
