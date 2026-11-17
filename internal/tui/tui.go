@@ -2233,6 +2233,7 @@ func (m model) finishSignOut(revokeErr error) (tea.Model, tea.Cmd) {
 	m.cache = make(map[tabID]any)
 	m.keyStatus, m.keyAsked, m.keyCheck = nil, false, ""
 	m.configured, m.setupMsg = nil, signOutMessage(removed, failed)
+	m.failures = nil
 	if revokeErr != nil {
 		m.setupMsg += "  ·  " + revokeNotConfirmed(revokeErr)
 	}
@@ -3555,7 +3556,6 @@ func (m model) renderFailures(l layout) string {
 	if len(m.failures) == 0 {
 		return ""
 	}
-	bad := lipgloss.NewStyle().Foreground(cRed)
 	dim := lipgloss.NewStyle().Foreground(cDimGray)
 
 	var b strings.Builder
@@ -3563,7 +3563,6 @@ func (m model) renderFailures(l layout) string {
 	for _, f := range m.failures {
 		b.WriteString(m.wrapped(l, "error: "+f.name+" — "+f.firstLine()) + "\n")
 	}
-	_ = bad
 	b.WriteString("\n" + l.indent + dim.Render(
 		"The rest went in. Fix that one and press c again, or carry on without it - "+
 			"its page on nan.builders has the manual steps.") + "\n")
@@ -3603,6 +3602,18 @@ func lpadTo(v string, w int) string {
 	return v + strings.Repeat(" ", w-len(v))
 }
 
+// Whether the last configure or removal failed for this tool. The file on
+// disk is not the answer then: a run that stopped part-way through can leave
+// enough of it behind to read as configured.
+func (m model) toolFailed(name string) bool {
+	for _, f := range m.failures {
+		if f.name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // renderToolList draws the tools and their state. Pulled out of the Setup
 // tab because the guided setup shows the same list as its last step, and two
 // copies of a list with a cursor in it would drift the first time either moved.
@@ -3610,6 +3621,7 @@ func (m model) renderToolList(l layout, tools []toolInfo, cursor int) string {
 	dimStyle := lipgloss.NewStyle().Foreground(cDimGray)
 	okStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#10B981"))
 	warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B"))
+	failStyle := lipgloss.NewStyle().Foreground(cRed)
 	var b strings.Builder
 	nameW := 14
 	for _, t := range tools {
@@ -3647,6 +3659,8 @@ func (m model) renderToolList(l layout, tools []toolInfo, cursor int) string {
 		var status string
 		if !t.installed {
 			status = dimStyle.Render("not installed")
+		} else if m.toolFailed(t.name) {
+			status = failStyle.Render("✗ last change failed")
 		} else if t.configured {
 			status = okStyle.Render("✓ configured with NaN")
 		} else {

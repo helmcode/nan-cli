@@ -1391,6 +1391,63 @@ func TestHermesResolutionCheckReadsTheMaskOfAShortKey(t *testing.T) {
 	}
 }
 
+// The panel said "error: Hermes — ..." and, two lines up, "Hermes ✓
+// configured with NaN": the status read the file, which the failed run had
+// partly written. The list now follows the result of the last change.
+func TestAToolThatFailedIsNotListedAsConfigured(t *testing.T) {
+	tools := []toolInfo{
+		{name: "OpenCode", installed: true, configured: true},
+		{name: "Hermes", installed: true, configured: true},
+	}
+	rows := func(m model) (opencode, hermes string) {
+		t.Helper()
+		for _, line := range strings.Split(m.renderToolList(m.lay, tools, 0), "\n") {
+			switch {
+			case strings.Contains(line, "Hermes"):
+				hermes = line
+			case strings.Contains(line, "OpenCode"):
+				opencode = line
+			}
+		}
+		if opencode == "" || hermes == "" {
+			t.Fatalf("a tool row is missing: OpenCode %q, Hermes %q", opencode, hermes)
+		}
+		return opencode, hermes
+	}
+
+	m := setupModel(t, &session.Session{Token: "t", APIKey: testKey})
+	m.lay = newLayout(96, 44)
+	updated, _ := m.Update(configuredMsg{
+		msg:     "4 added  ·  Hermes failed",
+		written: []string{"OpenCode"},
+		failed:  []toolFailure{{"Hermes", "Hermes did not resolve the key"}},
+	})
+	failedRun := updated.(model)
+	opencode, hermes := rows(failedRun)
+	if strings.Contains(hermes, "configured with NaN") || !strings.Contains(hermes, "last change failed") {
+		t.Errorf("after a failed run, Hermes reads: %q", hermes)
+	}
+	if !strings.Contains(opencode, "configured with NaN") {
+		t.Errorf("a tool that worked lost its status: %q", opencode)
+	}
+
+	// The next run that works clears the mark.
+	updated, _ = failedRun.Update(configuredMsg{msg: "1 added", written: []string{"Hermes"}})
+	if _, hermes := rows(updated.(model)); !strings.Contains(hermes, "configured with NaN") {
+		t.Errorf("after a run that worked, Hermes reads: %q", hermes)
+	}
+}
+
+// A sign-out takes the failures of the session that is over with it.
+func TestSignOutClearsTheLastFailures(t *testing.T) {
+	m := setupModel(t, &session.Session{Token: "t", APIKey: testKey})
+	m.failures = []toolFailure{{"Hermes", "Hermes did not resolve the key"}}
+	signedOut, _ := m.finishSignOut(nil)
+	if got := signedOut.(model).failures; len(got) != 0 {
+		t.Errorf("failures outlived the sign-out: %v", got)
+	}
+}
+
 func TestHermesIsConfiguredThroughItsOwnConfigCommand(t *testing.T) {
 	calls := recordHermes(t)
 	if err := writeHermesConfig(t.TempDir(), testKey); err != nil {
