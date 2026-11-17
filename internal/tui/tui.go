@@ -3059,13 +3059,11 @@ func codexWireAPIRepaired(data []byte) ([]byte, bool) {
 	return []byte(strings.Join(lines, "\n")), true
 }
 
-// [model_providers.nan], and the quoted spelling of it that TOML also allows.
+// [model_providers.nan] however TOML spells the header: quoted, spaced, with
+// a trailing comment.
 func isCodexNaNProviderHeader(line string) bool {
-	name := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "["), "]"))
-	if !strings.HasPrefix(name, "model_providers.") {
-		return false
-	}
-	return strings.Trim(strings.TrimPrefix(name, "model_providers."), `"'`) == "nan"
+	path, ok := codexTablePath(line)
+	return ok && path == "model_providers.nan"
 }
 
 // The root keys that send Codex to NaN, taken back on a disconnect.
@@ -3380,21 +3378,28 @@ func removeCodexConfig(cfgPath string) error {
 	// Nothing of ours in it - no root provider, no provider section - so
 	// nothing to rewrite: this is called on every sign-out, against a
 	// config.toml that may never have been ours at all.
-	if !rootCleared && !strings.Contains(content, "[model_providers.nan]") {
+	lines := strings.Split(content, "\n")
+	hasSection := false
+	for _, line := range lines {
+		if isCodexNaNProviderHeader(line) {
+			hasSection = true
+			break
+		}
+	}
+	if !rootCleared && !hasSection {
 		return profileErr
 	}
-	lines := strings.Split(content, "\n")
 	var out []string
 	inNanSection := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "[model_providers.nan]" {
+		if isCodexNaNProviderHeader(trimmed) {
 			inNanSection = true
 			continue
 		}
 		if inNanSection {
 			// End of the nan section when a new section header appears.
-			if strings.HasPrefix(trimmed, "[") {
+			if codexIsHeader(trimmed) {
 				inNanSection = false
 			} else {
 				continue
@@ -3414,7 +3419,9 @@ func removeCodexConfig(cfgPath string) error {
 	}
 	// Whatever went from the top - the root keys, the window - may have left
 	// the blank line that separated them from the first table.
-	result = strings.TrimLeft(result, "\n")
+	if rootCleared {
+		result = strings.TrimLeft(result, "\n")
+	}
 	if strings.TrimSpace(result) == "" {
 		if err := os.Remove(cfgPath); err != nil {
 			return err

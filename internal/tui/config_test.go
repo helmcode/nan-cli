@@ -2941,3 +2941,35 @@ func TestKeepingCodexTickedRepairsAnOrphanedRootProvider(t *testing.T) {
 		t.Errorf("the provider section is missing:\n%s", got)
 	}
 }
+
+func TestCodexRemovalTakesAQuotedNaNProviderSection(t *testing.T) {
+	for _, header := range []string{`[model_providers."nan"]`, `[ model_providers . 'nan' ] # ours`} {
+		path := tempConfig(t, "config.toml")
+		content := "[x]\na = 1\n\n" + header + "\nbase_url = \"https://api.nan.builders/v1\"\nexperimental_bearer_token = \"" + testKey + "\"\n"
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := removeCodexConfig(path); err != nil {
+			t.Fatal(err)
+		}
+		got := readFile(t, path)
+		assertCodexTOML(t, got)
+		if got != "[x]\na = 1\n" || strings.Contains(got, testKey) {
+			t.Errorf("%s: got:\n%s", header, got)
+		}
+	}
+}
+
+func TestCodexRemovalKeepsALeadingBlankLineWhenOnlyTheSectionGoes(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	content := "\n# mine\n[x]\na = 1\n\n[model_providers.nan]\nbase_url = \"https://api.nan.builders/v1\"\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCodexConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, path); got != "\n# mine\n[x]\na = 1\n" {
+		t.Errorf("got %q", got)
+	}
+}
