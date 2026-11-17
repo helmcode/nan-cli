@@ -2779,9 +2779,89 @@ func codexBefore168(version string) bool {
 	return major == 0 && minor < 168
 }
 
+// What a --profile run already gets, given to the default run when the
+// default run is a NaN session - which is only when this CLI wrote the
+// starter config, the one place it sets model_provider = "nan" at the root.
+// The catalogue gives Codex metadata for the model (no "Model metadata ...
+// not found" warning, the window and modalities it is served at), and web
+// search and sub-agents go for the reason writeCodexProfiles gives. A root
+// whose provider is the member's own is left alone: those keys would take
+// OpenAI's model list, web search and sub-agents from their OpenAI sessions.
+//
+// Missing keys only, so a second run adds nothing and a value the member set
+// stands. The one thing taken out is the other sub-agent switch with the
+// value this CLI writes, so a Codex upgraded or downgraded across 0.168 is
+// not left with a key it warns about or ignores. Anything this cannot do
+// cleanly - a table defined inline or by dotted keys - it leaves alone, and
+// an edit whose result does not parse to exactly what was meant is dropped.
+func withCodexNaNSessionDefaults(content, codexHome string, use, other codexSwitch) string {
+	doc, ok := codexTOML(content)
+	if !ok || doc["model_provider"] != "nan" {
+		return content
+	}
+	want, _ := codexTOML(content)
+	lines := codexTableKeyDropped(strings.Split(content, "\n"), want, other.table, other.key, false)
+
+	var root []string
+	if _, has := doc["model_catalog_json"]; !has {
+		path := codexCatalogPath(codexHome)
+		root = append(root, fmt.Sprintf("model_catalog_json = %q", path))
+		want["model_catalog_json"] = path
+	}
+	if _, has := doc["web_search"]; !has {
+		root = append(root, `web_search = "disabled"`)
+		want["web_search"] = "disabled"
+	}
+
+	var block []string // a new [table] before the first header
+	if table, has := want[use.table]; !has {
+		block = strings.Split(strings.TrimRight(use.off(), "\n"), "\n")
+		want[use.table] = map[string]any{use.key: false}
+	} else if tbl, isTable := table.(map[string]any); isTable {
+		if _, set := tbl[use.key]; !set {
+			// Under the table's own header, when it has one; an inline table
+			// or one made of dotted keys is not edited.
+			for i, line := range lines {
+				if path, ok := codexTablePath(line); ok && path == use.table {
+					lines = append(lines[:i+1], append([]string{use.key + " = false"}, lines[i+1:]...)...)
+					tbl[use.key] = false
+					break
+				}
+			}
+		}
+	}
+
+	rootEnd := codexRootEnd(lines)
+	// Root keys right after the last root key: below a header TOML reads
+	// them as keys of that table.
+	last := -1
+	for i := 0; i < rootEnd; i++ {
+		if strings.TrimSpace(lines[i]) != "" {
+			last = i
+		}
+	}
+	out := append([]string{}, lines[:last+1]...)
+	out = append(out, root...)
+	rest := strings.TrimLeft(strings.Join(lines[last+1:], "\n"), "\n")
+	if len(block) > 0 {
+		out = append(out, "")
+		out = append(out, block...)
+	}
+	if rest != "" {
+		out = append(out, "", rest)
+	} else {
+		out = append(out, "")
+	}
+	edited := strings.Join(out, "\n")
+	if !codexEditMeans(edited, want) {
+		return content
+	}
+	return edited
+}
+
 func writeCodexConfig(cfgPath, apiKey string) error {
 	data, _ := os.ReadFile(cfgPath)
-	use, _ := codexSubAgentSwitches(codexVersion())
+	use, other := codexSubAgentSwitches(codexVersion())
 	codexModel, _ := catalog.Get(catalog.Coding)
 
 	if strings.Contains(string(data), "api.nan.builders") {
@@ -2804,8 +2884,9 @@ func writeCodexConfig(cfgPath, apiKey string) error {
 			repaired = []byte(withCodexContextWindow(string(repaired), codexModel.Context))
 		}
 		rewired, changed := codexWireAPIRepaired(repaired)
-		if pruned || changed {
-			if err := writeConfigFile(cfgPath, rewired); err != nil {
+		defaulted := withCodexNaNSessionDefaults(string(rewired), filepath.Dir(cfgPath), use, other)
+		if pruned || changed || defaulted != string(rewired) {
+			if err := writeConfigFile(cfgPath, []byte(defaulted)); err != nil {
 				return err
 			}
 		}
@@ -2824,6 +2905,7 @@ base_url = "https://api.nan.builders/v1"
 experimental_bearer_token = %q
 wire_api = "responses"
 `, codexModel.ID, codexModel.Context, apiKey)
+		content = withCodexNaNSessionDefaults(content, filepath.Dir(cfgPath), use, other)
 		if err := writeConfigFile(cfgPath, []byte(content)); err != nil {
 			return err
 		}
@@ -2839,7 +2921,10 @@ experimental_bearer_token = %q
 wire_api = "responses"
 `, apiKey)
 	content := strings.TrimRight(string(data), "\n") + "\n" + section
-	if err := writeConfigFile(cfgPath, []byte(withCodexContextWindow(content, codexModel.Context))); err != nil {
+	content = withCodexContextWindow(content, codexModel.Context)
+	// A root that already says model_provider = "nan" is a NaN session too.
+	content = withCodexNaNSessionDefaults(content, filepath.Dir(cfgPath), use, other)
+	if err := writeConfigFile(cfgPath, []byte(content)); err != nil {
 		return err
 	}
 	return writeCodexProfiles(filepath.Dir(cfgPath), use)
@@ -3147,7 +3232,17 @@ func codexNaNRootCleared(content string) (string, bool) {
 		drop["model"] = true
 		delete(want, "model")
 	}
+	if path, isString := doc["model_catalog_json"].(string); isString && strings.HasSuffix(path, "/"+codexCatalogFile) {
+		drop["model_catalog_json"] = true
+		delete(want, "model_catalog_json")
+	}
+	if doc["web_search"] == "disabled" {
+		drop["web_search"] = true
+		delete(want, "web_search")
+	}
 	lines := strings.Split(content, "\n")
+	lines = codexTableKeyDropped(lines, want, "agents", "enabled", false)
+	lines = codexTableKeyDropped(lines, want, "features", "multi_agent", false)
 	rootEnd := codexRootEnd(lines)
 	out := make([]string, 0, len(lines))
 	for i, line := range lines {
