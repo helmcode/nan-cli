@@ -2661,6 +2661,188 @@ func TestCodexRemovalTakesTheCatalog(t *testing.T) {
 	}
 }
 
+// A member who unticked Codex was left with model_provider = "nan" naming a
+// provider that no longer existed, and Codex refused to start: "Model
+// provider `nan` not found". On a file this CLI created, a disconnect now
+// leaves nothing of NaN behind - and no file, since there is nothing else in it.
+func TestCodexRemovalOnAFileItCreatedLeavesNothing(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCodexConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(path); err == nil {
+		t.Errorf("config.toml outlived a disconnect with nothing of the member's in it:\n%s", data)
+	}
+	entries, _ := os.ReadDir(filepath.Dir(path))
+	for _, e := range entries {
+		t.Errorf("left behind: %s", e.Name())
+	}
+}
+
+// The member kept using the file after we created it: a provider of their
+// own, a trusted project. All of that stays; the root keys that sent Codex to
+// NaN go.
+func TestCodexRemovalKeepsWhatTheMemberAddedAfterUs(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	theirs := "\n[model_providers.mine]\nname = \"Mine\"\nbase_url = \"https://example.invalid/v1\"\n\n" +
+		"[projects.\"/home/member/repo\"]\ntrust_level = \"trusted\"\n"
+	appendToFile(t, path, theirs)
+
+	if err := removeCodexConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	content := readFile(t, path)
+	assertCodexTOML(t, content)
+	want := "[model_providers.mine]\nname = \"Mine\"\nbase_url = \"https://example.invalid/v1\"\n\n" +
+		"[projects.\"/home/member/repo\"]\ntrust_level = \"trusted\"\n"
+	if content != want {
+		t.Errorf("config.toml after the disconnect:\ngot:\n%q\nwant:\n%q", content, want)
+	}
+}
+
+// A member who had their own model and provider before NaN never had them
+// replaced, and a disconnect does not take them either.
+func TestCodexRemovalKeepsTheMembersOwnProvider(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	existing := "model = \"gpt-5\"\nmodel_provider = \"openai\"\n"
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCodexConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, path); got != existing {
+		t.Errorf("the member's config was not handed back as it was:\ngot:\n%s\nwant:\n%s", got, existing)
+	}
+}
+
+// A member who edited our provider section out by hand is still left with a
+// root provider that names nothing; the disconnect takes it.
+func TestCodexRemovalTakesTheRootProviderWithNoSectionLeft(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	if err := os.WriteFile(path, []byte("model = \"m\"\nmodel_provider = \"nan\"\n\n[x]\na = 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCodexConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	got := readFile(t, path)
+	assertCodexTOML(t, got)
+	if got != "[x]\na = 1\n" {
+		t.Errorf("got:\n%q", got)
+	}
+}
+
+// A root model the line edit cannot take out (multi-line string): the
+// disconnect refuses rather than leave a provider that names nothing, and
+// the file is not touched, so Codex keeps working.
+func TestCodexRemovalRefusesARootItCannotClear(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	in := "model = \"\"\"\nm\n\"\"\"\nmodel_provider = \"nan\"\n\n[model_providers.nan]\n" +
+		"name = \"NaN\"\nbase_url = \"https://api.nan.builders/v1\"\nwire_api = \"responses\"\n"
+	if err := os.WriteFile(path, []byte(in), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCodexConfig(path); !errors.Is(err, errCodexRootNotCleared) {
+		t.Errorf("got %v, want errCodexRootNotCleared", err)
+	}
+	if got := readFile(t, path); got != in {
+		t.Errorf("the file was changed:\n%s", got)
+	}
+}
+
+// And nothing it points at goes either: profiles and the catalogue stay
+// while config.toml still names them.
+func TestCodexRemovalRefusalKeepsProfilesAndCatalog(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Dir(path)
+	before, _ := os.ReadDir(home)
+	// Turn the root model into a multi-line string the line edit cannot take.
+	content := readFile(t, path)
+	codexModel, _ := catalog.Get(catalog.Coding)
+	content = strings.Replace(content, fmt.Sprintf("model = %q", codexModel.ID),
+		"model = \"\"\"\n"+codexModel.ID+"\n\"\"\"", 1)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCodexConfig(path); !errors.Is(err, errCodexRootNotCleared) {
+		t.Fatalf("got %v, want errCodexRootNotCleared", err)
+	}
+	after, _ := os.ReadDir(home)
+	if len(after) != len(before) {
+		t.Errorf("files went with a refused disconnect: before %d, after %d", len(before), len(after))
+	}
+	if got := readFile(t, path); got != content {
+		t.Errorf("config.toml was changed:\n%s", got)
+	}
+}
+
+// The root-key rule on its own: only the root table, only when it points at
+// nan as TOML reads it, and never an edit that changes anything else.
+func TestCodexNaNRootCleared(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+		changed        bool
+	}{
+		{"ours", "model = \"glm5.3-flash\"\nmodel_provider = \"nan\"\n\n[x]\na = 1\n", "[x]\na = 1\n", true},
+		{"single quotes and a comment", "model = 'm'\nmodel_provider = 'nan' # NaN\nb = 1\n", "b = 1\n", true},
+		{"quoted keys", "\"model\" = \"m\"\n\"model_provider\" = \"nan\"\nb = 1\n", "b = 1\n", true},
+		{"escaped value", "model_provider = \"n\\u0061n\"\nb = 1\n", "b = 1\n", true},
+		{"member's provider", "model = \"gpt-5\"\nmodel_provider = \"openai\"\n", "model = \"gpt-5\"\nmodel_provider = \"openai\"\n", false},
+		{"nan only inside a table", "model = \"gpt-5\"\n\n[profiles.n]\nmodel = \"m\"\nmodel_provider = \"nan\"\n", "model = \"gpt-5\"\n\n[profiles.n]\nmodel = \"m\"\nmodel_provider = \"nan\"\n", false},
+		{"provider not first", "approval_policy = \"never\"\nmodel_provider = \"nan\"\nmodel = \"m\"\n", "approval_policy = \"never\"\n", true},
+		// No root model: only the provider goes, the string is untouched.
+		{"multi-line string, no root model", "model_provider = \"nan\"\nnotes = \"\"\"\nmodel = \"x\"\n\"\"\"\n", "notes = \"\"\"\nmodel = \"x\"\n\"\"\"\n", true},
+		// A real root model and a model-like line inside the string: the
+		// line filter would take both, the re-parse sees the string change,
+		// and the whole edit is dropped.
+		{"multi-line string beside a root model", "model = \"m\"\nmodel_provider = \"nan\"\nnotes = \"\"\"\nmodel = \"x\"\n\"\"\"\n", "model = \"m\"\nmodel_provider = \"nan\"\nnotes = \"\"\"\nmodel = \"x\"\n\"\"\"\n", false},
+		{"not TOML", "model_provider = \"nan\"\nmodel = \n", "model_provider = \"nan\"\nmodel = \n", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, changed := codexNaNRootCleared(c.in)
+			if got != c.want || changed != c.changed {
+				t.Errorf("got %v:\n%q\nwant %v:\n%q", changed, got, c.changed, c.want)
+			}
+		})
+	}
+}
+
+func appendToFile(t *testing.T, path, s string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(s); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertCodexTOML(t *testing.T, content string) {
+	t.Helper()
+	if _, ok := codexTOML(content); !ok {
+		t.Errorf("not valid TOML:\n%s", content)
+	}
+}
+
 // qwen3.8-flash went out at 262,144 when it is served at 1,048,576. An
 // existing opencode entry with that exact figure is one this CLI wrote.
 func TestOpencodeConfigCorrectsAWindowWeGotWrong(t *testing.T) {
@@ -2692,5 +2874,102 @@ func TestOpencodeConfigCorrectsAWindowWeGotWrong(t *testing.T) {
 	}
 	if got := limit("gemma4"); got != 100_000 {
 		t.Errorf("gemma4 context %d, a window the member set was overwritten", got)
+	}
+}
+
+// A member broken by an older CLI: the root names the nan provider and nothing
+// defines it, so Codex says "Model provider nan not found".
+const codexOrphanRoot = "model = \"m\"\nmodel_provider = \"nan\"\n\n[x]\na = 1\n"
+
+func codexHomeWith(t *testing.T, content string) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("HERMES_HOME", filepath.Join(home, "hermes"))
+	recordHermes(t)
+	path := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestARootNaNProviderWithNoSectionCountsAsConfigured(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	if err := os.WriteFile(path, []byte(codexOrphanRoot), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !isNaNConfigured("Codex", path) {
+		t.Error("a root model_provider = \"nan\" is not shown as configured")
+	}
+	if err := os.WriteFile(path, []byte("model_provider = \"openai\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if isNaNConfigured("Codex", path) {
+		t.Error("the member's own provider reads as NaN")
+	}
+}
+
+func TestUntickingCodexRepairsAnOrphanedRootProvider(t *testing.T) {
+	path := codexHomeWith(t, codexOrphanRoot)
+	msg, _, failed := configureTools(testKey, map[string]bool{"Codex": false})
+	if len(failed) != 0 || !strings.Contains(msg, "1 removed") {
+		t.Fatalf("got %q, failed %v", msg, failed)
+	}
+	got := readFile(t, path)
+	assertCodexTOML(t, got)
+	if strings.Contains(got, "model_provider") {
+		t.Errorf("the root provider is still there:\n%s", got)
+	}
+}
+
+func TestKeepingCodexTickedRepairsAnOrphanedRootProvider(t *testing.T) {
+	path := codexHomeWith(t, codexOrphanRoot)
+	if _, _, failed := configureTools(testKey, nil); len(failed) != 0 {
+		t.Fatalf("failed: %v", failed)
+	}
+	got := readFile(t, path)
+	assertCodexTOML(t, got)
+	doc, _ := codexTOML(got)
+	providers, _ := doc["model_providers"].(map[string]any)
+	if _, ok := providers["nan"].(map[string]any); !ok || doc["model_provider"] != "nan" {
+		t.Errorf("the provider section is missing:\n%s", got)
+	}
+}
+
+func TestCodexRemovalTakesAQuotedNaNProviderSection(t *testing.T) {
+	for _, header := range []string{`[model_providers."nan"]`, `[ model_providers . 'nan' ] # ours`} {
+		path := tempConfig(t, "config.toml")
+		content := "[x]\na = 1\n\n" + header + "\nbase_url = \"https://api.nan.builders/v1\"\nexperimental_bearer_token = \"" + testKey + "\"\n"
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := removeCodexConfig(path); err != nil {
+			t.Fatal(err)
+		}
+		got := readFile(t, path)
+		assertCodexTOML(t, got)
+		if got != "[x]\na = 1\n" || strings.Contains(got, testKey) {
+			t.Errorf("%s: got:\n%s", header, got)
+		}
+	}
+}
+
+func TestCodexRemovalKeepsALeadingBlankLineWhenOnlyTheSectionGoes(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	content := "\n# mine\n[x]\na = 1\n\n[model_providers.nan]\nbase_url = \"https://api.nan.builders/v1\"\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCodexConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, path); got != "\n# mine\n[x]\na = 1\n" {
+		t.Errorf("got %q", got)
 	}
 }
