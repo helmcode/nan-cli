@@ -322,7 +322,7 @@ JSON object per line): <https://nan.builders/docs/runs>.
    must be private (`chmod 600`); one that other users can read or write is
    refused.
 3. **A saved token**, from `nan auth login --api-token`.
-4. **Your session**, from `nan auth login` (the emailed sign-in link).
+4. **Your session**, from `nan auth login` (browser approval).
 5. **A saved API key**, from the Setup tab (or an `sk-...` key saved with
    `nan auth login --api-token`).
 
@@ -356,28 +356,22 @@ nan auth login --api-token < token.txt  # or pipe it in
 Never put a token on the command line itself: it would end up in your shell
 history and in `ps`.
 
-**Two-factor authentication.** With it turned on for your account (Settings >
-Account > Two-factor authentication at <https://cloud.nan.builders>),
-`nan auth login` and the dashboard's sign-in ask for the code from your
-authenticator app after the link, without echo. One of your recovery codes
-works in its place. When nan cannot ask, pipe the code in. Never type the code
-into the command itself, where it would stay in your shell history: read it
-into a variable without echo, or redirect it from a file or a password
-manager's command line.
+**Signing in.** `nan auth login` (and the dashboard's sign-in) prints a short
+code and a page on nan.builders, and opens the page in your browser. Sign in
+there if asked, type the code and approve; the command finishes by itself.
+Two-factor authentication, if you have it on (Settings > Account > Two-factor
+authentication at <https://cloud.nan.builders>), is answered in the browser, so
+the CLI never asks for a code. The code expires after a few minutes; ctrl-c
+cancels. On a server or over SSH, set `NAN_NO_BROWSER=1` to skip opening the
+browser and open the printed address on any device.
 
 ```bash
-read -rs code   # type or paste it; it is not shown
-printf '%s\n' "$code" | nan auth login --link "<the link>" --totp -
-nan auth login --link "<the link>" --totp - < code.txt
+nan auth login
+NAN_NO_BROWSER=1 nan auth login
 ```
 
-`--totp` never takes the code as an argument: its only value is `-`, which
-reads one line of stdin. With `--totp -` the code gets one try, where the
-prompt lets you try again; if stdin is a terminal it is still asked for there,
-without echo.
-
-Versions before 0.1.35 cannot ask for the code: the platform refuses the link
-with `mfa enabled update nan cli`. Update, then ask for a new link.
+Versions before 0.1.36 signed in with an emailed link; update to sign in with
+the browser flow.
 
 ## Build from source
 

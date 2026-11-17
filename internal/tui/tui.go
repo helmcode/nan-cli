@@ -153,18 +153,24 @@ type configuredMsg struct {
 // Sent once, by Init, so the panel can pick up wherever the setup was left.
 type firstRunMsg struct{}
 
-type linkSentMsg struct{ err error }
-
-// signedInMsg ends the sign-in: err when it failed, and notice for something
-// the member should read once it worked (a recovery code spent).
-type signedInMsg struct {
-	err    error
-	notice string
+// deviceStartedMsg is the platform's answer to starting a device sign-in.
+// attempt says which sign-in it belongs to: a message from one that was
+// cancelled, or superseded by a new start, is dropped.
+type deviceStartedMsg struct {
+	attempt int
+	login   *auth.DeviceLogin
+	err     error
 }
 
-// mfaChallengeMsg is a link that worked for an account with two-factor
-// authentication: the session comes once the challenge is answered.
-type mfaChallengeMsg struct{ challenge *auth.MFARequiredError }
+// deviceApprovedMsg ends the wait: the session token when the member approved
+// in the browser, err when it was denied, expired or could not be checked.
+// The worker never writes the session; Update does, and only for the attempt
+// that is still waiting.
+type deviceApprovedMsg struct {
+	attempt int
+	token   string
+	err     error
+}
 
 // signedOutMsg is the platform's answer to ending the session (err nil when it
 // confirmed).
@@ -212,15 +218,15 @@ type model struct {
 	signingOut bool
 	wizard     wizardStep
 	loginStage loginStage
-	loginInput textinput.Model
-	loginEmail string
 	loginMsg   string
-	loginBusy  bool
-	// The two-factor challenge the link opened, while the code is asked
-	// for. In memory only, like everything else about it.
-	loginChallenge *auth.MFARequiredError
-	// Said on the steps after the sign-in, once: a recovery code was spent.
-	loginNotice string
+	// The device sign-in in flight: what to show, how to stop it, and which
+	// attempt it is. loginAttempt goes up on every start and every cancel, so
+	// a late message of an older attempt is recognised and dropped. In memory
+	// only; the device code in loginDevice is never rendered.
+	loginDevice  *auth.DeviceLogin
+	loginCtx     context.Context
+	loginCancel  context.CancelFunc
+	loginAttempt int
 }
 
 // Where a member is in the guided setup. The inner inputs still drive
@@ -231,8 +237,7 @@ type wizardStep int
 
 const (
 	wizardOff wizardStep = iota
-	wizardEmail
-	wizardLink
+	wizardSignIn
 	wizardKey
 	wizardTools
 	wizardDone
@@ -243,33 +248,28 @@ var wizardSteps = [...]struct {
 	n     int
 	title string
 }{
-	{1, "Let's get you logged in"},
-	{2, "Let's confirm it with the magic link"},
-	{3, "Let's set up your API key"},
-	{4, "Let's configure your tools"},
+	{1, "Let's get you signed in"},
+	{2, "Let's set up your API key"},
+	{3, "Let's configure your tools"},
 }
 
-// Which of the four a step belongs to. wizardLink is step 2, and everything
-// after the tools is step 4 still finishing.
+// Which of the three a step belongs to. Everything after the tools is step 3
+// still finishing.
 func (w wizardStep) index() int {
 	switch w {
-	case wizardEmail:
+	case wizardSignIn:
 		return 0
-	case wizardLink:
-		return 1
 	case wizardKey:
-		return 2
+		return 1
 	}
-	return 3
+	return 2
 }
 
 // The face for each, so the mascot is doing something that matches the step
 // rather than staring through it.
 func (w wizardStep) mood() mascotMood {
 	switch w {
-	case wizardEmail, wizardKey:
-		return moodNormal
-	case wizardLink:
+	case wizardSignIn:
 		return moodThinking
 	case wizardDone:
 		return moodHappy
@@ -277,16 +277,20 @@ func (w wizardStep) mood() mascotMood {
 	return moodNormal
 }
 
-// Where a member is in the sign-in flow. It is two questions - an address and
-// the link that arrives at it - and a third for an account with two-factor
-// authentication: the code from the authenticator app.
+// Where a member is in the sign-in flow. There is nothing to type: the panel
+// starts a device request, shows a code, and waits while the member approves
+// it in the browser.
 type loginStage int
 
 const (
 	loginOff loginStage = iota
-	loginAskEmail
-	loginAskLink
-	loginAskCode
+	// loginStarting: the platform has been asked for a code.
+	loginStarting
+	// loginWaiting: the code is on screen and the browser is being polled.
+	loginWaiting
+	// loginFailed: the start, the wait or the approval ended in an error; the
+	// message stays up and enter starts over.
+	loginFailed
 )
 
 func newModel(client *api.Client, sess *session.Session) model {
@@ -307,20 +311,13 @@ func newModel(client *api.Client, sess *session.Session) model {
 	ti.TextStyle = lipgloss.NewStyle().Foreground(cText)
 	ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(cDimGray)
 
-	li := textinput.New()
-	li.CharLimit = 2048 // a sign-in link is long
-	li.PromptStyle = lipgloss.NewStyle().Foreground(cCyan)
-	li.TextStyle = lipgloss.NewStyle().Foreground(cText)
-	li.PlaceholderStyle = lipgloss.NewStyle().Foreground(cDimGray)
-
 	return model{
-		client:     client,
-		sess:       sess,
-		loginInput: li,
-		cache:      make(map[tabID]any),
-		spin:       sp,
-		lay:        newLayout(80, 24),
-		keyInput:   ti,
+		client:   client,
+		sess:     sess,
+		cache:    make(map[tabID]any),
+		spin:     sp,
+		lay:      newLayout(80, 24),
+		keyInput: ti,
 	}
 }
 
@@ -421,67 +418,41 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case firstRunMsg:
 		return m, tea.Batch(m.resumeSetup(), m.checkSession())
 
-	case linkSentMsg:
-		m.loginBusy = false
-		if msg.err != nil {
-			m.loginMsg = "error: " + msg.err.Error()
-			m.loginStage = loginAskEmail
-			m.loginInput.EchoMode = textinput.EchoNormal
-			return m, m.loginInput.Focus()
-		}
-		m.wizard = wizardLink
-		m.loginStage = loginAskLink
-		m.loginMsg = "a link is on its way to " + m.loginEmail +
-			" — copy it out of the email without opening it, the link works once" +
-			" and expires " + auth.LinkValidity + " after it is sent"
-		m.loginInput.SetValue("")
-		m.loginInput.Placeholder = "https://nan.builders/...?token=..."
-		m.loginInput.Prompt = "Paste the link: "
-		// The link carries the token in its query, so from here the field is
-		// holding a credential and stops echoing one.
-		m.loginInput.EchoMode = textinput.EchoPassword
-		m.loginInput.EchoCharacter = '•'
-		return m, m.loginInput.Focus()
-
-	case mfaChallengeMsg:
-		m.loginBusy = false
-		// Left with esc while the link was being exchanged: nothing to ask.
-		if m.loginStage != loginAskLink {
+	case deviceStartedMsg:
+		// Only the answer to the attempt that is still starting.
+		if msg.attempt != m.loginAttempt || m.loginStage != loginStarting {
 			return m, nil
 		}
-		m.loginChallenge = msg.challenge
-		m.loginStage = loginAskCode
-		m.loginMsg = "this account uses two-factor authentication — enter the 6-digit code from your" +
-			" authenticator app, or one of your recovery codes"
-		m.loginInput.SetValue("")
-		m.loginInput.Placeholder = "123456"
-		m.loginInput.Prompt = "Authenticator code: "
-		// A recovery code works until it is used, so it is not echoed either.
-		m.loginInput.EchoMode = textinput.EchoPassword
-		m.loginInput.EchoCharacter = '•'
-		return m, m.loginInput.Focus()
-
-	case signedInMsg:
-		m.loginBusy = false
 		if msg.err != nil {
+			m.loginStage = loginFailed
 			m.loginMsg = "error: " + msg.err.Error()
-			if m.loginStage == loginAskCode {
-				if auth.Retryable(msg.err) {
-					m.loginInput.SetValue("")
-				} else {
-					// The challenge is over, and the link that opened it was
-					// spent opening it: back to the address, filled in, so
-					// enter asks for a new one.
-					m.loginChallenge = nil
-					m.wizard = wizardEmail
-					m.loginStage = loginAskEmail
-					m.loginInput.SetValue(m.loginEmail)
-					m.loginInput.Placeholder = "you@example.com"
-					m.loginInput.Prompt = "Email: "
-					m.loginInput.EchoMode = textinput.EchoNormal
-				}
+			return m, nil
+		}
+		m.loginStage = loginWaiting
+		m.loginDevice = msg.login
+		m.loginMsg = ""
+		cmds := []tea.Cmd{waitApproval(m.loginCtx, msg.attempt, msg.login)}
+		if !auth.BrowserDisabled() {
+			cmds = append(cmds, openBrowser(msg.login.VerificationURL))
+		}
+		return m, tea.Batch(cmds...)
+
+	case deviceApprovedMsg:
+		// Only the answer to the attempt that is still waiting. A cancelled
+		// attempt's approval, or one that lost a race with a new start, is
+		// never saved.
+		if msg.attempt != m.loginAttempt || m.loginStage != loginWaiting {
+			return m, nil
+		}
+		if msg.err == nil {
+			if err := saveSessionToken(msg.token); err != nil {
+				msg.err = err
 			}
-			return m, m.loginInput.Focus()
+		}
+		if msg.err != nil {
+			m.loginStage = loginFailed
+			m.loginMsg = "error: " + msg.err.Error()
+			return m, nil
 		}
 		// Reload the session so the token is the one just written, and drop
 		// the cached tabs: they are holding the `not logged in` they answered
@@ -496,7 +467,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.client = api.New(m.sess.Token)
 		wasGuided := m.wizard != wizardOff
 		m.cancelLogin()
-		m.loginNotice = msg.notice
 		if wasGuided {
 			m.wizard = wizardKey
 		}
@@ -537,43 +507,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
-		// The sign-in input takes every key while it is up, the same way the
-		// API key input does below it.
+		// The sign-in takes every key while it is up, the same way the API
+		// key input does below it.
 		if m.loginStage != loginOff {
 			switch msg.String() {
+			case "ctrl+c":
+				m.cancelLogin()
+				return m, tea.Quit
 			case "enter":
-				if m.loginBusy {
-					return m, nil
-				}
-				value := strings.TrimSpace(m.loginInput.Value())
-				if value == "" {
-					return m, nil
-				}
-				m.loginBusy = true
-				if m.loginStage == loginAskEmail {
-					if !strings.Contains(value, "@") {
-						m.loginBusy = false
-						m.loginMsg = "error: that is not an email address"
-						return m, nil
+				switch m.loginStage {
+				case loginWaiting:
+					// Opens the page again: the first try may have gone to
+					// the wrong browser, or been closed.
+					if m.loginDevice != nil && !auth.BrowserDisabled() {
+						return m, openBrowser(m.loginDevice.VerificationURL)
 					}
-					m.loginEmail = value
-					m.loginMsg = "sending a link to " + value + "…"
-					return m, sendLink(value)
+				case loginFailed:
+					return m, m.startLogin()
 				}
-				if m.loginStage == loginAskCode {
-					m.loginMsg = "checking the code…"
-					return m, answerChallenge(m.loginChallenge, value)
-				}
-				m.loginMsg = "signing in…"
-				return m, signIn(value)
+				return m, nil
 			case "esc":
 				m.cancelLogin()
 				return m, nil
-			default:
-				var cmd tea.Cmd
-				m.loginInput, cmd = m.loginInput.Update(msg)
-				return m, cmd
 			}
+			return m, nil
 		}
 
 		// When the API key input is active, route all keys to it
@@ -825,29 +782,27 @@ func (m *model) maybeLoad() tea.Cmd {
 // key. So it asks the same two questions here, where the keystrokes certainly
 // arrive, and the member never leaves the thing they just opened.
 func (m *model) startLogin() tea.Cmd {
-	m.wizard = wizardEmail
-	m.loginStage = loginAskEmail
+	if m.loginCancel != nil {
+		m.loginCancel()
+	}
+	m.loginAttempt++
+	m.loginCtx, m.loginCancel = context.WithCancel(context.Background())
+	m.loginDevice = nil
+	m.wizard = wizardSignIn
+	m.loginStage = loginStarting
 	m.loginMsg = ""
-	m.loginNotice = ""
-	m.loginChallenge = nil
 	// A machine set up with a platform token looks signed in to whoever set
-	// it up. The dashboard cannot use one, and asking for an email with no
+	// it up. The dashboard cannot use one, and showing a sign-in code with no
 	// word about it reads as the token having been lost.
 	if m.sess.PlatformToken != "" || os.Getenv(session.TokenEnvVar) != "" {
 		m.loginMsg = tokenOnlyNotice
 	}
-	m.loginInput.SetValue("")
-	m.loginInput.Placeholder = "you@example.com"
-	m.loginInput.Prompt = "Email: "
-	// An email address is not a secret and hiding it only makes it harder to
-	// see a typo in the thing the link is about to be sent to.
-	m.loginInput.EchoMode = textinput.EchoNormal
-	return m.loginInput.Focus()
+	return startDevice(m.loginCtx, m.loginAttempt)
 }
 
 // tokenOnlyNotice is what the sign-in says on a machine that has a platform
 // token and no session.
-const tokenOnlyNotice = "the platform token on this machine works for nan run and nan runs only; the dashboard needs the email sign-in"
+const tokenOnlyNotice = "the platform token on this machine works for nan run and nan runs only; the dashboard needs the browser sign-in"
 
 // What step 3 says while the cluster is looking at a key just saved.
 const keyChecking = "checking it against the cluster…"
@@ -888,64 +843,45 @@ func (m *model) resumeSetup() tea.Cmd {
 	return nil
 }
 
+// cancelLogin stops the sign-in in flight, whatever stage it is at. It bumps
+// the attempt, so anything the cancelled attempt still sends is dropped.
 func (m *model) cancelLogin() {
+	if m.loginCancel != nil {
+		m.loginCancel()
+	}
+	m.loginCancel, m.loginCtx, m.loginDevice = nil, nil, nil
+	m.loginAttempt++
 	m.wizard = wizardOff
 	m.loginStage = loginOff
-	m.loginChallenge = nil
-	m.loginBusy = false
-	m.loginInput.Blur()
-	m.loginInput.SetValue("")
 	m.loginMsg = ""
 }
 
-func sendLink(email string) tea.Cmd {
-	return func() tea.Msg { return linkSentMsg{auth.RequestSignInLink(email)} }
-}
-
-func signIn(pasted string) tea.Cmd {
+// startDevice asks the platform for a CLI device request.
+func startDevice(ctx context.Context, attempt int) tea.Cmd {
 	return func() tea.Msg {
-		token, err := auth.TokenFromLink(strings.TrimSpace(pasted))
-		if err != nil {
-			return signedInMsg{err: err}
-		}
-		sessionToken, err := auth.ExchangeToken(token)
-		var challenge *auth.MFARequiredError
-		if errors.As(err, &challenge) {
-			return mfaChallengeMsg{challenge}
-		}
-		if err != nil {
-			return signedInMsg{err: err}
-		}
-		return signedInMsg{err: saveSessionToken(sessionToken)}
+		login, err := auth.StartDeviceLogin(ctx)
+		return deviceStartedMsg{attempt: attempt, login: login, err: err}
 	}
 }
 
-// answerChallenge posts the code the member typed against the challenge the
-// link opened.
-func answerChallenge(challenge *auth.MFARequiredError, code string) tea.Cmd {
+// waitApproval polls until the member approves in the browser. It returns the
+// token and leaves writing it to Update.
+func waitApproval(ctx context.Context, attempt int, d *auth.DeviceLogin) tea.Cmd {
 	return func() tea.Msg {
-		signIn, err := challenge.Complete(code)
+		res, err := auth.WaitForApproval(ctx, d)
 		if err != nil {
-			return signedInMsg{err: err}
+			return deviceApprovedMsg{attempt: attempt, err: err}
 		}
-		if err := saveSessionToken(signIn.Session); err != nil {
-			return signedInMsg{err: err}
-		}
-		if !signIn.UsedRecoveryCode {
-			return signedInMsg{}
-		}
-		return signedInMsg{notice: recoveryCodesNotice(signIn.RecoveryCodesLeft)}
+		return deviceApprovedMsg{attempt: attempt, token: res.SessionToken}
 	}
 }
 
-// recoveryCodesNotice is what the panel says after a recovery code got the
-// member in: each works once, and running out is the way to be locked out.
-func recoveryCodesNotice(left int) string {
-	const where = "cloud.nan.builders, Settings > Account > Two-factor authentication"
-	if left == 0 {
-		return "that was your last recovery code — make new ones before you need one: " + where
+// openBrowser is best effort: the URL is on screen either way.
+func openBrowser(url string) tea.Cmd {
+	return func() tea.Msg {
+		_ = auth.OpenBrowser(url)
+		return nil
 	}
-	return fmt.Sprintf("signed in with a recovery code, %d left — you can make new ones at %s", left, where)
 }
 
 func saveSessionToken(token string) error {
@@ -1119,6 +1055,11 @@ func (m model) View() string {
 	if m.wizard != wizardOff {
 		hint := "enter to continue   esc to leave setup"
 		switch m.wizard {
+		case wizardSignIn:
+			hint = "esc to cancel"
+			if m.loginStage == loginFailed {
+				hint = "enter to try again   esc to cancel"
+			}
 		case wizardTools:
 			hint = "↑/↓ pick   space toggle   c configure   esc to leave setup"
 		case wizardDone:
@@ -3667,6 +3608,31 @@ func removeOpencodeConfig(cfgPath string) error {
 	return writeConfigFile(cfgPath, out)
 }
 
+// renderSignIn is the body of the sign-in step: the code to type in the
+// browser, where to type it, and what the keys do. The device code (the poll
+// credential) is never drawn, only the short user code.
+func (m model) renderSignIn(l layout) string {
+	dim := lipgloss.NewStyle().Foreground(cDimGray)
+	code := lipgloss.NewStyle().Bold(true).Foreground(cWhite)
+	var b strings.Builder
+	switch m.loginStage {
+	case loginStarting:
+		b.WriteString(l.indent + dim.Render("Asking nan.builders for a sign-in code…") + "\n")
+	case loginWaiting:
+		if d := m.loginDevice; d != nil {
+			b.WriteString(l.indent + "Your code: " + code.Render(d.UserCode) + "\n\n")
+			b.WriteString(m.wrapped(l, "Open "+d.VerificationURL+" and type it there. Sign in first if the page asks.") + "\n\n")
+		}
+		b.WriteString(l.indent + dim.Render("Waiting for approval…  [enter] open the page again · [esc] cancel") + "\n")
+	case loginFailed:
+		b.WriteString(l.indent + dim.Render("[enter] try again · [esc] cancel") + "\n")
+	}
+	if m.loginMsg != "" {
+		b.WriteString("\n" + m.wrapped(l, m.loginMsg) + "\n")
+	}
+	return b.String()
+}
+
 // The sign-in questions, drawn where the tab content would be.
 // The guided setup: the banner, the four steps with the one you are on marked,
 // and whatever that step needs underneath.
@@ -3699,15 +3665,9 @@ func (m model) renderWizard(l layout) string {
 	b.WriteString("\n")
 
 	switch m.wizard {
-	case wizardEmail, wizardLink:
-		b.WriteString(l.indent + m.loginInput.View() + "\n")
-		if m.loginMsg != "" {
-			b.WriteString("\n" + m.wrapped(l, m.loginMsg) + "\n")
-		}
+	case wizardSignIn:
+		b.WriteString(m.renderSignIn(l))
 	case wizardKey:
-		if m.loginNotice != "" {
-			b.WriteString(m.wrapped(l, m.loginNotice) + "\n\n")
-		}
 		if m.editingKey {
 			b.WriteString(l.indent + m.keyInput.View() + "\n")
 		}
@@ -3989,7 +3949,7 @@ func (m model) renderSetup(l layout) string {
 
 // ── about renderer ───────────────────────────────────────────────────────────
 
-const Version = "0.1.35"
+const Version = "0.1.36"
 
 func renderAbout(l layout) string {
 	var b strings.Builder

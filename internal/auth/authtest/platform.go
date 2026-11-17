@@ -1,326 +1,206 @@
-// Package authtest is a fake nan.builders sign-in for tests: the link
-// exchange and the two-factor challenge, answering the way the platform's API
-// contract says they answer (nan-cloud-api openspec/changes/mfa/api-contract.md,
-// "POST /api/auth/login/verify", "POST /api/auth/mfa/challenge" and "CLI
-// contract").
+// Package authtest is a fake nan.builders device sign-in for tests: the
+// /api/auth/device/start and /api/auth/device/poll routes, answering the way
+// the platform's device flow does for a CLI request (nan-cloud-api
+// internal/handlers/auth_device.go).
 //
 // It is imported by tests only, so it never reaches the binary.
 package authtest
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
 const (
-	// FrontendURL is the UI the platform redirects to, and the only origin
-	// the challenge route accepts.
-	FrontendURL = "https://cloud.nan.builders"
-
-	// PendingCookie is the challenge cookie's name.
-	PendingCookie = "__Host-nan_mfa_pending"
-
 	// Values a test can look for: in what was sent, and in what must never
-	// be written anywhere.
-	LinkToken = "link-token-for-a-test"
-	Pending   = "fake-pending-challenge-0123456789abcdefghij" // 43 base64url characters, like the real one
-	Session   = "fake-session-from-the-platform"
-	Code      = "246810"
+	// be printed or written anywhere.
+	DeviceCode = "fake-device-code-0123456789abcdefghijklmnop"
+	UserCode   = "WDJB-MJHT"
+	Session    = "fake-session-from-the-platform"
 )
+
+// Step is one scripted answer of the poll route.
+type Step struct {
+	Status int    // HTTP status; 0 means 200
+	Body   string // JSON body
+}
+
+var (
+	Pending  = Step{Body: `{"status":"pending"}`}
+	Denied   = Step{Body: `{"status":"denied"}`}
+	ExpiredS = Step{Body: `{"status":"expired"}`}
+	// SlowDown is the exact body the platform sends for a poll that came too
+	// early.
+	SlowDown = Step{Status: http.StatusTooManyRequests, Body: `{"error":"slow_down — poll at the advertised interval"}`}
+	// TooManyRequests is the per-IP limiter's answer.
+	TooManyRequests = Step{Status: http.StatusTooManyRequests, Body: `{"error":"too many requests"}`}
+)
+
+// Approved is the CLI poll answer: a session, no key.
+func Approved(token string) Step {
+	b, _ := json.Marshal(map[string]string{"status": "approved", "session_token": token, "region": "EU"})
+	return Step{Body: string(b)}
+}
 
 // Platform is the fake. Set the exported fields before the first request.
 type Platform struct {
 	*httptest.Server
 
-	// Factor: the account has a confirmed authenticator. Without it the link
-	// alone signs in, exactly as before two-factor sign-in existed.
-	Factor bool
-	// Onboarding: the member is invited or registered and has not finished
-	// signing up, so a link gets them the onboarding token, never a session.
-	Onboarding bool
-	// RecoveryCodes the account has not used yet, in canonical form
-	// (xxxx-xxxx-xxxx-xxxx).
-	RecoveryCodes []string
-	// Next, when set, answers the next challenge POST instead of checking
-	// it, and is then cleared: a refusal the test wants to see handled.
-	Next *Refusal
+	// OmitClientKind makes start answer without the client_kind echo, like a
+	// server from before the CLI variant.
+	OmitClientKind bool
+	// StartStatus, when set, is the (error) status start answers with.
+	StartStatus int
+	// VerificationURL overrides the verification_url of the start answer.
+	VerificationURL string
+	// Interval is the advertised poll interval in seconds (default 1).
+	Interval int
+	// ExpiresIn is the advertised lifetime in seconds (default 900).
+	ExpiresIn int
+	// OnStart, when set, runs inside the start handler before it answers.
+	OnStart func()
+	// OnPoll, when set, runs inside the poll handler before it answers.
+	OnPoll func(n int)
 
-	mu sync.Mutex
-	// What came in, for the test to look at.
-	verifies   []url.Values
-	challenges []Request
-
-	spent       bool
-	open        bool   // a challenge is waiting for its code
-	ended       string // why the last challenge ended: used, exhausted, expired
-	attempts    int    // left on the open challenge
-	codeUsed    bool   // Code's step has been spent (anti-replay)
-	lockedUntil time.Time
+	mu         sync.Mutex
+	script     []Step
+	starts     []string
+	polls      []string
+	pollTimes  []time.Time
+	startCount int
 }
 
-// Refusal is an answer the test forces on the challenge route.
-type Refusal struct {
-	Status int
-	Body   string
-	Header map[string]string
-}
-
-// Request is a challenge POST as it arrived.
-type Request struct {
-	Header http.Header
-	Body   string
-	// Cookie is the challenge cookie it carried, "" without one.
-	Cookie string
-}
-
-// New starts the fake. It stops when the test ends.
+// New starts the fake. It stops when the test ends. Until a test scripts the
+// poll route, every poll answers pending.
 func New(t testing.TB) *Platform {
 	t.Helper()
 	p := &Platform{}
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/auth/login/request", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusAccepted)
-	})
-	mux.HandleFunc("POST /api/auth/login/verify", p.verify)
-	mux.HandleFunc("POST /api/auth/mfa/challenge", p.challenge)
+	mux.HandleFunc("POST /api/auth/device/start", p.start)
+	mux.HandleFunc("POST /api/auth/device/poll", p.poll)
 	p.Server = httptest.NewServer(mux)
 	t.Cleanup(p.Close)
 	return p
 }
 
-// Verifies are the forms the verify route received.
-func (p *Platform) Verifies() []url.Values {
+// Script sets the poll answers, in order; the last one repeats.
+func (p *Platform) Script(steps ...Step) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return append([]url.Values(nil), p.verifies...)
+	p.script = steps
 }
 
-// Challenges are the challenge POSTs the platform received.
-func (p *Platform) Challenges() []Request {
+// Approve makes every following poll answer approved with token.
+func (p *Platform) Approve(token string) { p.Script(Approved(token)) }
+
+// Deny makes every following poll answer denied.
+func (p *Platform) Deny() { p.Script(Denied) }
+
+// Expire makes every following poll answer expired.
+func (p *Platform) Expire() { p.Script(ExpiredS) }
+
+// StartBodies are the bodies the start route received.
+func (p *Platform) StartBodies() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return append([]Request(nil), p.challenges...)
+	return append([]string(nil), p.starts...)
 }
 
-// NewLink lets one more link through, as a new email would.
-func (p *Platform) NewLink() {
+// Starts is how many start requests arrived.
+func (p *Platform) Starts() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.spent = false
+	return len(p.starts)
 }
 
-// Expire ends the open challenge the way ten minutes would.
-func (p *Platform) Expire() {
+// PollBodies are the bodies the poll route received.
+func (p *Platform) PollBodies() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.open {
-		p.open, p.ended = false, "expired"
+	return append([]string(nil), p.polls...)
+}
+
+// PollTimes are when each poll arrived.
+func (p *Platform) PollTimes() []time.Time {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]time.Time(nil), p.pollTimes...)
+}
+
+func (p *Platform) start(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<12))
+	p.mu.Lock()
+	p.starts = append(p.starts, string(body))
+	p.startCount++
+	status, omit, vurl := p.StartStatus, p.OmitClientKind, p.VerificationURL
+	interval, expires := p.Interval, p.ExpiresIn
+	hook := p.OnStart
+	p.mu.Unlock()
+
+	if hook != nil {
+		hook()
 	}
-}
 
-// Lock pauses the account's two-factor sign-in until the given time.
-func (p *Platform) Lock(until time.Time) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.lockedUntil = until
-}
-
-func (p *Platform) verify(w http.ResponseWriter, r *http.Request) {
-	_ = r.ParseForm()
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.verifies = append(p.verifies, r.PostForm)
-
-	// The link is consumed in every row of the contract's table.
-	if r.PostForm.Get("token") != LinkToken || p.spent {
-		http.Redirect(w, r, FrontendURL+"/access-denied?reason=invalid_link", http.StatusFound)
-		return
-	}
-	p.spent = true
-
-	cli := r.PostForm.Get("client") == "cli"
-	switch {
-	case p.Onboarding && !p.Factor:
-		// Unchanged by two-factor sign-in: the onboarding token, which is not
-		// a session, and the page that uses it.
-		http.SetCookie(w, &http.Cookie{Name: "nan_onboarding", Value: "fake-onboarding-token", Path: "/", Secure: true, HttpOnly: true})
-		http.Redirect(w, r, FrontendURL+"/onboarding", http.StatusFound)
-	case p.Onboarding && cli:
-		// "CLI contract" step 8: with a factor, onboarding is finished in the
-		// browser, whatever mfa says. No cookie of any kind.
-		http.Redirect(w, r, FrontendURL+"/access-denied?reason=finish_onboarding_in_the_browser", http.StatusFound)
-	case !p.Factor:
-		http.SetCookie(w, &http.Cookie{Name: "nan_session", Value: Session, Path: "/", Domain: ".nan.builders", Secure: true, HttpOnly: true})
-		http.Redirect(w, r, FrontendURL+"/", http.StatusFound)
-	case cli && r.PostForm.Get("mfa") != "1":
-		http.Redirect(w, r, FrontendURL+"/access-denied?reason=mfa_enabled_update_nan_cli", http.StatusFound)
-	default:
-		// A new challenge replaces any earlier one (D8).
-		p.open, p.ended, p.attempts = true, "", 5
-		http.SetCookie(w, &http.Cookie{Name: PendingCookie, Value: Pending, Path: "/", MaxAge: 600, Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode})
-		http.Redirect(w, r, FrontendURL+"/mfa?reason=mfa_required", http.StatusFound)
-	}
-}
-
-func (p *Platform) challenge(w http.ResponseWriter, r *http.Request) {
-	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<16))
-	cookie := ""
-	if c, err := r.Cookie(PendingCookie); err == nil {
-		cookie = c.Value
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.challenges = append(p.challenges, Request{Header: r.Header.Clone(), Body: string(body), Cookie: cookie})
 	w.Header().Set("Cache-Control", "no-store")
-
-	// The FRONTEND_URL origin only; without an Origin, refused when the
-	// browser says it came from another site, through otherwise (the CLI).
-	if o := r.Header.Get("Origin"); o != "" && o != FrontendURL {
-		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden_origin"})
+	if status != 0 {
+		writeJSON(w, status, map[string]any{"error": "refused"})
 		return
 	}
-	if s := r.Header.Get("Sec-Fetch-Site"); r.Header.Get("Origin") == "" && (s == "cross-site" || s == "same-site") {
-		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden_origin"})
-		return
+	if vurl == "" {
+		vurl = "https://cloud-api.nan.builders/api/auth/device"
 	}
-	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
-		writeJSON(w, http.StatusBadRequest, refusal("invalid_request"))
-		return
+	if interval == 0 {
+		interval = 1
 	}
-
-	if p.Next != nil {
-		next := p.Next
-		p.Next = nil
-		for k, v := range next.Header {
-			w.Header().Set(k, v)
-		}
-		w.WriteHeader(next.Status)
-		_, _ = io.WriteString(w, next.Body)
-		return
+	if expires == 0 {
+		expires = 900
 	}
-
-	if cookie != Pending {
-		expire(w)
-		writeJSON(w, http.StatusForbidden, refusal("mfa_challenge_missing"))
-		return
+	out := map[string]any{
+		"device_code":      DeviceCode,
+		"user_code":        UserCode,
+		"verification_url": vurl,
+		"expires_in":       expires,
+		"interval":         interval,
 	}
-	if !p.open {
-		expire(w)
-		code := "mfa_challenge_" + p.ended
-		if p.ended == "" {
-			code = "mfa_challenge_missing"
-		}
-		writeJSON(w, http.StatusForbidden, refusal(code))
-		return
+	if !omit {
+		out["client_kind"] = "cli"
 	}
-	if time.Now().Before(p.lockedUntil) {
-		p.locked(w)
-		return
-	}
-
-	var answer map[string]string
-	dec := json.NewDecoder(strings.NewReader(string(body)))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&answer); err != nil || len(answer) != 1 {
-		writeJSON(w, http.StatusBadRequest, refusal("invalid_request"))
-		return
-	}
-
-	if code, ok := answer["code"]; ok {
-		code = strings.ReplaceAll(code, " ", "")
-		if len(code) != 6 {
-			writeJSON(w, http.StatusBadRequest, refusal("invalid_request"))
-			return
-		}
-		switch {
-		case code == Code && !p.codeUsed:
-			p.codeUsed = true
-			p.pass(w, nil)
-		case code == Code:
-			p.fail(w, "mfa_code_already_used")
-		default:
-			p.fail(w, "mfa_code_invalid")
-		}
-		return
-	}
-	if rc, ok := answer["recovery_code"]; ok {
-		canonical, ok := canonicalRecovery(rc)
-		if !ok {
-			writeJSON(w, http.StatusBadRequest, refusal("invalid_request"))
-			return
-		}
-		for i, have := range p.RecoveryCodes {
-			if have == canonical {
-				p.RecoveryCodes = append(p.RecoveryCodes[:i:i], p.RecoveryCodes[i+1:]...)
-				left := len(p.RecoveryCodes)
-				p.pass(w, &left)
-				return
-			}
-		}
-		p.fail(w, "mfa_recovery_code_invalid")
-		return
-	}
-	writeJSON(w, http.StatusBadRequest, refusal("invalid_request"))
+	writeJSON(w, http.StatusOK, out)
 }
 
-func (p *Platform) pass(w http.ResponseWriter, recoveryLeft *int) {
-	p.open, p.ended = false, "used"
-	expire(w)
-	http.SetCookie(w, &http.Cookie{Name: "nan_session", Value: Session, Path: "/", Domain: ".nan.builders", Secure: true, HttpOnly: true})
-	writeJSON(w, http.StatusOK, map[string]any{"redirect": "/", "recovery_codes_remaining": recoveryLeft})
-}
-
-func (p *Platform) fail(w http.ResponseWriter, code string) {
-	p.attempts--
-	if p.attempts <= 0 {
-		p.open, p.ended = false, "exhausted"
-		expire(w)
-		writeJSON(w, http.StatusForbidden, refusal("mfa_challenge_exhausted"))
-		return
-	}
-	body := refusal(code)
-	body["attempts_remaining"] = p.attempts
-	writeJSON(w, http.StatusBadRequest, body)
-}
-
-func (p *Platform) locked(w http.ResponseWriter) {
-	secs := int(time.Until(p.lockedUntil).Seconds()) + 1
-	w.Header().Set("Retry-After", fmt.Sprint(secs))
-	body := refusal("mfa_locked")
-	body["locked_until"] = p.lockedUntil.UTC().Format(time.RFC3339)
-	body["retry_after"] = secs
-	writeJSON(w, http.StatusTooManyRequests, body)
-}
-
-// canonicalRecovery is the platform's reading of a recovery code: sixteen
-// base32 characters in any case, with or without hyphens and spaces.
-func canonicalRecovery(s string) (string, bool) {
-	s = strings.ToLower(strings.NewReplacer("-", "", " ", "").Replace(s))
-	if len(s) != 16 {
-		return "", false
-	}
-	for _, r := range s {
-		if !(r >= 'a' && r <= 'z' || r >= '2' && r <= '7') {
-			return "", false
+func (p *Platform) poll(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<12))
+	p.mu.Lock()
+	p.polls = append(p.polls, string(body))
+	p.pollTimes = append(p.pollTimes, time.Now())
+	n := len(p.polls)
+	step := Pending
+	if len(p.script) > 0 {
+		i := n - 1
+		if i >= len(p.script) {
+			i = len(p.script) - 1
 		}
+		step = p.script[i]
 	}
-	return s[0:4] + "-" + s[4:8] + "-" + s[8:12] + "-" + s[12:16], true
-}
+	hook := p.OnPoll
+	p.mu.Unlock()
 
-func refusal(code string) map[string]any {
-	return map[string]any{"error": code, "message": "A sentence the client must not branch on."}
-}
-
-func expire(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{Name: PendingCookie, Value: "", Path: "/", MaxAge: -1, Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+	if hook != nil {
+		hook(n)
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json")
+	status := step.Status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	w.WriteHeader(status)
+	_, _ = io.WriteString(w, step.Body)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
