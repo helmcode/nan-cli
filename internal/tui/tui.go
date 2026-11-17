@@ -3212,6 +3212,13 @@ func confirmHermesResolvesTheKey(home, apiKey string) error {
 	return nil
 }
 
+// Hermes' mask for a credential too short to show any of: "***" below twelve
+// characters.
+const (
+	hermesMaskShort = "***"
+	hermesMaskFloor = 12
+)
+
 // What Hermes prints for a credential in `config get`, as of 0.23: the first
 // four characters, "...", the last four - or "***" for anything shorter than
 // twelve - unless --raw or security.redact_secrets: false, which print it as
@@ -3221,11 +3228,6 @@ func confirmHermesResolvesTheKey(home, apiKey string) error {
 // Asked without --raw on purpose: the masked form answers "did it resolve",
 // the key never has to come back through a pipe, and a Hermes that predates
 // the flag answers the same question.
-const (
-	hermesMaskShort = "***"
-	hermesMaskFloor = 12
-)
-
 func hermesShowsTheKey(shown, apiKey string) bool {
 	switch {
 	case shown == apiKey:
