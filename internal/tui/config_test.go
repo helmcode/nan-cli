@@ -3270,10 +3270,16 @@ func TestCodexRemovalTakesTheMultiAgentSwitch(t *testing.T) {
 // An [agents] table the member wrote with more in it than ours keeps the rest.
 func TestCodexRemovalKeepsAMembersAgentsTable(t *testing.T) {
 	in := "model = \"m\"\nmodel_provider = \"nan\"\n\n[agents]\nenabled = false\nmax_threads = 4\n"
-	got, _ := codexNaNRootCleared(in)
+	got, changed := codexNaNRootCleared(in)
 	doc, ok := codexTOML(got)
-	if !ok || codexTOMLGet(doc, "agents.max_threads") != int64(4) {
+	if !changed || !ok || doc["model_provider"] != nil {
+		t.Errorf("the root provider was not taken (changed=%v):\n%s", changed, got)
+	}
+	if codexTOMLGet(doc, "agents.max_threads") != int64(4) {
 		t.Errorf("the member's [agents] table was taken:\n%s", got)
+	}
+	if codexTOMLGet(doc, "agents.enabled") != nil {
+		t.Errorf("agents.enabled, ours, stayed:\n%s", got)
 	}
 }
 
@@ -3294,8 +3300,11 @@ func codexTOMLGet(doc map[string]any, dotted string) any {
 // member chose does not.
 func TestCodexRemovalKeepsAMembersOwnCatalogAndWebSearch(t *testing.T) {
 	in := "model_provider = \"nan\"\nmodel_catalog_json = \"/mine.json\"\nweb_search = \"live\"\n"
-	got, _ := codexNaNRootCleared(in)
+	got, changed := codexNaNRootCleared(in)
 	doc, ok := codexTOML(got)
+	if !changed || !ok || doc["model_provider"] != nil {
+		t.Errorf("the root provider was not taken (changed=%v):\n%s", changed, got)
+	}
 	if !ok || doc["model_catalog_json"] != "/mine.json" || doc["web_search"] != "live" {
 		t.Errorf("the member's own values were taken:\n%s", got)
 	}

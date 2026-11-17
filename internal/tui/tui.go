@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -2730,19 +2731,17 @@ func removePiDefaults(settingsPath string) error {
 // every release this CLI has met; empty when there is no codex on PATH (the
 // desktop app ships its own) or it would not answer.
 var codexVersion = func() string {
-	out, err := exec.Command("codex", "--version").Output()
+	// A codex that hangs is an unknown version, not a stuck setup.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "codex", "--version").Output()
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
 }
 
-// The key that switches Codex's sub-agents off, which moved in 0.168:
-// [agents].enabled arrived and [features].multi_agent started printing a
-// deprecation warning on every run. Older releases do not know the new key -
-// they load the file and ignore it, and go on sending the sub-agent tools the
-// cluster cannot stream. A version that cannot be read is taken to be a
-// current one.
+// A config key, as the table it lives in and its name.
 type codexSwitch struct{ table, key string }
 
 var (
@@ -2751,6 +2750,12 @@ var (
 )
 
 // The switch this Codex reads, and the one it does not.
+//
+// The key that switches sub-agents off moved in 0.168: [agents].enabled
+// arrived and [features].multi_agent started printing a deprecation warning on
+// every run. Older releases do not know the new key - they load the file and
+// ignore it, and go on sending the sub-agent tools the cluster cannot stream.
+// A version that cannot be read is taken to be a current one.
 func codexSubAgentSwitches(version string) (use, other codexSwitch) {
 	if codexBefore168(version) {
 		return codexFeaturesMultiAgent, codexAgentsEnabled
@@ -2762,6 +2767,8 @@ func (s codexSwitch) off() string {
 	return "[" + s.table + "]\n" + s.key + " = false\n"
 }
 
+// Whether the version string ("codex-cli 0.167.2") names a release older than
+// 0.168, which still reads [features].multi_agent. Anything unreadable is not.
 func codexBefore168(version string) bool {
 	fields := strings.Fields(version)
 	if len(fields) == 0 {
@@ -2821,12 +2828,9 @@ func withCodexNaNSessionDefaults(content, codexHome string, use, other codexSwit
 		if _, set := tbl[use.key]; !set {
 			// Under the table's own header, when it has one; an inline table
 			// or one made of dotted keys is not edited.
-			for i, line := range lines {
-				if path, ok := codexTablePath(line); ok && path == use.table {
-					lines = append(lines[:i+1], append([]string{use.key + " = false"}, lines[i+1:]...)...)
-					tbl[use.key] = false
-					break
-				}
+			if i := codexTableHeader(lines, use.table); i >= 0 {
+				lines = append(lines[:i+1], append([]string{use.key + " = false"}, lines[i+1:]...)...)
+				tbl[use.key] = false
 			}
 		}
 	}
@@ -2953,9 +2957,12 @@ wire_api = "responses"
 // stops streaming items for qwen3.8-flash and mimo: all that comes back is
 // response.completed, which Codex does not read an answer from, so the turn
 // ends with no text and no tool call. Neither tool has anywhere to go on the
-// cluster anyway. Here and not in config.toml, because these files are ours
-// and leave with the disconnect - a web_search = "disabled" at the root
-// would stay behind and take search from the member's OpenAI sessions too.
+// cluster anyway. They go here because these files are ours and leave with
+// the disconnect. A config.toml whose root provider is nan - one this CLI
+// created - gets them too (withCodexNaNSessionDefaults) and they leave with
+// the disconnect as well; a root whose provider is the member's own never
+// does, since they would take search and the model list from their OpenAI
+// sessions.
 func writeCodexProfiles(codexHome string, subAgents codexSwitch) error {
 	// Starting from none, so a model the cluster retired does not leave its
 	// profile behind to answer 401 on `--profile`.
