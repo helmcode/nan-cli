@@ -2876,3 +2876,68 @@ func TestOpencodeConfigCorrectsAWindowWeGotWrong(t *testing.T) {
 		t.Errorf("gemma4 context %d, a window the member set was overwritten", got)
 	}
 }
+
+// A member broken by an older CLI: the root names the nan provider and nothing
+// defines it, so Codex says "Model provider nan not found".
+const codexOrphanRoot = "model = \"m\"\nmodel_provider = \"nan\"\n\n[x]\na = 1\n"
+
+func codexHomeWith(t *testing.T, content string) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("HERMES_HOME", filepath.Join(home, "hermes"))
+	recordHermes(t)
+	path := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestARootNaNProviderWithNoSectionCountsAsConfigured(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	if err := os.WriteFile(path, []byte(codexOrphanRoot), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !isNaNConfigured("Codex", path) {
+		t.Error("a root model_provider = \"nan\" is not shown as configured")
+	}
+	if err := os.WriteFile(path, []byte("model_provider = \"openai\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if isNaNConfigured("Codex", path) {
+		t.Error("the member's own provider reads as NaN")
+	}
+}
+
+func TestUntickingCodexRepairsAnOrphanedRootProvider(t *testing.T) {
+	path := codexHomeWith(t, codexOrphanRoot)
+	msg, _, failed := configureTools(testKey, map[string]bool{"Codex": false})
+	if len(failed) != 0 || !strings.Contains(msg, "1 removed") {
+		t.Fatalf("got %q, failed %v", msg, failed)
+	}
+	got := readFile(t, path)
+	assertCodexTOML(t, got)
+	if strings.Contains(got, "model_provider") {
+		t.Errorf("the root provider is still there:\n%s", got)
+	}
+}
+
+func TestKeepingCodexTickedRepairsAnOrphanedRootProvider(t *testing.T) {
+	path := codexHomeWith(t, codexOrphanRoot)
+	if _, _, failed := configureTools(testKey, nil); len(failed) != 0 {
+		t.Fatalf("failed: %v", failed)
+	}
+	got := readFile(t, path)
+	assertCodexTOML(t, got)
+	doc, _ := codexTOML(got)
+	providers, _ := doc["model_providers"].(map[string]any)
+	if _, ok := providers["nan"].(map[string]any); !ok || doc["model_provider"] != "nan" {
+		t.Errorf("the provider section is missing:\n%s", got)
+	}
+}

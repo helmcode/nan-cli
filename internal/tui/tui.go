@@ -2001,7 +2001,13 @@ func isNaNConfigured(toolName, cfgPath string) bool {
 		base, _ := nan["baseUrl"].(string)
 		return strings.Contains(base, "api.nan.builders")
 	case "Codex":
-		return strings.Contains(string(data), "api.nan.builders")
+		if strings.Contains(string(data), "api.nan.builders") {
+			return true
+		}
+		// A root provider naming nan with no section behind it is what an
+		// older CLI left: still ours to take out, or to give its section back.
+		doc, ok := codexTOML(string(data))
+		return ok && doc["model_provider"] == "nan"
 	}
 	return strings.Contains(string(data), "api.nan.builders")
 }
