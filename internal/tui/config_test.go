@@ -952,25 +952,6 @@ func TestEveryModelIsWrittenTheSameEverywhere(t *testing.T) {
 	}
 }
 
-func TestHumanKeyKeepsAcronymsWhole(t *testing.T) {
-	// The Profile tab renders whatever keys /auth/me returns, and `userUUID`
-	// came out as "User U U I D" on its first line.
-	for _, c := range []struct{ in, want string }{
-		{"userUUID", "User UUID"},
-		{"inferenceProfile", "Inference Profile"},
-		{"isAdmin", "Is Admin"},
-		{"handle", "Handle"},
-		{"expiresAt", "Expires At"},
-		{"APIKey", "API Key"},
-		{"image_gen", "Image gen"},
-		{"", ""},
-	} {
-		if got := humanKey(c.in); got != c.want {
-			t.Errorf("humanKey(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
 // The Setup tab's `c` key runs configureTools, which finds the tools on the
 // machine and writes into their real config paths. Nothing covered it, so the
 // only way to try it was to press the key and look at your own home directory.

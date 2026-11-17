@@ -1232,22 +1232,127 @@ func renderTabBar(active int, l layout) string {
 // find something in if you already suspect it is there.
 func renderProfile(data map[string]any, l layout) string {
 	var b strings.Builder
-	kStyle := lipgloss.NewStyle().Foreground(cGray).Width(l.keyW)
+	fields := profileFields(data)
+	// Never narrower than the longest label: lipgloss wraps a label that does
+	// not fit, and "Access until:" is wider than keyW on a narrow terminal.
+	keyW := l.keyW
+	for _, f := range fields {
+		if w := lipgloss.Width(f.label) + 2; w > keyW {
+			keyW = w
+		}
+	}
+	kStyle := lipgloss.NewStyle().Foreground(cGray).Width(keyW)
 	vStyle := lipgloss.NewStyle().Foreground(cText)
 
-	for _, k := range sortedKeys(data) {
-		v := data[k]
-		if _, ok := v.(map[string]any); ok {
-			continue
-		}
-		val := censor(k, fmt.Sprintf("%v", v))
-		b.WriteString(l.indent + kStyle.Render(humanKey(k)+":") + vStyle.Render(val) + "\n")
+	for _, f := range fields {
+		b.WriteString(l.indent + kStyle.Render(f.label+":") + vStyle.Render(f.value) + "\n")
 	}
 
 	b.WriteString("\n" + l.indent +
 		lipgloss.NewStyle().Foreground(cCyan).Bold(true).Render("o") +
 		lipgloss.NewStyle().Foreground(cGray).Render("  sign out of this account, twice to confirm") + "\n")
 	return b.String()
+}
+
+type profileField struct{ label, value string }
+
+// profileFields picks what the Profile tab shows out of /api/auth/me. It is an
+// allowlist: the body also carries ids, the namespace, feature flags and which
+// environment the platform runs in, none of it the member's business, and a
+// key the platform adds later stays hidden until it is listed here. A field
+// that is missing, null or empty leaves no row.
+func profileFields(me map[string]any) []profileField {
+	profile, _ := me["profile"].(map[string]any)
+	jobRole := profileString(profile, "jobRole")
+	if jobRole == "other" {
+		jobRole = profileString(profile, "jobRoleOther")
+	}
+	state := profileString(me, "state")
+	accessUntil := ""
+	if state == "grace" {
+		accessUntil = profileDate(profileString(me, "graceUntil"))
+	}
+
+	var out []profileField
+	for _, f := range []profileField{
+		{"Name", profileString(profile, "fullName")},
+		{"Handle", profileString(me, "handle")},
+		// Masked like before: the tab ends up in screenshots.
+		{"Email", maskOrEmpty("email", profileString(me, "email"))},
+		{"Plan", profilePlan(profileString(me, "tier"))},
+		{"Membership", profileState(state)},
+		{"Access until", accessUntil},
+		{"Job role", jobRole},
+		{"X", profileString(profile, "xUrl")},
+		{"LinkedIn", profileString(profile, "linkedinUrl")},
+	} {
+		if f.value != "" {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// profileString reads a string field; anything else (absent, null, a number,
+// a nested object) reads as empty, never as "<nil>" or "map[...]".
+func profileString(m map[string]any, key string) string {
+	s, _ := m[key].(string)
+	return strings.TrimSpace(s)
+}
+
+func maskOrEmpty(key, value string) string {
+	if value == "" {
+		return ""
+	}
+	return censor(key, value)
+}
+
+// profilePlan names the tier. "none" is no plan, so no row.
+func profilePlan(tier string) string {
+	switch tier {
+	case "", "none":
+		return ""
+	case "inference":
+		return "Inference"
+	case "community":
+		return "Community"
+	case "gentle":
+		return "Gentle"
+	}
+	return wordsOf(tier)
+}
+
+// profileState says where the membership stands in a member's words.
+func profileState(state string) string {
+	switch state {
+	case "":
+		return ""
+	case "subscribed":
+		return "Active"
+	case "grace", "churned":
+		return "Ended"
+	}
+	return wordsOf(state)
+}
+
+// wordsOf turns an unmapped snake_case value into words ("host_unreachable"
+// reads "Host unreachable"), so a new value does not show raw.
+func wordsOf(s string) string {
+	if s == "" {
+		return ""
+	}
+	r := []rune(strings.ReplaceAll(s, "_", " "))
+	return strings.ToUpper(string(r[:1])) + string(r[1:])
+}
+
+// profileDate formats an RFC 3339 timestamp as a date. One that does not parse
+// is dropped rather than shown raw.
+func profileDate(s string) string {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return ""
+	}
+	return t.UTC().Format("2 Jan 2006")
 }
 
 // ── usage renderer ────────────────────────────────────────────────────────────
@@ -1865,40 +1970,6 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return string(runes[:max-1]) + "…"
-}
-
-func sortedKeys(m map[string]any) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func humanKey(s string) string {
-	runes := []rune(s)
-	var out []rune
-	for i, r := range runes {
-		// A space before every capital turns userUUID into "User U U I D",
-		// which is the first line of the first tab. A run of capitals is one
-		// word, and it ends where a lowercase letter starts it a new one.
-		if i > 0 && isUpper(r) {
-			startsWord := !isUpper(runes[i-1])
-			endsRun := i+1 < len(runes) && !isUpper(runes[i+1])
-			if startsWord || endsRun {
-				out = append(out, ' ')
-			}
-		}
-		out = append(out, r)
-	}
-	s = string(out)
-	s = strings.ReplaceAll(s, "_", " ")
-	s = strings.ReplaceAll(s, "-", " ")
-	if len(s) == 0 {
-		return s
-	}
-	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // ── setup renderer ───────────────────────────────────────────────────────────
@@ -3863,8 +3934,6 @@ func Run() error {
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
 }
-
-func isUpper(r rune) bool { return r >= 'A' && r <= 'Z' }
 
 // indentBlock indents EVERY line. `indent + Render(...)` only moves the first
 // one, which on a bordered box leaves the top edge two columns right of the
