@@ -1776,10 +1776,16 @@ func renderCosts(usage map[string]any, l layout) string {
 	b.WriteString("\n")
 
 	// Footer — measure plain text width first to avoid border miscalculation
-	const notePlain = "NaN — Your usage is included in your membership. No per-token charges."
+	//
+	// Usage on NaN is not free at the margin: membership includes credits and
+	// every chat model draws them at its own price per 1M tokens. No price is
+	// quoted here, because one written into a binary goes stale; the page it
+	// points to is the one that is kept current.
+	const noteBody = " — Usage is paid from the credits in your membership, at each model's price per 1M tokens: cloud.nan.builders/tokens"
+	const notePlain = "NaN" + noteBody
 	nanStyle := lipgloss.NewStyle().Foreground(cCyan).Bold(true)
 	note := nanStyle.Render("NaN") +
-		lipgloss.NewStyle().Foreground(cGray).Render(" — Your usage is included in your membership. No per-token charges.")
+		lipgloss.NewStyle().Foreground(cGray).Render(noteBody)
 	// Not len(): the em dash is one column and three bytes, so counting bytes
 	// drew the box two columns wider than its own text. And not the text width
 	// alone either: at 70 columns of content plus a border and the indent, the
