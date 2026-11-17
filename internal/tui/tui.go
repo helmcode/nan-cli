@@ -3062,6 +3062,52 @@ func isCodexNaNProviderHeader(line string) bool {
 	return strings.Trim(strings.TrimPrefix(name, "model_providers."), `"'`) == "nan"
 }
 
+// The root keys that send Codex to NaN, taken back on a disconnect.
+//
+// model_provider = "nan" at the root is only ever there because this CLI
+// wrote the starter config into an empty file: on a file that already
+// existed it adds the provider section and leaves the member's model and
+// provider as they were. So there is no earlier choice of theirs to put back,
+// and Codex goes back to its own default. Left behind, the key names a
+// provider that no longer exists and Codex will not start at all ("Model
+// provider `nan` not found").
+//
+// The model beside it goes too: a model under the nan provider is a NaN
+// model, whatever its id. Nothing is touched when the root provider is
+// anything else, and nothing under a table header is touched at all - a
+// [profiles.*] of the member's naming nan is theirs to keep.
+func codexNaNRootCleared(content string) (string, bool) {
+	doc, ok := codexTOML(content)
+	if !ok || doc["model_provider"] != "nan" {
+		return content, false
+	}
+	want, _ := codexTOML(content)
+	drop := map[string]bool{"model_provider": true}
+	delete(want, "model_provider")
+	if _, isString := doc["model"].(string); isString {
+		drop["model"] = true
+		delete(want, "model")
+	}
+	lines := strings.Split(content, "\n")
+	rootEnd := codexRootEnd(lines)
+	out := make([]string, 0, len(lines))
+	for i, line := range lines {
+		if i < rootEnd {
+			if k, _, ok := codexLine(line); ok && drop[k] {
+				continue
+			}
+		}
+		out = append(out, line)
+	}
+	// What is left of the root may be nothing but the blank line that used
+	// to separate it from the first table.
+	edited := strings.TrimLeft(strings.Join(out, "\n"), "\n")
+	if !codexEditMeans(edited, want) {
+		return content, false
+	}
+	return edited, true
+}
+
 // ── Hermes ───────────────────────────────────────────────────────────────────
 //
 // Every other tool here is configured by writing its file. Hermes is not,
@@ -3294,7 +3340,22 @@ func removeHermesEnvKey(envPath string) error {
 	return writeConfigFile(envPath, []byte(strings.Join(kept, "\n")+"\n"))
 }
 
+var errCodexRootNotCleared = errors.New(`config.toml sets model_provider = "nan" in a form ` +
+	`the NaN CLI cannot take out safely; remove the root model and model_provider lines by hand`)
+
 func removeCodexConfig(cfgPath string) error {
+	// A root that still points at nan after the cleanup is one written in a
+	// form the line edit cannot take out safely - a multi-line model, say.
+	// Taking the provider section anyway would leave exactly the Codex that
+	// does not start, so nothing is touched - config, profiles, catalogue -
+	// and the member is told what to remove by hand.
+	data, readErr := os.ReadFile(cfgPath)
+	content, rootCleared := codexNaNRootCleared(string(data))
+	if readErr == nil {
+		if doc, ok := codexTOML(content); ok && doc["model_provider"] == "nan" {
+			return errCodexRootNotCleared
+		}
+	}
 	// Before either way out below, because the profile files are ours whatever
 	// state config.toml is in. A member who edited our provider section out by
 	// hand, or deleted the file, used to keep all seven of them - each one
@@ -3307,17 +3368,16 @@ func removeCodexConfig(cfgPath string) error {
 	// returning it here would leave experimental_bearer_token sitting in
 	// config.toml after the member asked us to take it out.
 	profileErr := removeCodexProfiles(filepath.Dir(cfgPath))
-
-	data, err := os.ReadFile(cfgPath)
-	if err != nil {
+	if readErr != nil {
 		return profileErr
 	}
-	// Nothing of ours in it, so nothing to rewrite: this is called on every
-	// sign-out, against a config.toml that may never have been ours at all.
-	if !strings.Contains(string(data), "[model_providers.nan]") {
+	// Nothing of ours in it - no root provider, no provider section - so
+	// nothing to rewrite: this is called on every sign-out, against a
+	// config.toml that may never have been ours at all.
+	if !rootCleared && !strings.Contains(content, "[model_providers.nan]") {
 		return profileErr
 	}
-	lines := strings.Split(string(data), "\n")
+	lines := strings.Split(content, "\n")
 	var out []string
 	inNanSection := false
 	for _, line := range lines {
@@ -3346,6 +3406,9 @@ func removeCodexConfig(cfgPath string) error {
 	if cleared, changed := codexContextWindowsCleared([]byte(result), codexModel.Context); changed {
 		result = string(cleared)
 	}
+	// Whatever went from the top - the root keys, the window - may have left
+	// the blank line that separated them from the first table.
+	result = strings.TrimLeft(result, "\n")
 	if strings.TrimSpace(result) == "" {
 		if err := os.Remove(cfgPath); err != nil {
 			return err
