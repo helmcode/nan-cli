@@ -3193,10 +3193,10 @@ func writeHermesConfig(home, apiKey string) error {
 // key, and what a member would see is a 401 from the cluster naming nothing in
 // particular.
 //
-// The answer is the key itself, so it is compared and dropped on the spot. It
-// does not go into a message, a log or an error.
+// The answer is the key, or Hermes' mask of it, so it is compared and dropped
+// on the spot. It does not go into a message, a log or an error.
 func confirmHermesResolvesTheKey(home, apiKey string) error {
-	resolved, err := readHermesConfig(home, "get", "model.api_key")
+	shown, err := readHermesConfig(home, "get", "model.api_key")
 	if err != nil {
 		// No answer is not a wrong answer. An older Hermes without this
 		// subcommand, or one that could not be run twice, says nothing either
@@ -3204,11 +3204,36 @@ func confirmHermesResolvesTheKey(home, apiKey string) error {
 		// step over a question we could not ask would be its own bug.
 		return nil
 	}
-	if resolved != apiKey {
+	if !hermesShowsTheKey(shown, apiKey) {
 		return fmt.Errorf("Hermes did not resolve %s from its .env, so it has no usable key - "+
 			"nan.builders/docs/hermes has the manual steps", hermesKeyRef)
 	}
 	return nil
+}
+
+// What Hermes prints for a credential in `config get`, as of 0.23: the first
+// four characters, "...", the last four - or "***" for anything shorter than
+// twelve - unless --raw or security.redact_secrets: false, which print it as
+// it is. A placeholder it could not expand is never masked, so the literal
+// ${NAN_API_KEY} still reads as the failure it is.
+//
+// Asked without --raw on purpose: the masked form answers "did it resolve",
+// the key never has to come back through a pipe, and a Hermes that predates
+// the flag answers the same question.
+const (
+	hermesMaskShort = "***"
+	hermesMaskFloor = 12
+)
+
+func hermesShowsTheKey(shown, apiKey string) bool {
+	switch {
+	case shown == apiKey:
+		return true
+	case len(apiKey) < hermesMaskFloor:
+		return shown == hermesMaskShort
+	default:
+		return shown == apiKey[:4]+"..."+apiKey[len(apiKey)-4:]
+	}
 }
 
 // One variable set in the .env, and the rest of the file - a long commented

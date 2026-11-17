@@ -1330,6 +1330,67 @@ func TestHermesThatCannotAnswerIsNotTreatedAsBroken(t *testing.T) {
 	}
 }
 
+// Hermes 0.23 masks credentials in `config get` unless --raw: a resolved key
+// comes back as sk-a...1234, and only an unexpanded placeholder comes back as
+// written. Comparing that with the raw key failed every configure. The check
+// is now about whether the key resolved, which the masked form still answers.
+func TestHermesResolutionCheckReadsTheMaskedKey(t *testing.T) {
+	const key = "sk-abcdEFGHijklMNOP1234" // 22 chars, above Hermes' 12-char floor
+	cases := []struct {
+		name   string
+		shown  string
+		getErr error
+		ok     bool
+	}{
+		{"raw key", key, nil, true},
+		{"masked key that matches", "sk-a...1234", nil, true},
+		{"unexpanded placeholder", hermesKeyRef, nil, false},
+		{"masked key of another key", "sk-z...9999", nil, false},
+		{"masked head of another key", "sk-z...1234", nil, false},
+		{"shorter head and tail than Hermes prints", "s...4", nil, false},
+		{"two dots", "sk-a..1234", nil, false},
+		{"short-key placeholder for a long key", "***", nil, false},
+		{"empty answer", "", nil, false},
+		{"command error", "", errors.New("unknown command: get"), true},
+		{"command error that quotes the key", "", errors.New("bad value " + key), true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			recordHermes(t)
+			original := readHermesConfig
+			readHermesConfig = func(home string, args ...string) (string, error) {
+				return c.shown, c.getErr
+			}
+			t.Cleanup(func() { readHermesConfig = original })
+
+			err := writeHermesConfig(t.TempDir(), key)
+			if c.ok && err != nil {
+				t.Errorf("reported as failed: %v", err)
+			}
+			if !c.ok && err == nil {
+				t.Error("reported as configured")
+			}
+			if err != nil && strings.Contains(err.Error(), key) {
+				t.Errorf("the error carries the key: %v", err)
+			}
+		})
+	}
+}
+
+// The same rule for a key under Hermes' 12-character floor, which it masks
+// as *** with nothing visible.
+func TestHermesResolutionCheckReadsTheMaskOfAShortKey(t *testing.T) {
+	if !hermesShowsTheKey("***", "sk-short") {
+		t.Error("*** for a key under 12 characters was refused")
+	}
+	if !hermesShowsTheKey("sk-short", "sk-short") {
+		t.Error("the raw short key was refused")
+	}
+	if hermesShowsTheKey("sk-s...hort", "sk-short") {
+		t.Error("a head/tail mask was accepted for a key Hermes masks as ***")
+	}
+}
+
 func TestHermesIsConfiguredThroughItsOwnConfigCommand(t *testing.T) {
 	calls := recordHermes(t)
 	if err := writeHermesConfig(t.TempDir(), testKey); err != nil {
