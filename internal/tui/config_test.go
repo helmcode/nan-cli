@@ -629,12 +629,12 @@ func TestCodexProfilesLeaveOutTheToolsTheClusterCannotStream(t *testing.T) {
 		if !strings.Contains(body, `web_search = "disabled"`) {
 			t.Errorf("%s: the profile still sends web_search:\n%s", m.ID, body)
 		}
-		if !strings.Contains(body, "[features]\nmulti_agent = false") {
+		if !strings.Contains(body, "[agents]\nenabled = false") || strings.Contains(body, "multi_agent") {
 			t.Errorf("%s: the profile still sends the sub-agent namespace:\n%s", m.ID, body)
 		}
-		// Before the first header, or TOML puts it inside [features].
-		if strings.Index(body, "web_search") > strings.Index(body, "[features]") {
-			t.Errorf("%s: web_search landed inside [features], where Codex does not read it:\n%s", m.ID, body)
+		// Before the first header, or TOML puts it inside [agents].
+		if strings.Index(body, "web_search") > strings.Index(body, "[agents]") {
+			t.Errorf("%s: web_search landed inside [agents], where Codex does not read it:\n%s", m.ID, body)
 		}
 	}
 }
@@ -2971,5 +2971,66 @@ func TestCodexRemovalKeepsALeadingBlankLineWhenOnlyTheSectionGoes(t *testing.T) 
 	}
 	if got := readFile(t, path); got != "\n# mine\n[x]\na = 1\n" {
 		t.Errorf("got %q", got)
+	}
+}
+func withCodexVersion(t *testing.T, version string) {
+	t.Helper()
+	original := codexVersion
+	codexVersion = func() string { return version }
+	t.Cleanup(func() { codexVersion = original })
+}
+
+func TestCodexSubAgentSwitchFollowsTheVersion(t *testing.T) {
+	cases := map[string]string{
+		"codex-cli 0.169.0": "[agents]\nenabled = false\n",
+		"codex-cli 0.168.0": "[agents]\nenabled = false\n",
+		"codex-cli 1.0.0":   "[agents]\nenabled = false\n",
+		"codex-cli 0.167.2": "[features]\nmulti_agent = false\n",
+		"codex-cli 0.155.0": "[features]\nmulti_agent = false\n",
+		"":                  "[agents]\nenabled = false\n",
+		"garbage":           "[agents]\nenabled = false\n",
+	}
+	for version, want := range cases {
+		if use, _ := codexSubAgentSwitches(version); use.off() != want {
+			t.Errorf("%q: got %q, want %q", version, use.off(), want)
+		}
+	}
+}
+
+func TestCodexProfileGolden(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Dir(path)
+	m := catalog.ChatModels()[0]
+	got := readFile(t, filepath.Join(home, codexProfileName(m.ID)+".config.toml"))
+	want := fmt.Sprintf(`# Written by the NaN CLI. Disconnecting Codex removes it.
+model = %q
+model_provider = "nan"
+model_context_window = %d
+model_catalog_json = %q
+web_search = "disabled"
+
+[agents]
+enabled = false
+`, m.ID, m.Context, codexCatalogPath(home))
+	if got != want {
+		t.Errorf("profile:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+	assertCodexTOML(t, got)
+}
+
+// A Codex older than 0.168 keeps the key it understands in its profiles.
+func TestCodexProfilesOnAnOlderCodexKeepMultiAgent(t *testing.T) {
+	withCodexVersion(t, "codex-cli 0.159.0")
+	path := tempConfig(t, "config.toml")
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	m := catalog.ChatModels()[0]
+	body := readFile(t, filepath.Join(filepath.Dir(path), codexProfileName(m.ID)+".config.toml"))
+	if !strings.Contains(body, "[features]\nmulti_agent = false") || strings.Contains(body, "[agents]") {
+		t.Errorf("profile for Codex 0.159:\n%s", body)
 	}
 }

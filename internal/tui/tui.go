@@ -2726,8 +2726,62 @@ func removePiDefaults(settingsPath string) error {
 	return writeConfigFile(settingsPath, out)
 }
 
+// Swapped in tests, so nothing here spawns a process. "codex-cli 0.169.0" on
+// every release this CLI has met; empty when there is no codex on PATH (the
+// desktop app ships its own) or it would not answer.
+var codexVersion = func() string {
+	out, err := exec.Command("codex", "--version").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// The key that switches Codex's sub-agents off, which moved in 0.168:
+// [agents].enabled arrived and [features].multi_agent started printing a
+// deprecation warning on every run. Older releases do not know the new key -
+// they load the file and ignore it, and go on sending the sub-agent tools the
+// cluster cannot stream. A version that cannot be read is taken to be a
+// current one.
+type codexSwitch struct{ table, key string }
+
+var (
+	codexAgentsEnabled      = codexSwitch{"agents", "enabled"}
+	codexFeaturesMultiAgent = codexSwitch{"features", "multi_agent"}
+)
+
+// The switch this Codex reads, and the one it does not.
+func codexSubAgentSwitches(version string) (use, other codexSwitch) {
+	if codexBefore168(version) {
+		return codexFeaturesMultiAgent, codexAgentsEnabled
+	}
+	return codexAgentsEnabled, codexFeaturesMultiAgent
+}
+
+func (s codexSwitch) off() string {
+	return "[" + s.table + "]\n" + s.key + " = false\n"
+}
+
+func codexBefore168(version string) bool {
+	fields := strings.Fields(version)
+	if len(fields) == 0 {
+		return false
+	}
+	parts := strings.SplitN(fields[len(fields)-1], ".", 3)
+	if len(parts) < 2 {
+		return false
+	}
+	major, errMajor := strconv.Atoi(parts[0])
+	minor, errMinor := strconv.Atoi(parts[1])
+	if errMajor != nil || errMinor != nil {
+		return false
+	}
+	return major == 0 && minor < 168
+}
+
 func writeCodexConfig(cfgPath, apiKey string) error {
 	data, _ := os.ReadFile(cfgPath)
+	use, _ := codexSubAgentSwitches(codexVersion())
 	codexModel, _ := catalog.Get(catalog.Coding)
 
 	if strings.Contains(string(data), "api.nan.builders") {
@@ -2755,7 +2809,7 @@ func writeCodexConfig(cfgPath, apiKey string) error {
 				return err
 			}
 		}
-		return writeCodexProfiles(filepath.Dir(cfgPath))
+		return writeCodexProfiles(filepath.Dir(cfgPath), use)
 	}
 
 	// If no existing config, write a complete starter config.
@@ -2773,7 +2827,7 @@ wire_api = "responses"
 		if err := writeConfigFile(cfgPath, []byte(content)); err != nil {
 			return err
 		}
-		return writeCodexProfiles(filepath.Dir(cfgPath))
+		return writeCodexProfiles(filepath.Dir(cfgPath), use)
 	}
 
 	// Existing config: only append the provider section; preserve user's model/provider choices.
@@ -2788,7 +2842,7 @@ wire_api = "responses"
 	if err := writeConfigFile(cfgPath, []byte(withCodexContextWindow(content, codexModel.Context))); err != nil {
 		return err
 	}
-	return writeCodexProfiles(filepath.Dir(cfgPath))
+	return writeCodexProfiles(filepath.Dir(cfgPath), use)
 }
 
 // One file per chat model, so every model on the cluster is a flag away with
@@ -2805,7 +2859,10 @@ wire_api = "responses"
 // No API key goes in them: the provider section in config.toml is what
 // carries it, and a key in eight files is a key to rotate in eight files.
 //
-// They also switch off the two tools Codex adds on its own. Codex 0.159
+// They also switch off the two tools Codex adds on its own. Sub-agents go
+// with [agents].enabled = false on Codex 0.168+, and with
+// [features].multi_agent = false before it, which 0.168 deprecated with a
+// warning on every run. Codex 0.159
 // sends the sub-agent tools as a "namespace" tool and web search as a
 // "web_search" one, and with either in the request the cluster's /responses
 // stops streaming items for qwen3.8-flash and mimo: all that comes back is
@@ -2814,7 +2871,7 @@ wire_api = "responses"
 // cluster anyway. Here and not in config.toml, because these files are ours
 // and leave with the disconnect - a web_search = "disabled" at the root
 // would stay behind and take search from the member's OpenAI sessions too.
-func writeCodexProfiles(codexHome string) error {
+func writeCodexProfiles(codexHome string, subAgents codexSwitch) error {
 	// Starting from none, so a model the cluster retired does not leave its
 	// profile behind to answer 401 on `--profile`.
 	if err := removeCodexProfiles(codexHome); err != nil {
@@ -2835,9 +2892,7 @@ model_context_window = %d
 model_catalog_json = %q
 web_search = "disabled"
 
-[features]
-multi_agent = false
-`, m.ID, m.Context, codexCatalogPath(codexHome))
+%s`, m.ID, m.Context, codexCatalogPath(codexHome), subAgents.off())
 		path := filepath.Join(codexHome, codexProfileName(m.ID)+".config.toml")
 		if err := writeConfigFile(path, []byte(body)); err != nil {
 			return err
