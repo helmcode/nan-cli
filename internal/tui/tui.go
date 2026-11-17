@@ -2233,6 +2233,7 @@ func (m model) finishSignOut(revokeErr error) (tea.Model, tea.Cmd) {
 	m.cache = make(map[tabID]any)
 	m.keyStatus, m.keyAsked, m.keyCheck = nil, false, ""
 	m.configured, m.setupMsg = nil, signOutMessage(removed, failed)
+	m.failures = nil
 	if revokeErr != nil {
 		m.setupMsg += "  ·  " + revokeNotConfirmed(revokeErr)
 	}
@@ -3193,10 +3194,10 @@ func writeHermesConfig(home, apiKey string) error {
 // key, and what a member would see is a 401 from the cluster naming nothing in
 // particular.
 //
-// The answer is the key itself, so it is compared and dropped on the spot. It
-// does not go into a message, a log or an error.
+// The answer is the key, or Hermes' mask of it, so it is compared and dropped
+// on the spot. It does not go into a message, a log or an error.
 func confirmHermesResolvesTheKey(home, apiKey string) error {
-	resolved, err := readHermesConfig(home, "get", "model.api_key")
+	shown, err := readHermesConfig(home, "get", "model.api_key")
 	if err != nil {
 		// No answer is not a wrong answer. An older Hermes without this
 		// subcommand, or one that could not be run twice, says nothing either
@@ -3204,11 +3205,38 @@ func confirmHermesResolvesTheKey(home, apiKey string) error {
 		// step over a question we could not ask would be its own bug.
 		return nil
 	}
-	if resolved != apiKey {
+	if !hermesShowsTheKey(shown, apiKey) {
 		return fmt.Errorf("Hermes did not resolve %s from its .env, so it has no usable key - "+
 			"nan.builders/docs/hermes has the manual steps", hermesKeyRef)
 	}
 	return nil
+}
+
+// Hermes' mask for a credential too short to show any of: "***" below twelve
+// characters.
+const (
+	hermesMaskShort = "***"
+	hermesMaskFloor = 12
+)
+
+// What Hermes prints for a credential in `config get`, as of 0.23: the first
+// four characters, "...", the last four - or "***" for anything shorter than
+// twelve - unless --raw or security.redact_secrets: false, which print it as
+// it is. A placeholder it could not expand is never masked, so the literal
+// ${NAN_API_KEY} still reads as the failure it is.
+//
+// Asked without --raw on purpose: the masked form answers "did it resolve",
+// the key never has to come back through a pipe, and a Hermes that predates
+// the flag answers the same question.
+func hermesShowsTheKey(shown, apiKey string) bool {
+	switch {
+	case shown == apiKey:
+		return true
+	case len(apiKey) < hermesMaskFloor:
+		return shown == hermesMaskShort
+	default:
+		return shown == apiKey[:4]+"..."+apiKey[len(apiKey)-4:]
+	}
 }
 
 // One variable set in the .env, and the rest of the file - a long commented
@@ -3530,7 +3558,6 @@ func (m model) renderFailures(l layout) string {
 	if len(m.failures) == 0 {
 		return ""
 	}
-	bad := lipgloss.NewStyle().Foreground(cRed)
 	dim := lipgloss.NewStyle().Foreground(cDimGray)
 
 	var b strings.Builder
@@ -3538,7 +3565,6 @@ func (m model) renderFailures(l layout) string {
 	for _, f := range m.failures {
 		b.WriteString(m.wrapped(l, "error: "+f.name+" — "+f.firstLine()) + "\n")
 	}
-	_ = bad
 	b.WriteString("\n" + l.indent + dim.Render(
 		"The rest went in. Fix that one and press c again, or carry on without it - "+
 			"its page on nan.builders has the manual steps.") + "\n")
@@ -3578,6 +3604,18 @@ func lpadTo(v string, w int) string {
 	return v + strings.Repeat(" ", w-len(v))
 }
 
+// Whether the last configure or removal failed for this tool. The file on
+// disk is not the answer then: a run that stopped part-way through can leave
+// enough of it behind to read as configured.
+func (m model) toolFailed(name string) bool {
+	for _, f := range m.failures {
+		if f.name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // renderToolList draws the tools and their state. Pulled out of the Setup
 // tab because the guided setup shows the same list as its last step, and two
 // copies of a list with a cursor in it would drift the first time either moved.
@@ -3585,6 +3623,7 @@ func (m model) renderToolList(l layout, tools []toolInfo, cursor int) string {
 	dimStyle := lipgloss.NewStyle().Foreground(cDimGray)
 	okStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#10B981"))
 	warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B"))
+	failStyle := lipgloss.NewStyle().Foreground(cRed)
 	var b strings.Builder
 	nameW := 14
 	for _, t := range tools {
@@ -3622,6 +3661,8 @@ func (m model) renderToolList(l layout, tools []toolInfo, cursor int) string {
 		var status string
 		if !t.installed {
 			status = dimStyle.Render("not installed")
+		} else if m.toolFailed(t.name) {
+			status = failStyle.Render("✗ last change failed")
 		} else if t.configured {
 			status = okStyle.Render("✓ configured with NaN")
 		} else {

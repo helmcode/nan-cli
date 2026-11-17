@@ -1330,6 +1330,124 @@ func TestHermesThatCannotAnswerIsNotTreatedAsBroken(t *testing.T) {
 	}
 }
 
+// Hermes 0.23 masks credentials in `config get` unless --raw: a resolved key
+// comes back as sk-a...1234, and only an unexpanded placeholder comes back as
+// written. Comparing that with the raw key failed every configure. The check
+// is now about whether the key resolved, which the masked form still answers.
+func TestHermesResolutionCheckReadsTheMaskedKey(t *testing.T) {
+	const key = "sk-abcdEFGHijklMNOP1234" // 22 chars, above Hermes' 12-char floor
+	cases := []struct {
+		name   string
+		shown  string
+		getErr error
+		ok     bool
+	}{
+		{"raw key", key, nil, true},
+		{"masked key that matches", "sk-a...1234", nil, true},
+		{"unexpanded placeholder", hermesKeyRef, nil, false},
+		{"masked key of another key", "sk-z...9999", nil, false},
+		{"masked head of another key", "sk-z...1234", nil, false},
+		{"shorter head and tail than Hermes prints", "s...4", nil, false},
+		{"two dots", "sk-a..1234", nil, false},
+		{"short-key placeholder for a long key", "***", nil, false},
+		{"empty answer", "", nil, false},
+		{"command error", "", errors.New("unknown command: get"), true},
+		{"command error that quotes the key", "", errors.New("bad value " + key), true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			recordHermes(t)
+			original := readHermesConfig
+			readHermesConfig = func(home string, args ...string) (string, error) {
+				return c.shown, c.getErr
+			}
+			t.Cleanup(func() { readHermesConfig = original })
+
+			err := writeHermesConfig(t.TempDir(), key)
+			if c.ok && err != nil {
+				t.Errorf("reported as failed: %v", err)
+			}
+			if !c.ok && err == nil {
+				t.Error("reported as configured")
+			}
+			if err != nil && strings.Contains(err.Error(), key) {
+				t.Errorf("the error carries the key: %v", err)
+			}
+		})
+	}
+}
+
+// The same rule for a key under Hermes' 12-character floor, which it masks
+// as *** with nothing visible.
+func TestHermesResolutionCheckReadsTheMaskOfAShortKey(t *testing.T) {
+	if !hermesShowsTheKey("***", "sk-short") {
+		t.Error("*** for a key under 12 characters was refused")
+	}
+	if !hermesShowsTheKey("sk-short", "sk-short") {
+		t.Error("the raw short key was refused")
+	}
+	if hermesShowsTheKey("sk-s...hort", "sk-short") {
+		t.Error("a head/tail mask was accepted for a key Hermes masks as ***")
+	}
+}
+
+// The panel said "error: Hermes — ..." and, two lines up, "Hermes ✓
+// configured with NaN": the status read the file, which the failed run had
+// partly written. The list now follows the result of the last change.
+func TestAToolThatFailedIsNotListedAsConfigured(t *testing.T) {
+	tools := []toolInfo{
+		{name: "OpenCode", installed: true, configured: true},
+		{name: "Hermes", installed: true, configured: true},
+	}
+	rows := func(m model) (opencode, hermes string) {
+		t.Helper()
+		for _, line := range strings.Split(m.renderToolList(m.lay, tools, 0), "\n") {
+			switch {
+			case strings.Contains(line, "Hermes"):
+				hermes = line
+			case strings.Contains(line, "OpenCode"):
+				opencode = line
+			}
+		}
+		if opencode == "" || hermes == "" {
+			t.Fatalf("a tool row is missing: OpenCode %q, Hermes %q", opencode, hermes)
+		}
+		return opencode, hermes
+	}
+
+	m := setupModel(t, &session.Session{Token: "t", APIKey: testKey})
+	m.lay = newLayout(96, 44)
+	updated, _ := m.Update(configuredMsg{
+		msg:     "4 added  ·  Hermes failed",
+		written: []string{"OpenCode"},
+		failed:  []toolFailure{{"Hermes", "Hermes did not resolve the key"}},
+	})
+	failedRun := updated.(model)
+	opencode, hermes := rows(failedRun)
+	if strings.Contains(hermes, "configured with NaN") || !strings.Contains(hermes, "last change failed") {
+		t.Errorf("after a failed run, Hermes reads: %q", hermes)
+	}
+	if !strings.Contains(opencode, "configured with NaN") {
+		t.Errorf("a tool that worked lost its status: %q", opencode)
+	}
+
+	// The next run that works clears the mark.
+	updated, _ = failedRun.Update(configuredMsg{msg: "1 added", written: []string{"Hermes"}})
+	if _, hermes := rows(updated.(model)); !strings.Contains(hermes, "configured with NaN") {
+		t.Errorf("after a run that worked, Hermes reads: %q", hermes)
+	}
+}
+
+// A sign-out takes the failures of the session that is over with it.
+func TestSignOutClearsTheLastFailures(t *testing.T) {
+	m := setupModel(t, &session.Session{Token: "t", APIKey: testKey})
+	m.failures = []toolFailure{{"Hermes", "Hermes did not resolve the key"}}
+	signedOut, _ := m.finishSignOut(nil)
+	if got := signedOut.(model).failures; len(got) != 0 {
+		t.Errorf("failures outlived the sign-out: %v", got)
+	}
+}
+
 func TestHermesIsConfiguredThroughItsOwnConfigCommand(t *testing.T) {
 	calls := recordHermes(t)
 	if err := writeHermesConfig(t.TempDir(), testKey); err != nil {
