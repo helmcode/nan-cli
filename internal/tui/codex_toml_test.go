@@ -2,6 +2,7 @@ package tui
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -57,5 +58,80 @@ func TestCodexEditMeansRejectsAChangeOfMeaning(t *testing.T) {
 	}
 	if codexEditMeans("a = 2\n", want) || codexEditMeans("a = \n", want) {
 		t.Error("an edit that changed or broke the meaning was accepted")
+	}
+}
+
+func TestCodexIsHeader(t *testing.T) {
+	for line, want := range map[string]bool{
+		"[agents]":        true,
+		`  ["a"."b"] # c`: true,
+		"[[agents]]":      true,
+		"  [[x]]":         true,
+		"  1,":            false,
+		"[1, 2]":          false,
+		"[ \"x\",":        false,
+		"a = [1]":         false,
+		"":                false,
+	} {
+		if got := codexIsHeader(line); got != want {
+			t.Errorf("%q: got %v, want %v", line, got, want)
+		}
+	}
+}
+
+func TestCodexTableHeader(t *testing.T) {
+	lines := strings.Split("a = 1\n[x]\nb = 2\n[ \"y\" ]\n", "\n")
+	if got := codexTableHeader(lines, "x"); got != 1 {
+		t.Errorf("x: %d", got)
+	}
+	if got := codexTableHeader(lines, "y"); got != 3 {
+		t.Errorf("y: %d", got)
+	}
+	if got := codexTableHeader(lines, "z"); got != -1 {
+		t.Errorf("z: %d", got)
+	}
+}
+
+func dropped(t *testing.T, content, table, key string, value any) (string, bool) {
+	t.Helper()
+	want, ok := codexTOML(content)
+	if !ok {
+		t.Fatalf("fixture is not TOML:\n%s", content)
+	}
+	out := strings.Join(codexTableKeyDropped(strings.Split(content, "\n"), want, table, key, value), "\n")
+	if !codexEditMeans(out, want) {
+		t.Errorf("want was not kept consistent with the edit:\n%s", out)
+	}
+	return out, out != content
+}
+
+func TestCodexTableKeyDroppedKeepsTheOtherKeys(t *testing.T) {
+	out, changed := dropped(t, "[agents]\nenabled = true\nmax_threads = 4\n\n[x]\na = 1\n", "agents", "enabled", true)
+	if !changed || out != "[agents]\nmax_threads = 4\n\n[x]\na = 1\n" {
+		t.Errorf("got:\n%s", out)
+	}
+}
+
+func TestCodexTableKeyDroppedTakesAnEmptiedTableWithItsSeparator(t *testing.T) {
+	out, changed := dropped(t, "a = 1\n\n[agents]\nenabled = true\n\n[x]\nb = 2\n", "agents", "enabled", true)
+	if !changed || out != "a = 1\n\n[x]\nb = 2\n" {
+		t.Errorf("got:\n%s", out)
+	}
+	out, changed = dropped(t, "a = 1\n\n[agents]\nenabled = true\n", "agents", "enabled", true)
+	if !changed || out != "a = 1" {
+		t.Errorf("last table: got %q", out)
+	}
+}
+
+func TestCodexTableKeyDroppedLeavesWhatIsNotItsToTake(t *testing.T) {
+	for name, c := range map[string]struct{ content, table string }{
+		"another value": {"[agents]\nenabled = false\n", "agents"},
+		"absent table":  {"[x]\nenabled = true\n", "agents"},
+		"inline table":  {"agents = { enabled = true }\n", "agents"},
+		"key elsewhere": {"[x]\nenabled = true\n\n[agents]\nn = 1\n", "agents"},
+	} {
+		if out, changed := dropped(t, c.content, c.table, "enabled", true); changed {
+			t.Errorf("%s: changed:\n%s", name, out)
+		}
 	}
 }

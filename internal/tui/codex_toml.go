@@ -79,19 +79,34 @@ func codexTablePath(line string) (string, bool) {
 	return strings.Join(path, "."), true
 }
 
+// Whether the line opens a table: a TOML-valid [table] header, or an
+// [[array-of-tables]] one. A line that merely starts with "[" - the middle of
+// a multi-line array - is not.
+func codexIsHeader(line string) bool {
+	if _, ok := codexTablePath(line); ok {
+		return true
+	}
+	return strings.HasPrefix(strings.TrimSpace(line), "[[")
+}
+
 // Index of the first table header: everything above it is the root table.
 func codexRootEnd(lines []string) int {
 	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "[") {
-			if _, ok := codexTablePath(line); ok {
-				return i
-			}
-			if strings.HasPrefix(strings.TrimSpace(line), "[[") {
-				return i
-			}
+		if codexIsHeader(line) {
+			return i
 		}
 	}
 	return len(lines)
+}
+
+// Index of the [table] header line, or -1 when there is none.
+func codexTableHeader(lines []string, table string) int {
+	for i, line := range lines {
+		if path, ok := codexTablePath(line); ok && path == table {
+			return i
+		}
+	}
+	return -1
 }
 
 // Takes `key = value` out of the [table] block, and the block's header too
@@ -100,19 +115,13 @@ func codexRootEnd(lines []string) int {
 // unchanged when the table has no such line of its own (an inline table, a
 // dotted key at the root, or a different value).
 func codexTableKeyDropped(lines []string, want map[string]any, table, key string, value any) []string {
-	start := -1
-	for i, line := range lines {
-		if path, ok := codexTablePath(line); ok && path == table {
-			start = i
-			break
-		}
-	}
+	start := codexTableHeader(lines, table)
 	if start < 0 {
 		return lines
 	}
 	end := len(lines)
 	for i := start + 1; i < len(lines); i++ {
-		if strings.HasPrefix(strings.TrimSpace(lines[i]), "[") {
+		if codexIsHeader(lines[i]) {
 			end = i
 			break
 		}
