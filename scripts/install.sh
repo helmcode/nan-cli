@@ -184,84 +184,97 @@ install_bin() {
   sudo install -d "$dest_dir" && sudo install -m 755 "$src" "$dest_dir/nan"
 }
 
+# The shell the member logs in with, by name (zsh, bash, fish...). It is
+# $SHELL and not the shell running this script, which under `curl | bash` is
+# always bash.
+login_shell() { basename "${SHELL:-sh}"; }
+
+# The startup file a new terminal of that shell reads.
 shell_profile() {
-  local shell_name
-  shell_name="$(basename "${SHELL:-}" 2>/dev/null || echo "")"
-  case "$shell_name" in
-    zsh)
-      echo "$HOME/.zshrc"
-      ;;
-    bash)
-      if [ -f "$HOME/.bashrc" ]; then
-        echo "$HOME/.bashrc"
-      elif [ -f "$HOME/.bash_profile" ]; then
-        echo "$HOME/.bash_profile"
-      else
-        echo "$HOME/.bashrc"
-      fi
-      ;;
-    fish)
-      echo "${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
-      ;;
-    *)
-      echo "$HOME/.profile"
-      ;;
+  case "$(login_shell)" in
+    zsh)  echo "${ZDOTDIR:-$HOME}/.zshrc" ;;
+    # macOS terminals start login shells, which read .bash_profile and not
+    # .bashrc. Linux terminals start interactive non-login shells, which read
+    # .bashrc and not .bash_profile.
+    bash) if [ "$(detect_os)" = "darwin" ]; then echo "$HOME/.bash_profile"; else echo "$HOME/.bashrc"; fi ;;
+    fish) echo "${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish" ;;
+    *)    echo "$HOME/.profile" ;;
   esac
 }
 
+# $1 as one literal word for the login shell: single-quoted, so $, `, spaces
+# and double quotes inside it mean nothing. A ' inside is closed, escaped and
+# reopened in sh/bash/zsh; fish escapes it (and backslashes) in place.
+quote_for_shell() {
+  if [ "$(login_shell)" = "fish" ]; then
+    printf "'%s'" "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e "s/'/\\\\'/g")"
+  else
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+  fi
+}
+
+# The line that puts $1 first on PATH, in the login shell's syntax. Prepended,
+# so an older nan later in PATH (say /usr/local/bin) loses. The default
+# directory is written as "$HOME/.local/bin" - expanded by the shell that reads
+# it, so whatever characters the home path holds need no quoting.
+path_line() {
+  local dir_word
+  if [ "$1" = "$DEFAULT_INSTALL_DIR" ]; then
+    dir_word='"$HOME/.local/bin"'
+  else
+    dir_word="$(quote_for_shell "$1")"
+  fi
+  if [ "$(login_shell)" = "fish" ]; then
+    echo "fish_add_path $dir_word"
+  else
+    echo "export PATH=$dir_word:\"\$PATH\""
+  fi
+}
+
+# Make a new terminal find nan. Only the default directory gets a profile
+# edit: a custom INSTALL_DIR is a deliberate choice, so for it this prints the
+# line and leaves the files alone.
 check_path() {
-  local dir="$1"
+  local dir="$1" profile line
   case ":$PATH:" in
-    *":$dir:"*)
-      info "$dir is already in PATH"
-      return
-      ;;
+    *":$dir:"*) info "$dir is already in PATH"; return ;;
   esac
 
+  line="$(path_line "$dir")"
   if [ "$dir" != "$DEFAULT_INSTALL_DIR" ]; then
-    warn "$dir is not in PATH. To add it, append this line to your shell profile:"
-    printf "    export PATH=\"%s:\$PATH\"\n" "$dir"
-    warn "the installer did not modify any profile for a custom INSTALL_DIR"
+    warn "$dir is not in your PATH; add this line to your shell profile:"
+    printf "    %s\n" "$line"
     return
   fi
 
-  local profile line
   profile="$(shell_profile)"
-  line="fish_add_path \"$dir\""
-  if [ "$(basename "${SHELL:-}" 2>/dev/null || echo "")" != "fish" ]; then
-    line="export PATH=\"$dir:\$PATH\""
-  fi
-  if grep -qF "$dir" "$profile" 2>/dev/null; then
-    info "$dir is already in $profile"
+  if grep -qxF "$line" "$profile" 2>/dev/null; then
+    warn "$profile already adds $dir, but this terminal predates it: open a new one"
     return
   fi
-  local profile_dir
-  profile_dir="$(dirname "$profile")"
-  if [ ! -d "$profile_dir" ]; then
-    mkdir -p "$profile_dir" 2>/dev/null || true
+  if ! { mkdir -p "$(dirname "$profile")" && printf '\n# Added by the nan installer\n%s\n' "$line" >> "$profile"; } 2>/dev/null; then
+    warn "could not write $profile; add this line to it yourself:"
+    printf "    %s\n" "$line"
+    return
   fi
-  printf '\n# Added by nan-cli installer\n%s\n' "$line" >> "$profile"
   log "added $dir to PATH in $profile"
-  warn "this shell was not changed; run 'source $profile' or open a new terminal"
+  warn "open a new terminal to use nan, or run: source $(quote_for_shell "$profile")"
 }
 
+# A nan that was on PATH before this install and lives somewhere else, most
+# often /usr/local/bin from the installer's old default. It can keep running
+# instead of the new one, and silently.
 warn_if_shadowed() {
-  local found="$1" install_dir="$2"
-  if [ -z "$found" ]; then
-    return
+  local found="$1" install_dir="$2" found_dir
+  [ -n "$found" ] || return 0
+  found_dir="$(cd "$(dirname "$found")" 2>/dev/null && pwd -P)" || return 0
+  [ "$found_dir" != "$(cd "$install_dir" 2>/dev/null && pwd -P)" ] || return 0
+  warn "an older nan at $found may run instead of $install_dir/nan"
+  if [ -w "$found_dir" ]; then
+    warn "remove it: rm $(quote_for_shell "$found")"
+  else
+    warn "remove it: sudo rm $(quote_for_shell "$found")"
   fi
-  local found_dir
-  found_dir="$(cd "$(dirname "$found")" 2>/dev/null && pwd)" || found_dir=""
-  local install_dir_resolved
-  install_dir_resolved="$(cd "$install_dir" 2>/dev/null && pwd)" || install_dir_resolved=""
-  if [ "$found_dir" = "$install_dir_resolved" ]; then
-    return
-  fi
-  warn "another nan at $found is earlier in PATH and will run until PATH is fixed"
-  if [ "$found" = "/usr/local/bin/nan" ]; then
-    warn "remove the old one: sudo rm /usr/local/bin/nan"
-  fi
-  warn "opening a new terminal will put $install_dir first once your profile is sourced"
 }
 
 main() {
