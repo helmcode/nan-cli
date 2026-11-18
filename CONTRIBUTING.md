@@ -58,7 +58,7 @@ All tool auto-configuration logic lives in `internal/tui/tui.go`. The relevant f
 
 1. **Add an entry to `detectTools()`** with the tool's binary name and config file path.
 
-2. **Implement `writeXxxConfig(cfgPath, apiKey string) error`** — write the NaN provider block into the tool's config format. Always check if NaN is already present before writing, and build the model list by ranging over `catalog.All` from `internal/models`. Never write the ids by hand: three writers used to keep a list each, and all three had drifted to the same stale set of three models.
+2. **Implement `writeXxxConfig(cfgPath, apiKey string, models []catalog.Model) error`** — write the NaN provider block into the tool's config format. Always check if NaN is already present before writing, and take the `models []catalog.Model` that `configureTools` passes in (it comes from `GET /api/agents/models`, already filtered and with fallbacks for missing metadata) and range over it. Never write model ids by hand.
 
 3. **Implement `removeXxxConfig(cfgPath string) error`** — remove any NaN-related entries cleanly without touching the rest of the file.
 
@@ -68,13 +68,9 @@ All tool auto-configuration logic lives in `internal/tui/tui.go`. The relevant f
 
 ## Adding a new NaN model
 
-Add it to `All` in `internal/models/models.go` and every writer picks it up.
+Nothing to do in the CLI. Setup reads the catalog from `GET /api/agents/models` every time it runs. It writes nothing when that call fails or returns no models, and it takes out of each config any model the platform no longer lists. The window, output budget, vision and reasoning come from the LiteLLM `model_info` of the model. When a field is missing the CLI uses `FallbackContext`/`FallbackOutput` from `internal/models` and claims no vision or reasoning.
 
-The window and the output budget are the ones the setup guides publish on nan.builders (/docs/opencode, /docs/pi). Those are measured against the proxy, so copy them as they are rather than rounding: a window written short makes the tool compact a session that had room left, and one written long makes it fill the conversation until the model starts refusing requests.
-
-The Codex config (`writeCodexConfig`) does not enumerate models; it points at `catalog.Coding`.
-
-Then run `go test ./...`. `internal/tui/config_test.go` writes each config into a temp directory and checks it against the catalogue, which is what stops the lists from drifting again.
+Then run `go test ./...`. `internal/tui/config_test.go` writes each config into a temp directory from the fixture in `internal/tui/catalog_fixture_test.go` and checks it against that catalogue.
 
 ## Code style
 
