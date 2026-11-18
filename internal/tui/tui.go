@@ -224,6 +224,11 @@ type model struct {
 	wizard     wizardStep
 	loginStage loginStage
 	loginMsg   string
+	// configureAfterLogin: the sign-in in flight was opened by `c` on a
+	// machine with no session, so the configure the member asked for runs
+	// once they are signed in. Set only by `c`, cleared by every other start
+	// and by cancelLogin.
+	configureAfterLogin bool
 	// The device sign-in in flight: what to show, how to stop it, and which
 	// attempt it is. loginAttempt goes up on every start and every cancel, so
 	// a late message of an older attempt is recognised and dropped. In memory
@@ -475,13 +480,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// exactly like the login having failed.
 		m.client = api.New(m.sess.Token)
 		wasGuided := m.wizard != wizardOff
+		configure := m.configureAfterLogin
 		m.cancelLogin()
-		if wasGuided {
-			m.wizard = wizardKey
-		}
 		m.cache = make(map[tabID]any)
 		m.err = nil
 		m.keyAsked = false
+		// A key saved before signing in is still the member's key: the
+		// session was the only thing missing. So the setup goes on from the
+		// tools, not from a key step that has nothing to ask - and if the
+		// sign-in was opened by `c`, the configure they already asked for
+		// runs now rather than waiting for a second press. A key the cluster
+		// has already refused goes back to the key step, as does no key.
+		if wasGuided {
+			m.wizard = wizardKey
+			if m.sess.APIKey != "" && !m.keyRefused() {
+				m.wizard = wizardTools
+				if configure {
+					return m, tea.Batch(m.maybeLoad(), m.startConfigure())
+				}
+			}
+		}
 		// And straight on to whatever is still missing, which on a fresh
 		// machine is the key.
 		return m, tea.Batch(m.maybeLoad(), m.resumeSetup())
@@ -532,7 +550,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, openBrowser(m.loginDevice.VerificationURL)
 					}
 				case loginFailed:
-					return m, m.startLogin()
+					// Trying again is the same request: a sign-in opened by
+					// `c` still ends in the configure.
+					configure := m.configureAfterLogin
+					cmd := m.startLogin()
+					m.configureAfterLogin = configure
+					return m, cmd
 				}
 				return m, nil
 			case "esc":
@@ -723,6 +746,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// After startLogin, which clears loginMsg; the sign-in
 					// view shows loginMsg and not setupMsg.
 					m.loginMsg = "sign in first — Setup reads the model list from your account"
+					// And the member asked to configure: once signed in, it
+					// runs without a second press (#81).
+					m.configureAfterLogin = true
 					return m, cmd
 				}
 				// Pressing the key that configures everything and having
@@ -732,13 +758,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.setupMsg = "error: set your API key first — press e"
 					return m, nil
 				}
-				m.configuring = true
-				m.configured = nil
-				m.setupMsg = ""
-				client, key, tools := m.client, m.sess.APIKey, m.sess.EnabledTools
-				return m, tea.Batch(m.spin.Tick, func() tea.Msg {
-					return syncTools(client, key, tools)
-				})
+				return m, m.startConfigure()
 			}
 		}
 	}
@@ -810,6 +830,7 @@ func (m *model) startLogin() tea.Cmd {
 	m.wizard = wizardSignIn
 	m.loginStage = loginStarting
 	m.loginMsg = ""
+	m.configureAfterLogin = false
 	// A machine set up with a platform token looks signed in to whoever set
 	// it up. The dashboard cannot use one, and showing a sign-in code with no
 	// word about it reads as the token having been lost.
@@ -874,6 +895,26 @@ func (m *model) cancelLogin() {
 	m.wizard = wizardOff
 	m.loginStage = loginOff
 	m.loginMsg = ""
+	m.configureAfterLogin = false
+}
+
+// startConfigure writes the NaN models into the enabled tools, with the
+// catalogue read from the member's account. The caller has checked there is
+// a session and a key.
+func (m *model) startConfigure() tea.Cmd {
+	m.configuring = true
+	m.configured = nil
+	m.setupMsg = ""
+	client, key, tools := m.client, m.sess.APIKey, m.sess.EnabledTools
+	return tea.Batch(m.spin.Tick, func() tea.Msg {
+		return syncTools(client, key, tools)
+	})
+}
+
+// keyRefused: the cluster turned down the saved key the last time it was
+// checked, and nothing has been saved since.
+func (m model) keyRefused() bool {
+	return strings.HasPrefix(m.keyCheck, "error")
 }
 
 // startDevice asks the platform for a CLI device request.
