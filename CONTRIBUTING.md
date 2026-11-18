@@ -31,7 +31,7 @@ curl -fsSL https://nan.builders/install | bash
 By default it installs to `$HOME/.local/bin`, which is per-user and needs no root. Override with `INSTALL_DIR`:
 
 ```bash
-INSTALL_DIR=~/.nan/bin curl -fsSL https://nan.builders/install | bash
+curl -fsSL https://nan.builders/install | INSTALL_DIR="$HOME/.nan/bin" bash
 ```
 
 A custom `INSTALL_DIR` never edits a shell profile: if the directory is not on your `PATH`, the installer prints the line to add yourself. For a machine-wide install, with root or sudo:
