@@ -362,6 +362,30 @@ func TestConfigureToolsRefusesAnEmptyCatalog(t *testing.T) {
 	}
 }
 
+func TestSignOutAndConfigureDoNotOverlap(t *testing.T) {
+	m := setupModel(t, &session.Session{Token: "t", APIKey: testKey})
+	m.lay = newLayout(90, 30)
+	m.active = tabIndex(tabSetup)
+	m.configuring = true
+
+	m, _ = pressKey(m, 'o')
+	m, cmd := pressKey(m, 'o')
+	if m.signingOut || cmd != nil {
+		t.Error("a sign-out started while the tools were being configured")
+	}
+
+	m2 := setupModel(t, &session.Session{Token: "t", APIKey: testKey})
+	m2.lay = newLayout(90, 30)
+	m2.active = tabIndex(tabSetup)
+	m2.signingOut = true
+	m2, cmd = pressKey(m2, 'c')
+	if m2.configuring || cmd != nil {
+		t.Error("configuring started while a sign-out was in flight")
+	}
+}
+
+// ── the Models tab ───────────────────────────────────────────────────────────
+
 func TestModelsTabSignsOutOnAnExpiredSessionEvenWithAKey(t *testing.T) {
 	m := setupModel(t, &session.Session{Token: "stale", APIKey: testKey})
 	client, _ := platformClient(t, "stale", http.StatusUnauthorized, `{"error":"unauthorized"}`)

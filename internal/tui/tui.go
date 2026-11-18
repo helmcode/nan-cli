@@ -673,7 +673,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// command, which is no use to someone who is looking at the panel and
 		// wants to switch accounts.
 		case "o":
-			if m.showHelp || m.wizard != wizardOff || m.sess.Token == "" {
+			if m.showHelp || m.wizard != wizardOff || m.sess.Token == "" || m.configuring {
 				break
 			}
 			if !m.confirmSignOut {
@@ -713,7 +713,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.startKeyEdit()
 			}
 		case "c":
-			if !m.showHelp && !m.configuring && (m.activeID() == tabSetup || m.wizard == wizardTools) {
+			if !m.showHelp && !m.configuring && !m.signingOut && (m.activeID() == tabSetup || m.wizard == wizardTools) {
 				// The model list comes from the member's account and nowhere
 				// else, so there is nothing to configure with until they sign
 				// in. The sign-in opens right here rather than being one more
