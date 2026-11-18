@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	catalog "github.com/nxssie/nan-cli/internal/models"
 )
 
 // The tools' configs are theirs, not ours: by the time `nan` writes a key into
@@ -30,7 +32,7 @@ func TestWritingAKeyTightensAConfigThatWasWideOpen(t *testing.T) {
 		}
 	}
 
-	if _, _, failed := configureTools(testKey, nil); len(failed) != 0 {
+	if _, _, failed := configureTools(testKey, nil, testModels); len(failed) != 0 {
 		t.Fatalf("tools failed on a clean run: %v", failed)
 	}
 	for name, path := range toolPaths(home) {
@@ -57,7 +59,7 @@ func TestConfiguringTightensAToolThatNeedsNothingWritten(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, _, failed := configureTools(testKey, nil); len(failed) != 0 {
+	if _, _, failed := configureTools(testKey, nil, testModels); len(failed) != 0 {
 		t.Fatalf("tools failed on a clean run: %v", failed)
 	}
 	// As an older version of this CLI would have left them.
@@ -68,7 +70,7 @@ func TestConfiguringTightensAToolThatNeedsNothingWritten(t *testing.T) {
 	}
 
 	// A second run has nothing to write, and has to fix them anyway.
-	if _, _, failed := configureTools(testKey, nil); len(failed) != 0 {
+	if _, _, failed := configureTools(testKey, nil, testModels); len(failed) != 0 {
 		t.Fatalf("tools failed on the second run: %v", failed)
 	}
 	for name, path := range paths {
@@ -89,7 +91,7 @@ func TestAConfigThatDoesNotParseIsLeftExactlyAsItIs(t *testing.T) {
 	for _, c := range []struct {
 		name  string
 		file  string
-		write func(path, key string) error
+		write func(path, key string, models []catalog.Model) error
 	}{
 		{"Factory AI", "settings.json", writeFactoryConfig},
 		{"OpenCode", "opencode.json", writeOpencodeConfig},
@@ -101,7 +103,7 @@ func TestAConfigThatDoesNotParseIsLeftExactlyAsItIs(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			err := c.write(path, testKey)
+			err := c.write(path, testKey, testModels)
 			if err == nil {
 				t.Fatal("a config that does not parse was written over without a word")
 			}
@@ -129,7 +131,7 @@ func TestSigningOutTakesTheKeyOutOfTheTools(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, _, failed := configureTools(testKey, nil); len(failed) != 0 {
+	if _, _, failed := configureTools(testKey, nil, testModels); len(failed) != 0 {
 		t.Fatalf("tools failed on a clean run: %v", failed)
 	}
 

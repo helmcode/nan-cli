@@ -61,15 +61,14 @@ type codexCatalogEntry struct {
 	IncludeAppsUsageInstructions bool `json:"include_apps_usage_instructions"`
 }
 
-func codexCatalog() ([]byte, error) {
-	models := catalog.ChatModels()
+func codexCatalog(models []catalog.Model) ([]byte, error) {
 	entries := make([]codexCatalogEntry, 0, len(models))
 	for i, m := range models {
 		entries = append(entries, codexCatalogEntry{
 			Slug: m.ID,
 			// No " (NaN)" as droid has: in a session on the nan provider
 			// every model in the picker is one.
-			DisplayName: m.Name,
+			DisplayName: m.ID,
 			Description: "Served by the NaN cluster.",
 			// What a model without metadata gets, so the request is the one
 			// Codex was already sending.
@@ -85,7 +84,7 @@ func codexCatalog() ([]byte, error) {
 			MaxContextWindow:           m.Context,
 			// Codex takes text and image here and nothing else; audio and
 			// video are not modalities it can send.
-			InputModalities: piInputs(m),
+			InputModalities: m.Inputs(),
 		})
 	}
 	return json.MarshalIndent(map[string]any{"models": entries}, "", "  ")

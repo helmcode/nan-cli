@@ -82,7 +82,7 @@ func assertNotWorldReadable(t *testing.T, path string) {
 
 func TestOpencodeConfigPublishesEveryModelWithItsWindow(t *testing.T) {
 	path := tempConfig(t, "opencode.json")
-	if err := writeOpencodeConfig(path, testKey); err != nil {
+	if err := writeOpencodeConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 
@@ -94,11 +94,11 @@ func TestOpencodeConfigPublishesEveryModelWithItsWindow(t *testing.T) {
 	}
 
 	written := nan["models"].(map[string]any)
-	if len(written) != len(catalog.ChatModels()) {
-		t.Errorf("wrote %d models, the cluster serves %d", len(written), len(catalog.ChatModels()))
+	if len(written) != len(testModels) {
+		t.Errorf("wrote %d models, the cluster serves %d", len(written), len(testModels))
 	}
 
-	for _, m := range catalog.ChatModels() {
+	for _, m := range testModels {
 		entry, ok := written[m.ID].(map[string]any)
 		if !ok {
 			t.Errorf("%s: not written", m.ID)
@@ -123,80 +123,81 @@ func TestOpencodeConfigPublishesEveryModelWithItsWindow(t *testing.T) {
 	}
 }
 
-func TestOpencodeConfigRepairsAnEntryWrittenByAnOlderVersion(t *testing.T) {
+func TestOpencodeConfigRefreshesWhatItOwns(t *testing.T) {
 	path := tempConfig(t, "opencode.json")
-	// Exactly what versions up to v0.1.1 left behind: the model is there, the
-	// window is not, and the member has renamed it.
+	// An entry with an old limit and no modalities, plus a key the member
+	// added, and an entry under another provider.
 	old := `{
 	  "provider": {
 	    "nan": {
 	      "npm": "@ai-sdk/openai-compatible",
 	      "options": { "baseURL": "https://api.nan.builders/v1", "apiKey": "sk-old" },
-	      "models": { "gemma4": { "name": "my own name for it" } }
-	    }
+	      "models": { "kimi-k3.1-pro": { "name": "my own name for it", "limit": { "context": 1000, "output": 10 }, "options": { "temperature": 0.2 } } }
+	    },
+	    "other": { "models": { "kimi-k3.1-pro": { "limit": { "context": 5, "output": 5 } } } }
 	  }
 	}`
 	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeOpencodeConfig(path, testKey); err != nil {
+	if err := writeOpencodeConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 
-	cfg := readJSON(t, path)
-	models := cfg["provider"].(map[string]any)["nan"].(map[string]any)["models"].(map[string]any)
-	gemma := models["gemma4"].(map[string]any)
+	providers := readJSON(t, path)["provider"].(map[string]any)
+	models := providers["nan"].(map[string]any)["models"].(map[string]any)
+	kimi := models["kimi-k3.1-pro"].(map[string]any)
 
-	if gemma["name"] != "my own name for it" {
-		t.Errorf("name = %v, the member's own value was overwritten", gemma["name"])
+	if kimi["name"] != "kimi-k3.1-pro" {
+		t.Errorf("name = %v, want the id the platform serves", kimi["name"])
 	}
-	limit, ok := gemma["limit"].(map[string]any)
-	if !ok {
-		t.Fatal("gemma4 still has no limit, so an upgrade fixes nothing for anyone already configured")
+	limit := kimi["limit"].(map[string]any)
+	if int(limit["context"].(float64)) != 262_144 || int(limit["output"].(float64)) != 65_536 {
+		t.Errorf("limit = %v, want the platform's 262144/65536", limit)
 	}
-	if got, want := int(limit["context"].(float64)), 262_144; got != want {
-		t.Errorf("context %d, want %d", got, want)
+	if _, ok := kimi["modalities"].(map[string]any); !ok {
+		t.Error("modalities were not filled in")
 	}
-	if _, ok := models["glm5.3-flash"]; !ok {
-		t.Error("glm5.3-flash was not added to an existing config")
+	if opts, _ := kimi["options"].(map[string]any); opts["temperature"] != 0.2 {
+		t.Errorf("the member's own key was lost: %v", kimi)
+	}
+	if _, ok := models["bare-model"]; !ok {
+		t.Error("bare-model was not added to an existing config")
+	}
+	other := providers["other"].(map[string]any)["models"].(map[string]any)["kimi-k3.1-pro"].(map[string]any)
+	if other["limit"].(map[string]any)["context"].(float64) != 5 {
+		t.Error("an entry under another provider was touched")
 	}
 }
 
-// mimo-v2.5 left the cluster for mimo-v2.6-flash. A merge that only ever adds
-// kept it in the picker of everyone already configured, where choosing it
-// answers 401 "does not have access to the requested model".
-func TestOpencodeConfigTakesOutARetiredModel(t *testing.T) {
+// A model the platform stops serving must not stay in the picker of everyone
+// already configured, where choosing it answers 401.
+func TestOpencodeConfigDropsAModelNoLongerServed(t *testing.T) {
 	path := tempConfig(t, "opencode.json")
-	old := `{
-	  "provider": {
-	    "nan": {
-	      "npm": "@ai-sdk/openai-compatible",
-	      "options": { "baseURL": "https://api.nan.builders/v1", "apiKey": "sk-old" },
-	      "models": {
-	        "mimo-v2.5": { "name": "Xiaomi MiMo V2.5" },
-	        "gemma4": { "name": "my own name for it" }
-	      }
-	    }
-	  }
-	}`
-	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+	if err := writeOpencodeConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeOpencodeConfig(path, testKey); err != nil {
+	if err := writeOpencodeConfig(path, testKey, withoutModel(testModels, "kimi-k3.1-pro")); err != nil {
 		t.Fatal(err)
 	}
 	models := readJSON(t, path)["provider"].(map[string]any)["nan"].(map[string]any)["models"].(map[string]any)
-	for _, id := range catalog.Retired {
-		if _, ok := models[id]; ok {
-			t.Errorf("%s is still offered, and the cluster no longer serves it", id)
+	if _, ok := models["kimi-k3.1-pro"]; ok {
+		t.Error("kimi-k3.1-pro is still offered, and the platform no longer serves it")
+	}
+	if _, ok := models["glm5.3"]; !ok {
+		t.Error("dropping one model took another with it")
+	}
+}
+
+// withoutModel is the catalogue as it is after the platform stops serving id.
+func withoutModel(models []catalog.Model, id string) []catalog.Model {
+	var out []catalog.Model
+	for _, m := range models {
+		if m.ID != id {
+			out = append(out, m)
 		}
 	}
-	if _, ok := models["mimo-v2.6-flash"]; !ok {
-		t.Error("mimo-v2.6-flash was not added")
-	}
-	if models["gemma4"].(map[string]any)["name"] != "my own name for it" {
-		t.Error("taking out the retired model touched an entry the member owns")
-	}
+	return out
 }
 
 func TestOpencodeConfigKeepsWhatItDoesNotOwn(t *testing.T) {
@@ -204,7 +205,7 @@ func TestOpencodeConfigKeepsWhatItDoesNotOwn(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"theme":"tokyonight","provider":{}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeOpencodeConfig(path, testKey); err != nil {
+	if err := writeOpencodeConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	if theme := readJSON(t, path)["theme"]; theme != "tokyonight" {
@@ -233,12 +234,12 @@ func piModels(t *testing.T, path string) map[string]map[string]any {
 
 func TestPiConfigIsAModelsJsonWithTheRealWindows(t *testing.T) {
 	path := tempConfig(t, "models.json")
-	if err := writePiConfig(path, testKey); err != nil {
+	if err := writePiConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 
 	written := piModels(t, path)
-	for _, m := range catalog.ChatModels() {
+	for _, m := range testModels {
 		entry, ok := written[m.ID]
 		if !ok {
 			t.Errorf("%s: missing from the Pi provider", m.ID)
@@ -257,7 +258,7 @@ func TestPiConfigIsAModelsJsonWithTheRealWindows(t *testing.T) {
 
 func TestPiConfigWritesOnlyTheModalitiesPiAccepts(t *testing.T) {
 	path := tempConfig(t, "models.json")
-	if err := writePiConfig(path, testKey); err != nil {
+	if err := writePiConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	// Pi's schema is `("text" | "image")[]`. A third value fails validation and
@@ -278,7 +279,7 @@ func TestPiConfigLeavesOtherProvidersAlone(t *testing.T) {
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writePiConfig(path, testKey); err != nil {
+	if err := writePiConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	providers := readJSON(t, path)["providers"].(map[string]any)
@@ -305,7 +306,7 @@ func TestPiConfigIsRecognisedAsConfigured(t *testing.T) {
 	if isNaNConfigured("Pi", path) {
 		t.Error("an absent file reads as configured")
 	}
-	if err := writePiConfig(path, testKey); err != nil {
+	if err := writePiConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	if !isNaNConfigured("Pi", path) {
@@ -315,7 +316,7 @@ func TestPiConfigIsRecognisedAsConfigured(t *testing.T) {
 
 func TestCodexConfigSpeaksAWireProtocolCodexStillLoads(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
@@ -330,7 +331,7 @@ func TestCodexConfigSpeaksAWireProtocolCodexStillLoads(t *testing.T) {
 	if !strings.Contains(content, `wire_api = "responses"`) {
 		t.Error(`wire_api is not "responses", so Codex will refuse to start`)
 	}
-	model, _ := catalog.Get(catalog.Coding)
+	model := testModels[0]
 	if !strings.Contains(content, `model = "`+model.ID+`"`) {
 		t.Errorf("the default model is not %s", model.ID)
 	}
@@ -360,7 +361,7 @@ wire_api = "chat"
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
@@ -393,7 +394,7 @@ wire_api = "responses"
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
@@ -406,7 +407,8 @@ wire_api = "responses"
 // a root key: it becomes a key of that table, where Codex never looks for it.
 func TestCodexContextWindowLandsInTheRootTable(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	existing := `model = "gpt-5"
+	existing := `model = "kimi-k3.1-pro"
+model_provider = "nan"
 
 [projects."/home/member/repo"]
 trust_level = "trusted"
@@ -414,7 +416,7 @@ trust_level = "trusted"
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
@@ -423,6 +425,10 @@ trust_level = "trusted"
 	window := strings.Index(content, "model_context_window")
 	if window < 0 {
 		t.Fatal("no model_context_window was written at all")
+	}
+	// The window belongs to the root model, not to the first model of the list.
+	if !strings.Contains(content, "model_context_window = 262144 "+codexWindowMark) {
+		t.Errorf("the root window is not the root model's, marked:\n%s", content)
 	}
 	if header := strings.Index(content, "[projects."); window > header {
 		t.Errorf("model_context_window is inside a table, not the root:\n%s", content)
@@ -438,7 +444,7 @@ func TestCodexConfigDoesNotTouchAnExistingChoice(t *testing.T) {
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
@@ -458,26 +464,28 @@ func TestCodexConfigDoesNotTouchAnExistingChoice(t *testing.T) {
 // which is both a duplicate key and, after a [projects.*] header, not a root
 // key at all. Repairing only the wire_api left that member exactly as stuck.
 func TestCodexConfigOpensAFileItLeftUnloadable(t *testing.T) {
-	codexModel, _ := catalog.Get(catalog.Coding)
 	path := tempConfig(t, "config.toml")
-	existing := fmt.Sprintf(`model = "gpt-5"
+	// The window lines are what older versions wrote: unmarked, and always
+	// 1048576, so the literal stays.
+	existing := `model = "kimi-k3.1-pro"
+model_provider = "nan"
 
 [projects."/home/member/repo"]
 trust_level = "trusted"
 
-model_context_window = %d
+model_context_window = 1048576
 
-model_context_window = %d
+model_context_window = 1048576
 
 [model_providers.nan]
 name = "NaN"
 base_url = "https://api.nan.builders/v1"
 wire_api = "chat"
-`, codexModel.Context, codexModel.Context)
+`
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
@@ -513,7 +521,7 @@ wire_api = "responses"
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
@@ -526,8 +534,8 @@ wire_api = "responses"
 // no meaning without it, and leaving two of them behind would hand back a
 // file Codex does not open with nothing in it left to blame.
 func TestCodexRemovalTakesTheWindowItWrote(t *testing.T) {
-	codexModel, _ := catalog.Get(catalog.Coding)
 	path := tempConfig(t, "config.toml")
+	// An unmarked window, as every version before the mark wrote it.
 	existing := fmt.Sprintf(`model = "gpt-5"
 
 [projects."/home/member/repo"]
@@ -538,7 +546,7 @@ model_context_window = %d
 [model_providers.nan]
 base_url = "https://api.nan.builders/v1"
 wire_api = "responses"
-`, codexModel.Context)
+`, 1048576)
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -565,12 +573,12 @@ wire_api = "responses"
 // travel with the model it belongs to.
 func TestCodexProfilesGiveEveryModelItsOwnWindow(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
 
-	for _, m := range catalog.ChatModels() {
+	for _, m := range testModels {
 		profile := filepath.Join(home, codexProfileName(m.ID)+".config.toml")
 		data, err := os.ReadFile(profile)
 		if err != nil {
@@ -590,21 +598,25 @@ func TestCodexProfilesGiveEveryModelItsOwnWindow(t *testing.T) {
 	}
 }
 
-func TestCodexProfilesOfARetiredModelGoAway(t *testing.T) {
+func TestCodexProfileOfAModelRemovedFromTheAPIGoesAway(t *testing.T) {
 	path := tempConfig(t, "config.toml")
 	home := filepath.Dir(path)
-	stale := filepath.Join(home, "nan-mimo-v25.config.toml")
 	mine := filepath.Join(home, "work.config.toml")
-	for _, f := range []string{stale, mine} {
-		if err := os.WriteFile(f, []byte("model = \"x\"\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := os.WriteFile(mine, []byte("model = \"x\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(stale); !os.IsNotExist(err) {
-		t.Error("nan-mimo-v25 is still there, and `--profile nan-mimo-v25` answers 401")
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
+		t.Fatal(err)
+	}
+	kimi := filepath.Join(home, codexProfileName("kimi-k3.1-pro")+".config.toml")
+	if _, err := os.Stat(kimi); err != nil {
+		t.Fatalf("the profile was not written in the first place: %v", err)
+	}
+	if err := writeCodexConfig(path, testKey, withoutModel(testModels, "kimi-k3.1-pro")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(kimi); !os.IsNotExist(err) {
+		t.Error("the profile of a model the platform stopped serving is still there, and `--profile` answers 401")
 	}
 	if _, err := os.Stat(mine); err != nil {
 		t.Errorf("a profile the member wrote was removed: %v", err)
@@ -618,11 +630,11 @@ func TestCodexProfilesOfARetiredModelGoAway(t *testing.T) {
 // ends the turn empty. The profiles are what keeps those tools out.
 func TestCodexProfilesLeaveOutTheToolsTheClusterCannotStream(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
-	for _, m := range catalog.ChatModels() {
+	for _, m := range testModels {
 		data, err := os.ReadFile(filepath.Join(home, codexProfileName(m.ID)+".config.toml"))
 		if err != nil {
 			t.Fatal(err)
@@ -642,7 +654,7 @@ func TestCodexProfilesLeaveOutTheToolsTheClusterCannotStream(t *testing.T) {
 }
 
 func TestCodexProfileNamesAreNamesCodexAccepts(t *testing.T) {
-	for _, m := range catalog.ChatModels() {
+	for _, m := range testModels {
 		name := codexProfileName(m.ID)
 		if strings.Contains(name, ".") {
 			t.Errorf("%s -> %s: Codex rejects this outright", m.ID, name)
@@ -660,11 +672,11 @@ func TestCodexProfileNamesAreNamesCodexAccepts(t *testing.T) {
 // eight more files to rotate, and eight more to leak.
 func TestCodexProfilesCarryNoKey(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
-	for _, m := range catalog.ChatModels() {
+	for _, m := range testModels {
 		data, err := os.ReadFile(filepath.Join(home, codexProfileName(m.ID)+".config.toml"))
 		if err != nil {
 			t.Fatal(err)
@@ -677,7 +689,7 @@ func TestCodexProfilesCarryNoKey(t *testing.T) {
 
 func TestCodexRemovalTakesTheProfilesAndNothingElse(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
@@ -690,7 +702,7 @@ func TestCodexRemovalTakesTheProfilesAndNothingElse(t *testing.T) {
 	if err := removeCodexConfig(path); err != nil {
 		t.Fatal(err)
 	}
-	for _, m := range catalog.ChatModels() {
+	for _, m := range testModels {
 		profile := filepath.Join(home, codexProfileName(m.ID)+".config.toml")
 		if _, err := os.Stat(profile); !os.IsNotExist(err) {
 			t.Errorf("%s: the profile outlived the disconnect", m.ID)
@@ -708,7 +720,7 @@ func TestCodexRemovalTakesTheProfilesAndNothingElse(t *testing.T) {
 // for a model they no longer have.
 func TestCodexRemovalTakesTheWindowFromTheRootTable(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	if err := removeCodexConfig(path); err != nil {
@@ -754,7 +766,7 @@ wire_api = "responses"
 // provider that no longer resolves.
 func TestCodexRemovalTakesTheProfilesWithNoSectionLeft(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
@@ -765,7 +777,7 @@ func TestCodexRemovalTakesTheProfilesWithNoSectionLeft(t *testing.T) {
 	if err := removeCodexConfig(path); err != nil {
 		t.Fatal(err)
 	}
-	for _, m := range catalog.ChatModels() {
+	for _, m := range testModels {
 		profile := filepath.Join(home, codexProfileName(m.ID)+".config.toml")
 		if _, err := os.Stat(profile); !os.IsNotExist(err) {
 			t.Errorf("%s: the profile outlived a disconnect with no section to find", m.ID)
@@ -776,7 +788,7 @@ func TestCodexRemovalTakesTheProfilesWithNoSectionLeft(t *testing.T) {
 // Same, with no config.toml at all.
 func TestCodexRemovalTakesTheProfilesWithNoConfigLeft(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
@@ -786,7 +798,7 @@ func TestCodexRemovalTakesTheProfilesWithNoConfigLeft(t *testing.T) {
 	if err := removeCodexConfig(path); err != nil {
 		t.Fatal(err)
 	}
-	for _, m := range catalog.ChatModels() {
+	for _, m := range testModels {
 		profile := filepath.Join(home, codexProfileName(m.ID)+".config.toml")
 		if _, err := os.Stat(profile); !os.IsNotExist(err) {
 			t.Errorf("%s: the profile outlived a disconnect with no config left", m.ID)
@@ -802,7 +814,6 @@ func TestCodexRemovalTakesTheProfilesWithNoConfigLeft(t *testing.T) {
 // The member here is one who is already connected - the only one the pruning
 // runs for - and who has since written a profile of their own.
 func TestCodexConfigLeavesAMemberProfileWindowAlone(t *testing.T) {
-	codexModel, _ := catalog.Get(catalog.Coding)
 	path := tempConfig(t, "config.toml")
 	existing := fmt.Sprintf(`model = "gpt-5"
 
@@ -813,11 +824,11 @@ wire_api = "chat"
 [profiles.big]
 model = "gpt-5"
 model_context_window = %d
-`, codexModel.Context)
+`, 1048576)
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
@@ -840,23 +851,28 @@ model_context_window = %d
 
 func TestFactoryConfigMarksWhatCannotSeeImages(t *testing.T) {
 	path := tempConfig(t, "settings.json")
-	if err := writeFactoryConfig(path, testKey); err != nil {
+	if err := writeFactoryConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	cfg := readJSON(t, path)
 	custom := cfg["customModels"].([]any)
-	if len(custom) != len(catalog.ChatModels()) {
-		t.Errorf("wrote %d models, the cluster serves %d", len(custom), len(catalog.ChatModels()))
+	if len(custom) != len(testModels) {
+		t.Errorf("wrote %d models, the cluster serves %d", len(custom), len(testModels))
 	}
 	for _, raw := range custom {
 		entry := raw.(map[string]any)
 		id := entry["model"].(string)
-		m, ok := catalog.Get(id)
-		if !ok {
+		var m catalog.Model
+		for _, candidate := range testModels {
+			if candidate.ID == id {
+				m = candidate
+			}
+		}
+		if m.ID == "" {
 			t.Errorf("%s: not a model the cluster serves", id)
 			continue
 		}
-		if got, want := entry["noImageSupport"].(bool), !m.Accepts(catalog.InputImage); got != want {
+		if got, want := entry["noImageSupport"].(bool), !m.Vision; got != want {
 			t.Errorf("%s: noImageSupport = %v, want %v", id, got, want)
 		}
 	}
@@ -873,45 +889,96 @@ func TestFactoryConfigMarksWhatCannotSeeImages(t *testing.T) {
 			defaultModel = entry["model"].(string)
 		}
 	}
-	if defaultModel != catalog.Default {
-		t.Errorf("default is %q, want %q, the model the quickstart recommends",
-			defaultModel, catalog.Default)
+	if defaultModel != testModels[0].ID {
+		t.Errorf("default is %q, want %q, the first model the platform lists",
+			defaultModel, testModels[0].ID)
 	}
 }
 
-func TestFactoryConfigTakesOutARetiredModel(t *testing.T) {
+func TestFactoryConfigDropsAModelNoLongerServed(t *testing.T) {
 	path := tempConfig(t, "settings.json")
 	old := `{"customModels":[
-	  {"model":"glm5.3-flash","id":"custom:GLM-5.3-Flash-(NaN)-0","index":0,"baseUrl":"https://api.nan.builders/v1","displayName":"GLM 5.3 Flash (NaN)","provider":"openai"},
-	  {"model":"mimo-v2.5","id":"custom:Xiaomi-MiMo-V2.5-(NaN)-1","index":1,"baseUrl":"https://api.nan.builders/v1","displayName":"Xiaomi MiMo V2.5 (NaN)","provider":"openai"},
+	  {"model":"glm5.3","id":"custom:glm5.3-(NaN)-0","index":0,"baseUrl":"https://api.nan.builders/v1","displayName":"glm5.3 (NaN)","provider":"openai","noImageSupport":false},
+	  {"model":"kimi-k3.1-pro","id":"custom:kimi-k3.1-pro-(NaN)-1","index":1,"baseUrl":"https://api.nan.builders/v1","displayName":"kimi-k3.1-pro (NaN)","provider":"openai"},
 	  {"model":"gpt-6.1-sol","id":"custom:mine-2","index":2,"baseUrl":"https://api.openai.com/v1","displayName":"mine","provider":"openai"}
 	]}`
 	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeFactoryConfig(path, testKey); err != nil {
+	if err := writeFactoryConfig(path, testKey, withoutModel(testModels, "kimi-k3.1-pro")); err != nil {
 		t.Fatal(err)
 	}
 	seen := map[string]bool{}
+	noImage := map[string]any{}
 	indexes := map[float64]string{}
 	for _, raw := range readJSON(t, path)["customModels"].([]any) {
 		entry := raw.(map[string]any)
 		id := entry["model"].(string)
 		seen[id] = true
+		noImage[id] = entry["noImageSupport"]
 		i := entry["index"].(float64)
 		if other, dup := indexes[i]; dup {
 			t.Errorf("%s and %s share index %v", id, other, i)
 		}
 		indexes[i] = id
 	}
-	if seen["mimo-v2.5"] {
-		t.Error("mimo-v2.5 is still offered, and the cluster no longer serves it")
+	if seen["kimi-k3.1-pro"] {
+		t.Error("kimi-k3.1-pro is still offered, and the platform no longer serves it")
 	}
-	if !seen["mimo-v2.6-flash"] {
-		t.Error("mimo-v2.6-flash was not added")
+	if !seen["bare-model"] {
+		t.Error("bare-model was not added")
 	}
 	if !seen["gpt-6.1-sol"] {
 		t.Error("a model the member added themselves was removed")
+	}
+	// glm5.3 was written without noImageSupport true; the platform says it
+	// cannot see, so the refresh brings it up to date.
+	if noImage["glm5.3"] != true {
+		t.Errorf("glm5.3 noImageSupport = %v, want true after the refresh", noImage["glm5.3"])
+	}
+}
+
+func TestFactoryDefaultMovesOffAModelNoLongerServed(t *testing.T) {
+	path := tempConfig(t, "settings.json")
+	old := `{"customModels":[
+	  {"model":"kimi-k3.1-pro","id":"custom:kimi-(NaN)-0","index":0,"baseUrl":"https://api.nan.builders/v1","displayName":"kimi-k3.1-pro (NaN)","provider":"openai","noImageSupport":false},
+	  {"model":"gpt-6.1-sol","id":"custom:mine-1","index":1,"baseUrl":"https://api.openai.com/v1","displayName":"mine","provider":"openai"}
+	],"sessionDefaultSettings":{"model":"custom:kimi-(NaN)-0","reasoningEffort":"high"}}`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFactoryConfig(path, testKey, withoutModel(testModels, "kimi-k3.1-pro")); err != nil {
+		t.Fatal(err)
+	}
+	cfg := readJSON(t, path)
+	sds := cfg["sessionDefaultSettings"].(map[string]any)
+	var want any
+	for _, raw := range cfg["customModels"].([]any) {
+		e := raw.(map[string]any)
+		if e["model"] == testModels[0].ID {
+			want = e["id"]
+		}
+	}
+	if sds["model"] != want || want == nil {
+		t.Errorf("default = %v, want the entry of %s (%v)", sds["model"], testModels[0].ID, want)
+	}
+	if sds["reasoningEffort"] != "high" {
+		t.Errorf("reasoningEffort = %v, the member's setting was lost", sds["reasoningEffort"])
+	}
+
+	// A default on an entry that is not ours stays where it is.
+	other := `{"customModels":[
+	  {"model":"kimi-k3.1-pro","id":"custom:kimi-(NaN)-0","index":0,"baseUrl":"https://api.nan.builders/v1","displayName":"kimi-k3.1-pro (NaN)","provider":"openai"},
+	  {"model":"gpt-6.1-sol","id":"custom:mine-1","index":1,"baseUrl":"https://api.openai.com/v1","displayName":"mine","provider":"openai"}
+	],"sessionDefaultSettings":{"model":"custom:mine-1"}}`
+	if err := os.WriteFile(path, []byte(other), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFactoryConfig(path, testKey, withoutModel(testModels, "kimi-k3.1-pro")); err != nil {
+		t.Fatal(err)
+	}
+	if got := readJSON(t, path)["sessionDefaultSettings"].(map[string]any)["model"]; got != "custom:mine-1" {
+		t.Errorf("a default on the member's own entry moved to %v", got)
 	}
 }
 
@@ -922,9 +989,9 @@ func TestEveryModelIsWrittenTheSameEverywhere(t *testing.T) {
 	factoryPath := filepath.Join(dir, "settings.json")
 	piPath := filepath.Join(dir, "models.json")
 	for _, err := range []error{
-		writeOpencodeConfig(opencodePath, testKey),
-		writeFactoryConfig(factoryPath, testKey),
-		writePiConfig(piPath, testKey),
+		writeOpencodeConfig(opencodePath, testKey, testModels),
+		writeFactoryConfig(factoryPath, testKey, testModels),
+		writePiConfig(piPath, testKey, testModels),
 	} {
 		if err != nil {
 			t.Fatal(err)
@@ -941,7 +1008,7 @@ func TestEveryModelIsWrittenTheSameEverywhere(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, m := range catalog.ChatModels() {
+	for _, m := range testModels {
 		if _, ok := opencode[m.ID]; !ok {
 			t.Errorf("%s: missing from opencode", m.ID)
 		}
@@ -1010,7 +1077,7 @@ func TestConfigureToolsWritesEveryEnabledTool(t *testing.T) {
 		}
 	}
 
-	msg, written, failed := configureTools(testKey, nil)
+	msg, written, failed := configureTools(testKey, nil, testModels)
 	if !strings.Contains(msg, "5 added") {
 		t.Fatalf("configureTools said %q, want the five tools written", msg)
 	}
@@ -1049,7 +1116,7 @@ func TestConfigureToolsWritesEveryEnabledTool(t *testing.T) {
 	}
 
 	// And unticking a tool takes only that one out.
-	msg, _, _ = configureTools(testKey, map[string]bool{"Pi": false})
+	msg, _, _ = configureTools(testKey, map[string]bool{"Pi": false}, testModels)
 	if !strings.Contains(msg, "1 removed") {
 		t.Errorf("configureTools said %q, want Pi removed", msg)
 	}
@@ -1061,34 +1128,38 @@ func TestConfigureToolsWritesEveryEnabledTool(t *testing.T) {
 	}
 }
 
-func TestModelsTabShowsCallableIds(t *testing.T) {
-	// GET /v1/models answers with the ids a request can name. The platform's
-	// /agents/models answers with deployment names instead - it carries
-	// `deepseek-v4-flash-fallback`, `glm5.3-fallback` and `glm5.2`, none of
-	// which a member can put in a `model` field - and that is what this tab
-	// used to list.
-	out := renderModels([]string{"deepseek-v4-flash", "kokoro", "glm5.3", "minimax-h3"}, nil, newLayout(80, 24))
+func TestModelsTabLabelsIdsFromThePlatform(t *testing.T) {
+	// GET /v1/models answers with the ids a request can name; the platform
+	// says what each one is for. An id it does not list shows as unknown.
+	platform := []api.AgentModel{
+		{Name: "deepseek-v4-flash", Mode: "chat"},
+		{Name: "bge-m3", Mode: "embedding"},
+		{Name: "kokoro", Mode: "audio_speech"},
+	}
+	ids := []string{"deepseek-v4-flash", "bge-m3", "kokoro", "minimax-h3"}
+	out := renderModels(labelIDs(ids, platform), nil, newLayout(80, 24))
 
 	for _, want := range []string{
 		"deepseek-v4-flash", "chat",
-		"kokoro", "text to speech",
-		"glm5.3", "premium",
-		// An id the cluster serves and this catalogue has never heard of has to
-		// show, not disappear: that is how an undocumented model gets noticed.
+		"bge-m3", "embedding",
+		"kokoro", "audio speech",
+		// An id the platform does not list has to show, not disappear: that is
+		// how an undocumented model gets noticed.
 		"minimax-h3", "unknown",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the Models tab does not mention %q", want)
 		}
 	}
+	if strings.Contains(out, "premium") {
+		t.Error("the Models tab still labels a model premium")
+	}
 }
 
 func TestModelsTabStillReadsThePlatformShape(t *testing.T) {
 	// Without an API key there is no /v1/models to ask, and the tab falls back
 	// to what the platform returns.
-	data := map[string]any{"models": []any{
-		map[string]any{"name": "deepseek-v4-flash", "mode": "chat"},
-	}}
+	data := []api.AgentModel{{Name: "deepseek-v4-flash", Mode: "chat"}}
 	if out := renderModels(data, nil, newLayout(80, 24)); !strings.Contains(out, "deepseek-v4-flash") {
 		t.Error("the fallback list renders nothing")
 	}
@@ -1199,7 +1270,7 @@ func TestHomeSaysHowToMoveAround(t *testing.T) {
 // squarely in the failure the docs call the most common one.
 func TestPiConfigWritesTheDefaultsOrPiStillAnswers401(t *testing.T) {
 	path := tempConfig(t, "models.json")
-	if err := writePiConfig(path, testKey); err != nil {
+	if err := writePiConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1207,8 +1278,34 @@ func TestPiConfigWritesTheDefaultsOrPiStillAnswers401(t *testing.T) {
 	if got := settings["defaultProvider"]; got != "nan" {
 		t.Errorf("defaultProvider = %v, want nan: Pi calls its factory provider otherwise", got)
 	}
-	if got := settings["defaultModel"]; got != catalog.Coding {
-		t.Errorf("defaultModel = %v, want %s", got, catalog.Coding)
+	if got := settings["defaultModel"]; got != testModels[0].ID {
+		t.Errorf("defaultModel = %v, want %s", got, testModels[0].ID)
+	}
+}
+
+func TestPiDefaultMovesOffAModelNoLongerServed(t *testing.T) {
+	cases := []struct {
+		name, settings, wantProvider, wantModel string
+	}{
+		{"ours, model gone", `{"defaultProvider":"nan","defaultModel":"removed-model"}`, "nan", testModels[0].ID},
+		{"ours, model served", `{"defaultProvider":"nan","defaultModel":"kimi-k3.1-pro"}`, "nan", "kimi-k3.1-pro"},
+		{"somebody else's", `{"defaultProvider":"openai","defaultModel":"removed-model"}`, "openai", "removed-model"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			settingsPath := filepath.Join(dir, "settings.json")
+			if err := os.WriteFile(settingsPath, []byte(tc.settings), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := writePiConfig(filepath.Join(dir, "models.json"), testKey, testModels); err != nil {
+				t.Fatal(err)
+			}
+			settings := readJSON(t, settingsPath)
+			if settings["defaultProvider"] != tc.wantProvider || settings["defaultModel"] != tc.wantModel {
+				t.Errorf("default = %v/%v, want %s/%s", settings["defaultProvider"], settings["defaultModel"], tc.wantProvider, tc.wantModel)
+			}
+		})
 	}
 }
 
@@ -1222,7 +1319,7 @@ func TestPiConfigKeepsTheSettingsItDoesNotOwn(t *testing.T) {
 	if err := os.WriteFile(settingsPath, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writePiConfig(path, testKey); err != nil {
+	if err := writePiConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1243,7 +1340,7 @@ func TestPiRemovalTakesTheDefaultItWrote(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "models.json")
 	settingsPath := filepath.Join(dir, "settings.json")
-	if err := writePiConfig(path, testKey); err != nil {
+	if err := writePiConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	if err := removePiConfig(path); err != nil {
@@ -1306,7 +1403,7 @@ func TestHermesIsRefusedWhenItDoesNotResolveTheReference(t *testing.T) {
 	}
 	t.Cleanup(func() { readHermesConfig = original })
 
-	err := writeHermesConfig(t.TempDir(), testKey)
+	err := writeHermesConfig(t.TempDir(), testKey, testModels)
 	if err == nil {
 		t.Fatal("a Hermes that never resolved the key was reported as configured")
 	}
@@ -1327,14 +1424,14 @@ func TestHermesThatCannotAnswerIsNotTreatedAsBroken(t *testing.T) {
 	}
 	t.Cleanup(func() { readHermesConfig = original })
 
-	if err := writeHermesConfig(t.TempDir(), testKey); err != nil {
+	if err := writeHermesConfig(t.TempDir(), testKey, testModels); err != nil {
 		t.Errorf("an unanswerable check failed the whole step: %v", err)
 	}
 }
 
 func TestHermesIsConfiguredThroughItsOwnConfigCommand(t *testing.T) {
 	calls := recordHermes(t)
-	if err := writeHermesConfig(t.TempDir(), testKey); err != nil {
+	if err := writeHermesConfig(t.TempDir(), testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1345,7 +1442,7 @@ func TestHermesIsConfiguredThroughItsOwnConfigCommand(t *testing.T) {
 		"model.base_url": "https://api.nan.builders/v1",
 		// The reference, not the secret. The test below is the why.
 		"model.api_key": hermesKeyRef,
-		"model.default": catalog.Coding,
+		"model.default": testModels[0].ID,
 	}
 	got := map[string]string{}
 	for _, c := range *calls {
@@ -1373,7 +1470,7 @@ func TestHermesIsConfiguredThroughItsOwnConfigCommand(t *testing.T) {
 func TestHermesNeverReceivesTheKeyAsAnArgument(t *testing.T) {
 	calls := recordHermes(t)
 	home := t.TempDir()
-	if err := writeHermesConfig(home, testKey); err != nil {
+	if err := writeHermesConfig(home, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1403,7 +1500,7 @@ func TestHermesEnvKeepsEverythingElseInTheFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := writeHermesConfig(home, testKey); err != nil {
+	if err := writeHermesConfig(home, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	after := readFile(t, envPath)
@@ -1434,7 +1531,7 @@ func TestHermesEnvKeepsEverythingElseInTheFile(t *testing.T) {
 // open with.
 func TestHermesIsNotSentAModelCatalogue(t *testing.T) {
 	calls := recordHermes(t)
-	if err := writeHermesConfig(t.TempDir(), testKey); err != nil {
+	if err := writeHermesConfig(t.TempDir(), testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range *calls {
@@ -1511,7 +1608,7 @@ func TestHermesConfigAgainstTheRealBinary(t *testing.T) {
 	// Never the member's own Hermes: HERMES_HOME is what the writer passes to
 	// every call, so the whole exchange lands in a directory of this test's.
 	home := t.TempDir()
-	if err := writeHermesConfig(home, testKey); err != nil {
+	if err := writeHermesConfig(home, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1520,7 +1617,7 @@ func TestHermesConfigAgainstTheRealBinary(t *testing.T) {
 		t.Fatalf("hermes wrote no config: %v", err)
 	}
 	written := string(data)
-	for _, want := range []string{"provider: custom", "base_url: https://api.nan.builders/v1", "default: " + catalog.Coding, hermesKeyRef} {
+	for _, want := range []string{"provider: custom", "base_url: https://api.nan.builders/v1", "default: " + testModels[0].ID, hermesKeyRef} {
 		if !strings.Contains(written, want) {
 			t.Errorf("config.yaml has no %q:\n%s", want, written)
 		}
@@ -2682,7 +2779,7 @@ func TestOneToolFailingDoesNotLoseTheOthers(t *testing.T) {
 		}
 	}
 
-	msg, written, failed := configureTools(testKey, nil)
+	msg, written, failed := configureTools(testKey, nil, testModels)
 
 	if !strings.Contains(msg, "4 added") {
 		t.Errorf("the message is %q, and does not say what worked", msg)
@@ -2763,7 +2860,7 @@ func TestARefusedKeyOpensTheFieldAgain(t *testing.T) {
 
 func TestCodexProfilesPointAtACatalogOfTheClustersModels(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
@@ -2782,7 +2879,7 @@ func TestCodexProfilesPointAtACatalogOfTheClustersModels(t *testing.T) {
 	for _, e := range cat.Models {
 		bySlug[e["slug"].(string)] = e
 	}
-	for _, m := range catalog.ChatModels() {
+	for _, m := range testModels {
 		e, ok := bySlug[m.ID]
 		if !ok {
 			t.Errorf("%s is not in the catalogue, so /model cannot reach it", m.ID)
@@ -2848,7 +2945,7 @@ func TestCodexCatalogPromptIsTheOneCodexAlreadySent(t *testing.T) {
 
 func TestCodexRemovalTakesTheCatalog(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	if err := removeCodexConfig(path); err != nil {
@@ -2865,7 +2962,7 @@ func TestCodexRemovalTakesTheCatalog(t *testing.T) {
 // leaves nothing of NaN behind - and no file, since there is nothing else in it.
 func TestCodexRemovalOnAFileItCreatedLeavesNothing(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	if err := removeCodexConfig(path); err != nil {
@@ -2885,7 +2982,7 @@ func TestCodexRemovalOnAFileItCreatedLeavesNothing(t *testing.T) {
 // NaN go.
 func TestCodexRemovalKeepsWhatTheMemberAddedAfterUs(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	theirs := "\n[model_providers.mine]\nname = \"Mine\"\nbase_url = \"https://example.invalid/v1\"\n\n" +
@@ -2912,7 +3009,7 @@ func TestCodexRemovalKeepsTheMembersOwnProvider(t *testing.T) {
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	if err := removeCodexConfig(path); err != nil {
@@ -2962,16 +3059,16 @@ func TestCodexRemovalRefusesARootItCannotClear(t *testing.T) {
 // while config.toml still names them.
 func TestCodexRemovalRefusalKeepsProfilesAndCatalog(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
 	before, _ := os.ReadDir(home)
 	// Turn the root model into a multi-line string the line edit cannot take.
 	content := readFile(t, path)
-	codexModel, _ := catalog.Get(catalog.Coding)
-	content = strings.Replace(content, fmt.Sprintf("model = %q", codexModel.ID),
-		"model = \"\"\"\n"+codexModel.ID+"\n\"\"\"", 1)
+	id := testModels[0].ID
+	content = strings.Replace(content, fmt.Sprintf("model = %q", id),
+		"model = \"\"\"\n"+id+"\n\"\"\"", 1)
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -2984,6 +3081,37 @@ func TestCodexRemovalRefusalKeepsProfilesAndCatalog(t *testing.T) {
 	}
 	if got := readFile(t, path); got != content {
 		t.Errorf("config.toml was changed:\n%s", got)
+	}
+}
+
+// The file the old appending bug left: the same unmarked window twice at the
+// root, which Codex refuses as a duplicate key. The windows are ours (the
+// file runs on us), and once they are out the root parses again and goes
+// too, so the disconnect leaves nothing behind rather than a root provider
+// naming a section that is gone.
+func TestCodexRemovalClearsARootBehindADuplicateLegacyWindow(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	in := "model = \"glm5.3-flash\"\nmodel_provider = \"nan\"\nmodel_context_window = 1048576\nmodel_context_window = 1048576\n\n" +
+		"[model_providers.nan]\nname = \"NaN\"\nbase_url = \"https://api.nan.builders/v1\"\nwire_api = \"responses\"\n"
+	if err := os.WriteFile(path, []byte(in), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCodexConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(path); err == nil {
+		t.Errorf("config.toml outlived a disconnect with nothing of the member's in it:\n%s", data)
+	}
+}
+
+// An unmarked legacy window counts as ours beside our section however its
+// header is quoted, and not beside a provider section of the member's.
+func TestCodexLegacyWindowIsOursUnderAQuotedSection(t *testing.T) {
+	if !codexLegacyWindowIsOurs([]byte("model_context_window = 1048576\n\n[model_providers.\"nan\"]\nbase_url = \"https://api.nan.builders/v1\"\n")) {
+		t.Error("a quoted [model_providers.\"nan\"] section was not read as ours")
+	}
+	if codexLegacyWindowIsOurs([]byte("model_context_window = 1048576\n\n[model_providers.mine]\nbase_url = \"https://example.invalid/v1\"\n")) {
+		t.Error("the member's own provider section was read as ours")
 	}
 }
 
@@ -3041,9 +3169,9 @@ func assertCodexTOML(t *testing.T, content string) {
 	}
 }
 
-// qwen3.8-flash went out at 262,144 when it is served at 1,048,576. An
-// existing opencode entry with that exact figure is one this CLI wrote.
-func TestOpencodeConfigCorrectsAWindowWeGotWrong(t *testing.T) {
+// The platform's window is the truth, whatever an earlier run (or an older
+// version) wrote: the entry is brought up to it.
+func TestOpencodeConfigFollowsThePlatformWindow(t *testing.T) {
 	path := tempConfig(t, "opencode.json")
 	old := `{
 	  "provider": {
@@ -3051,8 +3179,7 @@ func TestOpencodeConfigCorrectsAWindowWeGotWrong(t *testing.T) {
 	      "npm": "@ai-sdk/openai-compatible",
 	      "options": { "baseURL": "https://api.nan.builders/v1", "apiKey": "sk-old" },
 	      "models": {
-	        "qwen3.8-flash": { "name": "Qwen 3.8 Flash", "limit": { "context": 262144, "output": 32768 } },
-	        "gemma4": { "name": "Gemma 4", "limit": { "context": 100000, "output": 65536 } }
+	        "kimi-k3.1-pro": { "name": "Kimi", "limit": { "context": 100000, "output": 32768 } }
 	      }
 	    }
 	  }
@@ -3060,18 +3187,16 @@ func TestOpencodeConfigCorrectsAWindowWeGotWrong(t *testing.T) {
 	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeOpencodeConfig(path, testKey); err != nil {
+	if err := writeOpencodeConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	models := readJSON(t, path)["provider"].(map[string]any)["nan"].(map[string]any)["models"].(map[string]any)
-	limit := func(id string) int {
-		return int(models[id].(map[string]any)["limit"].(map[string]any)["context"].(float64))
+	limit := models["kimi-k3.1-pro"].(map[string]any)["limit"].(map[string]any)
+	if got := int(limit["context"].(float64)); got != 262_144 {
+		t.Errorf("kimi-k3.1-pro context %d, want the platform's 262144", got)
 	}
-	if got := limit("qwen3.8-flash"); got != 1_048_576 {
-		t.Errorf("qwen3.8-flash context %d, still compacting at a quarter of the window", got)
-	}
-	if got := limit("gemma4"); got != 100_000 {
-		t.Errorf("gemma4 context %d, a window the member set was overwritten", got)
+	if got := int(limit["output"].(float64)); got != 65_536 {
+		t.Errorf("kimi-k3.1-pro output %d, want the platform's 65536", got)
 	}
 }
 
@@ -3115,7 +3240,7 @@ func TestARootNaNProviderWithNoSectionCountsAsConfigured(t *testing.T) {
 
 func TestUntickingCodexRepairsAnOrphanedRootProvider(t *testing.T) {
 	path := codexHomeWith(t, codexOrphanRoot)
-	msg, _, failed := configureTools(testKey, map[string]bool{"Codex": false})
+	msg, _, failed := configureTools(testKey, map[string]bool{"Codex": false}, testModels)
 	if len(failed) != 0 || !strings.Contains(msg, "1 removed") {
 		t.Fatalf("got %q, failed %v", msg, failed)
 	}
@@ -3128,7 +3253,7 @@ func TestUntickingCodexRepairsAnOrphanedRootProvider(t *testing.T) {
 
 func TestKeepingCodexTickedRepairsAnOrphanedRootProvider(t *testing.T) {
 	path := codexHomeWith(t, codexOrphanRoot)
-	if _, _, failed := configureTools(testKey, nil); len(failed) != 0 {
+	if _, _, failed := configureTools(testKey, nil, testModels); len(failed) != 0 {
 		t.Fatalf("failed: %v", failed)
 	}
 	got := readFile(t, path)
@@ -3197,11 +3322,11 @@ func TestCodexSubAgentSwitchFollowsTheVersion(t *testing.T) {
 
 func TestCodexProfileGolden(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
-	m := catalog.ChatModels()[0]
+	m := testModels[0]
 	got := readFile(t, filepath.Join(home, codexProfileName(m.ID)+".config.toml"))
 	want := fmt.Sprintf(`# Written by the NaN CLI. Disconnecting Codex removes it.
 model = %q
@@ -3223,10 +3348,10 @@ enabled = false
 func TestCodexProfilesOnAnOlderCodexKeepMultiAgent(t *testing.T) {
 	withCodexVersion(t, "codex-cli 0.159.0")
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
-	m := catalog.ChatModels()[0]
+	m := testModels[0]
 	body := readFile(t, filepath.Join(filepath.Dir(path), codexProfileName(m.ID)+".config.toml"))
 	if !strings.Contains(body, "[features]\nmulti_agent = false") || strings.Contains(body, "[agents]") {
 		t.Errorf("profile for Codex 0.159:\n%s", body)
@@ -3239,15 +3364,15 @@ func TestCodexProfilesOnAnOlderCodexKeepMultiAgent(t *testing.T) {
 // search nor sub-agents.
 func TestCodexStarterConfigGolden(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
-	codexModel, _ := catalog.Get(catalog.Coding)
+	m := testModels[0]
 	want := fmt.Sprintf(`model = %q
 model_provider = "nan"
-model_context_window = %d
 model_catalog_json = %q
 web_search = "disabled"
+model_context_window = %d # nan-cli
 
 [agents]
 enabled = false
@@ -3257,7 +3382,7 @@ name = "NaN"
 base_url = "https://api.nan.builders/v1"
 experimental_bearer_token = %q
 wire_api = "responses"
-`, codexModel.ID, codexModel.Context, codexCatalogPath(filepath.Dir(path)), testKey)
+`, m.ID, codexCatalogPath(filepath.Dir(path)), m.Context, testKey)
 	got := readFile(t, path)
 	if got != want {
 		t.Errorf("config.toml:\ngot:\n%s\nwant:\n%s", got, want)
@@ -3265,7 +3390,7 @@ wire_api = "responses"
 	assertCodexTOML(t, got)
 
 	// A second configure changes nothing, byte for byte.
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	if again := readFile(t, path); again != got {
@@ -3281,7 +3406,7 @@ func TestCodexMemberRootGetsNoNaNOnlyKeys(t *testing.T) {
 	if err := os.WriteFile(path, []byte("model = \"gpt-5\"\nmodel_provider = \"openai\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	doc, ok := codexTOML(readFile(t, path))
@@ -3298,27 +3423,27 @@ func TestCodexMemberRootGetsNoNaNOnlyKeys(t *testing.T) {
 // A member configured by an earlier version has the starter config without
 // these keys; their next configure adds them, and the one after adds nothing.
 func TestCodexStarterConfigOfAnEarlierVersionIsBroughtUpToDate(t *testing.T) {
-	codexModel, _ := catalog.Get(catalog.Coding)
+	// Earlier versions wrote the window unmarked, and only ever 1048576.
 	path := tempConfig(t, "config.toml")
-	old := fmt.Sprintf("model = %q\nmodel_provider = \"nan\"\nmodel_context_window = %d\n\n"+
+	old := fmt.Sprintf("model = %q\nmodel_provider = \"nan\"\nmodel_context_window = %s\n\n"+
 		"[model_providers.nan]\nname = \"NaN\"\nbase_url = \"https://api.nan.builders/v1\"\n"+
-		"experimental_bearer_token = %q\nwire_api = \"responses\"\n", codexModel.ID, codexModel.Context, testKey)
+		"experimental_bearer_token = %q\nwire_api = \"responses\"\n", testModels[0].ID, legacyCodexWindow, testKey)
 	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	first := readFile(t, path)
 	fresh := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(fresh, testKey); err != nil {
+	if err := writeCodexConfig(fresh, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	// Same as a file created today, apart from the catalogue path's home.
 	if want := strings.ReplaceAll(readFile(t, fresh), filepath.ToSlash(filepath.Dir(fresh)), filepath.ToSlash(filepath.Dir(path))); first != want {
 		t.Errorf("an earlier starter config was not brought up to date:\ngot:\n%s\nwant:\n%s", first, want)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	if second := readFile(t, path); second != first {
@@ -3340,7 +3465,7 @@ func TestCodexSubAgentSwitchFollowsAnUpgradeAndADowngrade(t *testing.T) {
 	}
 	for _, s := range steps {
 		withCodexVersion(t, s.version)
-		if err := writeCodexConfig(path, testKey); err != nil {
+		if err := writeCodexConfig(path, testKey, testModels); err != nil {
 			t.Fatal(err)
 		}
 		content := readFile(t, path)
@@ -3372,7 +3497,7 @@ func TestCodexSubAgentSwitchJoinsTheMembersTables(t *testing.T) {
 			if err := os.WriteFile(path, []byte(base+c.tables), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if err := writeCodexConfig(path, testKey); err != nil {
+			if err := writeCodexConfig(path, testKey, testModels); err != nil {
 				t.Fatal(err)
 			}
 			content := readFile(t, path)
@@ -3398,7 +3523,7 @@ func TestCodexSubAgentSwitchLeavesAnInlineTableAlone(t *testing.T) {
 	if err := os.WriteFile(path, []byte(in), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	content := readFile(t, path)
@@ -3418,7 +3543,7 @@ func TestCodexNaNSessionDefaultsKeepTheMembersValues(t *testing.T) {
 	if err := os.WriteFile(path, []byte(in), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	doc, ok := codexTOML(readFile(t, path))
@@ -3435,7 +3560,7 @@ func TestCodexNaNSessionDefaultsKeepTheMembersValues(t *testing.T) {
 // with these keys in place), and the member's own content kept.
 func TestCodexRemovalTakesTheNaNOnlyRootKeys(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	appendToFile(t, path, "\n[projects.\"/home/member/repo\"]\ntrust_level = \"trusted\"\n")
@@ -3452,7 +3577,7 @@ func TestCodexRemovalTakesTheNaNOnlyRootKeys(t *testing.T) {
 func TestCodexRemovalTakesTheMultiAgentSwitch(t *testing.T) {
 	withCodexVersion(t, "codex-cli 0.159.0")
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testModels); err != nil {
 		t.Fatal(err)
 	}
 	if err := removeCodexConfig(path); err != nil {
