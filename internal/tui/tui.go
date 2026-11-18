@@ -3086,23 +3086,24 @@ func codexRootKeys(content string) map[string]any {
 func withCodexContextWindow(content string, window int) string {
 	declared := codexWindowLine(window)
 	lines := strings.Split(content, "\n")
-	for i, raw := range lines {
-		trimmed := strings.TrimSpace(raw)
-		// Everything above the first table header is the root table, so this
-		// only ever reads the member's root keys.
-		if strings.HasPrefix(trimmed, "[") {
-			head := strings.TrimRight(strings.Join(lines[:i], "\n"), "\n")
-			tail := strings.Join(lines[i:], "\n")
-			if head == "" {
-				return declared + "\n\n" + tail
-			}
-			return head + "\n" + declared + "\n\n" + tail
-		}
-		if key, _, ok := strings.Cut(trimmed, "="); ok && strings.TrimSpace(key) == "model_context_window" {
+	// Everything above the first table header is the root table, so this only
+	// ever reads the member's root keys. TOML reads the key however it is
+	// quoted, so a "model_context_window" of theirs is a window too.
+	end := codexRootEnd(lines)
+	for _, raw := range lines[:end] {
+		if key, _, ok := codexLine(raw); ok && key == "model_context_window" {
 			return content // the member declared one of their own; it stands
 		}
 	}
-	return strings.TrimRight(content, "\n") + "\n" + declared + "\n"
+	if end == len(lines) {
+		return strings.TrimRight(content, "\n") + "\n" + declared + "\n"
+	}
+	head := strings.TrimRight(strings.Join(lines[:end], "\n"), "\n")
+	tail := strings.Join(lines[end:], "\n")
+	if head == "" {
+		return declared + "\n\n" + tail
+	}
+	return head + "\n" + declared + "\n\n" + tail
 }
 
 // [projects."/home/member/repo"] and the [projects] table above it. This is

@@ -519,6 +519,35 @@ func TestCodexConfigKeepsAnUnmarkedWindowInAFileThatOnlyMentionsUs(t *testing.T)
 	}
 }
 
+// A window the member declared with a quoted key is still their window: TOML
+// reads "model_context_window" and model_context_window as the same key, so
+// adding ours next to it would be a duplicate key Codex refuses to load.
+func TestCodexKeepsAMemberWindowDeclaredWithAQuotedKey(t *testing.T) {
+	for _, key := range []string{`"model_context_window"`, `'model_context_window'`, ` model_context_window `} {
+		path := tempConfig(t, "config.toml")
+		member := "model = \"" + testModels[0].ID + "\"\nmodel_provider = \"nan\"\n" + key + " = 64000\n\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n"
+		if err := os.WriteFile(path, []byte(member), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for run := 1; run <= 2; run++ {
+			if err := writeCodexConfig(path, testKey, testModels); err != nil {
+				t.Fatalf("%s, run %d: %v", key, run, err)
+			}
+			got := readFile(t, path)
+			doc, ok := codexTOML(got)
+			if !ok {
+				t.Fatalf("%s, run %d: the config no longer parses:\n%s", key, run, got)
+			}
+			if w, _ := doc["model_context_window"].(int64); w != 64000 {
+				t.Errorf("%s, run %d: window = %v, want the member's 64000:\n%s", key, run, doc["model_context_window"], got)
+			}
+			if strings.Contains(got, codexWindowMark) {
+				t.Errorf("%s, run %d: a marked window was added next to the member's:\n%s", key, run, got)
+			}
+		}
+	}
+}
+
 func TestCodexRootWindowFollowsTheRootModel(t *testing.T) {
 	path := tempConfig(t, "config.toml")
 	if err := writeCodexConfig(path, testKey, testModels); err != nil {
