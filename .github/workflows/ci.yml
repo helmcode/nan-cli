@@ -269,78 +269,32 @@ jobs:
           # one rather than panic, which is the state a fresh machine is in.
           "$RUNNER_TEMP/bin/nan" me || true
 
-      # The default path, with no INSTALL_DIR. This is what the one-liner on
-      # nan.builders actually does, and it is the line printed in the README.
-      - name: Install where the one-liner puts it
+      # The PATH handling, with no download: scripts/install_test.sh sources the
+      # installer and calls each function under a throwaway HOME. The same
+      # script runs on a laptop.
+      - name: The PATH logic
+        run: /bin/bash scripts/install_test.sh
+
+      # The default path, no INSTALL_DIR: what the one-liner on nan.builders
+      # does. Under a throwaway HOME and a PATH without ~/.local/bin, so the
+      # installer has to write the profile line itself. Then a new terminal's
+      # shell - login bash on macOS, interactive bash on Linux - has to find
+      # nan through that line and nothing else.
+      - name: A new terminal finds the default install
         run: |
           set -euo pipefail
-          /bin/bash scripts/install.sh
-          # The default install dir is $HOME/.local/bin; verify the binary exists
-          # there and runs. $HOME/.local/bin is not on PATH yet — a fresh step
-          # does not source the user's profile — so we still need the file test.
-          test -x "$HOME/.local/bin/nan"
-          "$HOME/.local/bin/nan" --version
-          # Append $HOME/.local/bin to $GITHUB_PATH so later steps inherit it,
-          # mirroring what a fresh terminal would get from the profile the
-          # installer wrote.
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      # The default install is on PATH in a fresh shell.
-      - name: The default install is on PATH in a fresh shell
-        run: |
-          set -euo pipefail
-          command -v nan
-          nan --version
-
-      # The PATH logic is the part of this installer that runs after the
-      # binary is in place, and the part that was wrong: it wrote ~/.profile,
-      # which zsh never reads and bash skips when ~/.bash_profile exists. This
-      # exercises it with no download at all, by sourcing the installer and
-      # calling the functions directly.
-      - name: The PATH line lands in the right shell profile
-        run: |
-          set -euo pipefail
-          tmp="$(mktemp -d)"
-          trap 'rm -rf "$tmp"' EXIT
-
-          # shell_profile() has to name the file that shell actually reads.
-          test "$(HOME="$tmp/h1" SHELL=/bin/zsh bash -c 'source scripts/install.sh; shell_profile')" = "$tmp/h1/.zshrc"
-          test "$(HOME="$tmp/h2" SHELL=/bin/bash bash -c 'source scripts/install.sh; shell_profile')" = "$tmp/h2/.bashrc"
-          mkdir -p "$tmp/h3"; touch "$tmp/h3/.bash_profile"
-          test "$(HOME="$tmp/h3" SHELL=/bin/bash bash -c 'source scripts/install.sh; shell_profile')" = "$tmp/h3/.bash_profile"
-          test "$(HOME="$tmp/h4" SHELL=/usr/bin/fish bash -c 'source scripts/install.sh; shell_profile')" = "$tmp/h4/.config/fish/config.fish"
-          test "$(HOME="$tmp/h5" SHELL=/bin/tcsh bash -c 'source scripts/install.sh; shell_profile')" = "$tmp/h5/.profile"
-
-          # A default install prepends the directory - so a nan already earlier
-          # in PATH cannot keep winning - and running it twice changes nothing.
-          home="$tmp/default"; mkdir -p "$home"
-          HOME="$home" SHELL=/bin/zsh PATH=/usr/bin:/bin bash -c 'source scripts/install.sh; check_path "$HOME/.local/bin"' >/dev/null 2>&1
-          grep -qF "export PATH=\"$home/.local/bin:\$PATH\"" "$home/.zshrc"
-          HOME="$home" SHELL=/bin/zsh PATH=/usr/bin:/bin bash -c 'source scripts/install.sh; check_path "$HOME/.local/bin"' >/dev/null 2>&1
-          test "$(grep -cF "$home/.local/bin" "$home/.zshrc")" = 1
-
-          # fish gets fish syntax, not an export.
-          home="$tmp/fish"; mkdir -p "$home"
-          HOME="$home" SHELL=/usr/bin/fish PATH=/usr/bin:/bin bash -c 'source scripts/install.sh; check_path "$HOME/.local/bin"' >/dev/null 2>&1
-          grep -qF "fish_add_path \"$home/.local/bin\"" "$home/.config/fish/config.fish"
-
-          # A custom INSTALL_DIR is a deliberate choice: never edit a profile.
-          home="$tmp/custom"; mkdir -p "$home"
-          HOME="$home" SHELL=/bin/zsh PATH=/usr/bin:/bin bash -c 'source scripts/install.sh; check_path "$HOME/elsewhere"' >/dev/null 2>&1
-          test ! -e "$home/.zshrc"
-          test ! -e "$home/.profile"
-
-          # A nan earlier in PATH is what turns a fixed installer into a bug
-          # report, so it has to be called out.
-          home="$tmp/shadow"; mkdir -p "$home/shadow"
-          printf '#!/bin/sh\n' > "$home/shadow/nan"; chmod +x "$home/shadow/nan"
-          out="$(bash -c "source scripts/install.sh; warn_if_shadowed \"$home/shadow/nan\" \"$home/.local/bin\"" 2>&1)"
-          grep -qF "$home/shadow/nan" <<<"$out"
-          grep -qi shadow <<<"$out"
-          out="$(bash -c "source scripts/install.sh; warn_if_shadowed \"$home/.local/bin/nan\" \"$home/.local/bin\"" 2>&1)"
-          test -z "$out"
-
-          echo "PATH logic verified for zsh, bash, fish and a custom dir"
+          home="$RUNNER_TEMP/member"
+          mkdir -p "$home"
+          env -i HOME="$home" SHELL=/bin/bash PATH=/usr/bin:/bin GITHUB_TOKEN="$GITHUB_TOKEN" \
+            /bin/bash scripts/install.sh
+          test -x "$home/.local/bin/nan"
+          if [ "$RUNNER_OS" = "macOS" ]; then mode=-l; else mode=-i; fi
+          found="$(env -i HOME="$home" PATH=/usr/bin:/bin /bin/bash "$mode" -c 'command -v nan' 2>/dev/null || true)"
+          if [ "$found" != "$home/.local/bin/nan" ]; then
+            echo "::error::a new terminal resolved nan to '$found', want $home/.local/bin/nan" >&2
+            exit 1
+          fi
+          env -i HOME="$home" PATH=/usr/bin:/bin /bin/bash "$mode" -c 'nan --version' 2>/dev/null
 
       # The version lookup failing has to SAY so. It did not: the pipeline runs
       # under `set -euo pipefail`, so a grep finding no tag_name - which is the
