@@ -50,8 +50,10 @@ func (m model) mood() mascotMood {
 		return moodThinking
 	case m.err != nil || strings.HasPrefix(m.setupMsg, "error"):
 		return moodSad
-	case m.loginStage != loginOff:
-		return moodSurprised
+	case m.loginStage == loginFailed:
+		return moodSad
+	case m.loginStage == loginStarting || m.loginStage == loginWaiting:
+		return moodThinking
 	case m.sess.Token == "":
 		return moodAsleep
 	case m.sess.APIKey != "":

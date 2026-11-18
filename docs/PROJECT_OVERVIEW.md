@@ -89,18 +89,20 @@ Defines the root command `nan` and registers all subcommands. The `init()` funct
 
 | Subcommand | Usage | What it does |
 |---|---|---|
-| `nan auth login` | Opens Discord OAuth URL in browser, then waits for user to paste `nan_session` cookie value | Saves token to `~/.config/nan/session.json` |
-| `nan auth login --token <value>` | Skips browser, saves token directly | Same persistence |
+| `nan auth login` | Device sign-in: prints a code and the approval page, opens it in the browser, waits for the member to approve there | Saves the session token to `~/.config/nan/session.json` |
+| `nan auth login --token <value>` | Skips the browser, saves a session token directly | Same persistence |
+| `nan auth login --api-token` | Saves a platform token or API key read from stdin | Same persistence |
 | `nan auth logout` | Deletes `session.json` | Clears local session |
 
 **Login flow (step by step):**
 
-1. `openBrowser(apiAuthURL)` — spawns `xdg-open` / `open` / `rundll32` to open Discord login in the default browser.
-2. Prints instructions to manually copy the `nan_session` cookie from DevTools.
-3. User pastes the token into the terminal.
-4. `saveToken()` writes it to `~/.config/nan/session.json` (file permissions `0600`, dir `0700` — like a `.env` file with restrictive perms).
+1. `auth.StartDeviceLogin` POSTs `{"client":"cli"}` to `/api/auth/device/start`. The platform answers with a device code (secret, never shown), a short user code, the verification URL and an interval, and echoes `client_kind: "cli"`; without that echo the CLI refuses to continue.
+2. The CLI prints the user code and URL, and opens the URL (`xdg-open` / `open` / `rundll32`) unless `NAN_NO_BROWSER=1`.
+3. The member signs in on the page (answering two-factor there if enabled), types the code and approves.
+4. `auth.WaitForApproval` polls `/api/auth/device/poll` at the advertised interval (+5 s on every `slow_down`) until it gets `approved` with a session token, `denied`, `expired`, or ctrl-c.
+5. `saveToken()` writes the token to `~/.config/nan/session.json` (file permissions `0600`, dir `0700`). The panel's sign-in (`internal/tui`) runs the same flow in the background and writes the session only for the attempt that is still waiting.
 
-**No browser cookie polling anymore** — the older version auto-read Firefox/Chromium DBs; the current version uses manual paste for simplicity and security. The `browser/` package is still present but unused by the login flow.
+The session the platform issues for a CLI sign-in is a narrower "cli" session: it can read, start runs and reject proposals, but cannot approve a device or a proposal.
 
 ---
 
@@ -187,8 +189,9 @@ This package reads the `nan_session` cookie from local browser databases. It sup
 ```
 nan                     # Root command
 ├── auth                # Authentication
-│   ├── login           # Discord login (paste session token)
-│   │   └── --token     # Skip browser, save token directly
+│   ├── login           # Browser sign-in (device code)
+│   │   ├── --token     # Skip the browser, save a session token directly
+│   │   └── --api-token # Save a platform token or API key from stdin
 │   └── logout          # Delete local session
 ├── me                  # Show current user profile (JSON)
 └── metrics             # Usage metrics
@@ -252,4 +255,4 @@ go run . auth login
 2. **Dynamic response types.** All API responses are `map[string]any` — no typed DTOs. The response schemas are treated as opaque JSON for now.
 3. **No persistence layer beyond a single file.** Session state is one JSON file on disk. No database, no cache.
 4. **Embedded SQLite.** `modernc.org/sqlite` is a pure-Go SQLite implementation — no native libraries or CGO required. This means the binary is fully static and cross-compiles easily.
-5. **Manual login flow.** The cookie-polling approach was replaced with a manual paste step for simplicity and to avoid needing `database/sql` during login.
+5. **Device login flow.** The CLI never handles a password, a link or a two-factor code: the member approves a short code in the browser, and the CLI polls for the result.

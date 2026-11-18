@@ -13,7 +13,7 @@ var rootCmd = &cobra.Command{
 	Use:     "nan",
 	Short:   "nan.builders cloud CLI",
 	Version: tui.Version,
-	// A sign-in link that did not work is not a usage mistake: printing the
+	// A sign-in that did not work is not a usage mistake: printing the
 	// flag list under it buries the one line that says what happened. Execute()
 	// below prints the error itself, so cobra printing it too showed every
 	// failure twice.

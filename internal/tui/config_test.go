@@ -17,6 +17,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/nxssie/nan-cli/internal/api"
+	"github.com/nxssie/nan-cli/internal/auth"
+	"github.com/nxssie/nan-cli/internal/auth/authtest"
 	catalog "github.com/nxssie/nan-cli/internal/models"
 	"github.com/nxssie/nan-cli/internal/session"
 )
@@ -1888,60 +1890,258 @@ func TestHomeDropsTheGuideWhenSetupIsDone(t *testing.T) {
 // green and wrong at the same time.
 func TestSigningInHappensInsideThePanel(t *testing.T) {
 	m := setupModel(t, &session.Session{})
-	// Said out loud, because View wraps to it and truncates to it. Left to
-	// the zero value this asserted against whatever the default happened to
-	// be: at 60 columns the renderer breaks the sentence as "expires 15 /
-	// minutes" and at 80x20 the truncation eats it, so the test failed for a
-	// screen that was right.
 	m.lay = newLayout(90, 30)
 
 	if m.loginStage != loginOff {
 		t.Fatal("the panel opens mid-login")
 	}
 	m.startLogin()
-	if m.loginStage != loginAskEmail {
+	if m.loginStage != loginStarting {
 		t.Fatal("s does not start the sign-in")
 	}
-
 	out := m.View()
-	for _, want := range []string{"Let's get you logged in", "Email"} {
+	for _, want := range []string{"Let's get you signed in", "1. ", "2. ", "3. "} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the first step does not show %q:\n%s", want, out)
 		}
 	}
-
-	// Second question, once the link is on its way, driven through the message
-	// the flow actually sends rather than by setting the stage by hand: that is
-	// what makes this fail when the two halves drift apart.
-	mod, _ := m.Update(linkSentMsg{})
-	m = mod.(model)
-	if m.loginStage != loginAskLink {
-		t.Fatal("an accepted request does not move on to the link")
+	if strings.Contains(out, "4. ") {
+		t.Errorf("the setup has three steps now:\n%s", out)
 	}
-	out = m.View()
-	// Against the screen with its line breaks collapsed: whether "15 minutes"
-	// survives as two words on one line is the renderer's business and
-	// changes with one more word in the message. What this is here to catch
-	// is the sentence going missing.
-	flat := strings.Join(strings.Fields(out), " ")
-	for _, want := range []string{"Let's confirm it with the magic link", "Paste the link", "15 minutes"} {
+
+	// The code and where to type it, once the platform has answered; driven
+	// through the message the flow actually sends.
+	mod, _ := m.Update(deviceStartedMsg{attempt: m.loginAttempt, login: testDevice()})
+	m = mod.(model)
+	if m.loginStage != loginWaiting {
+		t.Fatal("an accepted start does not move on to waiting")
+	}
+	flat := strings.Join(strings.Fields(m.View()), " ")
+	for _, want := range []string{"WDJB-MJHT", "https://cloud-api.nan.builders/api/auth/device", "esc"} {
 		if !strings.Contains(flat, want) {
-			t.Errorf("the second step does not ask for the link:\n%s", out)
+			t.Errorf("the waiting screen does not show %q:\n%s", want, flat)
 		}
+	}
+	if strings.Contains(flat, "secret-device-code") {
+		t.Error("the device code is on screen")
 	}
 }
 
-func TestEscapeLeavesTheSignInAlone(t *testing.T) {
+func testDevice() *auth.DeviceLogin {
+	return &auth.DeviceLogin{
+		DeviceCode:      "secret-device-code",
+		UserCode:        "WDJB-MJHT",
+		VerificationURL: "https://cloud-api.nan.builders/api/auth/device",
+		ExpiresAt:       time.Now().Add(15 * time.Minute),
+		Interval:        time.Second,
+	}
+}
+
+// waitingModel is a model with a sign-in that has its code on screen, and the
+// attempt that owns it.
+func waitingModel(t *testing.T) model {
+	t.Helper()
 	m := setupModel(t, &session.Session{})
+	m.lay = newLayout(90, 30)
 	m.startLogin()
-	m.loginInput.SetValue("half typed@")
+	mod, _ := m.Update(deviceStartedMsg{attempt: m.loginAttempt, login: testDevice()})
+	return mod.(model)
+}
+
+func TestEscapeLeavesTheSignInAlone(t *testing.T) {
+	m := waitingModel(t)
+	attempt := m.loginAttempt
 	m.cancelLogin()
 
-	if m.loginStage != loginOff {
+	if m.loginStage != loginOff || m.wizard != wizardOff {
 		t.Error("esc does not leave the sign-in")
 	}
-	if m.loginInput.Value() != "" {
-		t.Error("a cancelled sign-in keeps what was typed into it")
+	if m.loginDevice != nil || m.loginAttempt == attempt {
+		t.Error("a cancelled sign-in keeps its device request or its attempt id")
+	}
+}
+
+// Esc while waiting cancels the poll, and an approval that still arrives for
+// the cancelled attempt is never saved.
+func TestAnApprovalAfterEscIsNeverSaved(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HERMES_HOME", filepath.Join(home, "h"))
+	m := waitingModel(t)
+	late := m.loginAttempt
+	ctx := m.loginCtx
+
+	mod, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = mod.(model)
+	if ctx.Err() == nil {
+		t.Error("esc did not cancel the poll")
+	}
+	mod, _ = m.Update(deviceApprovedMsg{attempt: late, token: "late-token"})
+	m = mod.(model)
+	if m.sess.Token != "" || m.loginStage != loginOff {
+		t.Errorf("a cancelled approval got in: token %q stage %v", m.sess.Token, m.loginStage)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "nan", "session.json")); err == nil {
+		t.Error("session.json was written for a cancelled sign-in")
+	}
+}
+
+// A message of attempt N that arrives after attempt N+1 started is dropped,
+// the late start answer included.
+func TestMessagesOfAnOlderAttemptAreDropped(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HERMES_HOME", filepath.Join(home, "h"))
+	m := setupModel(t, &session.Session{})
+	m.startLogin()
+	old := m.loginAttempt
+	m.startLogin() // a second start supersedes the first
+	if m.loginAttempt == old {
+		t.Fatal("a new start keeps the attempt id")
+	}
+
+	mod, _ := m.Update(deviceStartedMsg{attempt: old, login: testDevice()})
+	m = mod.(model)
+	if m.loginStage != loginStarting || m.loginDevice != nil {
+		t.Errorf("a late start answer was taken: stage %v", m.loginStage)
+	}
+	mod, _ = m.Update(deviceStartedMsg{attempt: m.loginAttempt, login: testDevice()})
+	m = mod.(model)
+	mod, _ = m.Update(deviceApprovedMsg{attempt: old, token: "stale"})
+	m = mod.(model)
+	if m.sess.Token != "" || m.loginStage != loginWaiting {
+		t.Errorf("a stale approval was taken: token %q stage %v", m.sess.Token, m.loginStage)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "nan", "session.json")); err == nil {
+		t.Error("session.json was written for a stale approval")
+	}
+}
+
+// Every way a sign-in can end badly keeps the wizard on step 1 with the error
+// up, and enter starts a NEW request.
+func TestEnterAfterAFailureStartsANewRequest(t *testing.T) {
+	p := authtest.New(t)
+	old := auth.SignInBaseURL
+	auth.SignInBaseURL = p.URL
+	t.Cleanup(func() { auth.SignInBaseURL = old })
+
+	failures := map[string]func(m model) model{
+		"start error": func(m model) model {
+			mod, _ := m.Update(deviceStartedMsg{attempt: m.loginAttempt, err: errors.New("could not start")})
+			return mod.(model)
+		},
+		"denied": func(m model) model {
+			m = startedAndWaiting(m)
+			mod, _ := m.Update(deviceApprovedMsg{attempt: m.loginAttempt, err: auth.ErrDenied})
+			return mod.(model)
+		},
+		"expired": func(m model) model {
+			m = startedAndWaiting(m)
+			mod, _ := m.Update(deviceApprovedMsg{attempt: m.loginAttempt, err: auth.ErrExpired})
+			return mod.(model)
+		},
+		"poll error": func(m model) model {
+			m = startedAndWaiting(m)
+			mod, _ := m.Update(deviceApprovedMsg{attempt: m.loginAttempt, err: errors.New("the sign-in check failed (HTTP 500)")})
+			return mod.(model)
+		},
+	}
+	for name, fail := range failures {
+		t.Run(name, func(t *testing.T) {
+			m := setupModel(t, &session.Session{})
+			m.lay = newLayout(90, 30)
+			m.startLogin()
+			m = fail(m)
+			if m.wizard != wizardSignIn || m.loginStage != loginFailed {
+				t.Fatalf("wizard %v stage %v, want step 1 and the failed stage", m.wizard, m.loginStage)
+			}
+			if !strings.Contains(m.View(), "error:") || !strings.Contains(m.View(), "try again") {
+				t.Errorf("the failure is not on screen:\n%s", m.View())
+			}
+			before, attempt := p.Starts(), m.loginAttempt
+
+			mod, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			m = mod.(model)
+			if cmd == nil || m.loginStage != loginStarting || m.loginAttempt == attempt {
+				t.Fatalf("enter did not start over: cmd %v stage %v attempt %d->%d", cmd != nil, m.loginStage, attempt, m.loginAttempt)
+			}
+			msg := cmd()
+			started, ok := msg.(deviceStartedMsg)
+			if !ok || started.err != nil || started.attempt != m.loginAttempt {
+				t.Fatalf("new start = %+v", msg)
+			}
+			if p.Starts() != before+1 {
+				t.Errorf("starts = %d, want %d", p.Starts(), before+1)
+			}
+		})
+	}
+}
+
+func startedAndWaiting(m model) model {
+	mod, _ := m.Update(deviceStartedMsg{attempt: m.loginAttempt, login: testDevice()})
+	return mod.(model)
+}
+
+func TestSigningInWithTheBrowserHappyPathEndToEnd(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HERMES_HOME", filepath.Join(home, "h"))
+	t.Setenv("NAN_NO_BROWSER", "1")
+	p := authtest.New(t)
+	p.Approve("tui-session")
+	old := auth.SignInBaseURL
+	auth.SignInBaseURL = p.URL
+	t.Cleanup(func() { auth.SignInBaseURL = old })
+
+	m := setupModel(t, &session.Session{})
+	cmd := m.startLogin()
+	started := cmd().(deviceStartedMsg)
+	mod, next := m.Update(started)
+	m = mod.(model)
+	if m.loginStage != loginWaiting {
+		t.Fatalf("stage = %v (%s)", m.loginStage, m.loginMsg)
+	}
+	// With NAN_NO_BROWSER the batch is the poll alone.
+	approved := next().(deviceApprovedMsg)
+	if approved.err != nil {
+		t.Fatal(approved.err)
+	}
+	mod, _ = m.Update(approved)
+	m = mod.(model)
+	if m.sess.Token != "tui-session" || m.wizard != wizardKey || !m.editingKey {
+		t.Errorf("token %q wizard %v editingKey %v", m.sess.Token, m.wizard, m.editingKey)
+	}
+}
+
+func TestEnterWhileWaitingOpensThePageAgain(t *testing.T) {
+	var opened []string
+	old := auth.OpenBrowser
+	auth.OpenBrowser = func(u string) error { opened = append(opened, u); return nil }
+	t.Cleanup(func() { auth.OpenBrowser = old })
+	t.Setenv("NAN_NO_BROWSER", "")
+
+	m := waitingModel(t)
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter does nothing while waiting")
+	}
+	cmd()
+	if len(opened) != 1 || opened[0] != testDevice().VerificationURL {
+		t.Errorf("opened = %v", opened)
+	}
+}
+
+func TestTheGuidedSetupHasThreeStepsWithTheirTitles(t *testing.T) {
+	if len(wizardSteps) != 3 {
+		t.Fatalf("%d steps, want 3", len(wizardSteps))
+	}
+	for i, want := range []string{"Let's get you signed in", "Let's set up your API key", "Let's configure your tools"} {
+		if wizardSteps[i].title != want {
+			t.Errorf("step %d = %q, want %q", i+1, wizardSteps[i].title, want)
+		}
 	}
 }
 
@@ -1975,12 +2175,10 @@ func TestSigningInGivesTheClientTheNewToken(t *testing.T) {
 		t.Fatal("this test starts from a client with no token")
 	}
 
-	// What the flow leaves on disk before the panel is told about it.
-	if err := session.Save(&session.Session{Token: "a-fresh-session-token"}); err != nil {
-		t.Fatal(err)
-	}
+	m.startLogin()
+	m.loginStage = loginWaiting
 
-	updated, _ := m.Update(signedInMsg{})
+	updated, _ := m.Update(deviceApprovedMsg{attempt: m.loginAttempt, token: "a-fresh-session-token"})
 	after := updated.(model)
 
 	if after.sess.Token != "a-fresh-session-token" {
@@ -2182,8 +2380,8 @@ func TestAFreshMachineIsAskedToSignInImmediately(t *testing.T) {
 	if cmd := m.resumeSetup(); cmd == nil {
 		t.Fatal("nothing happens when the panel opens with no session")
 	}
-	if m.loginStage != loginAskEmail {
-		t.Errorf("the panel opens on stage %v, want the email question", m.loginStage)
+	if m.loginStage != loginStarting {
+		t.Errorf("the panel opens on stage %v, want the sign-in start", m.loginStage)
 	}
 }
 
@@ -2229,7 +2427,7 @@ func TestTheFirstRunQuestionIsActuallyAsked(t *testing.T) {
 		t.Fatal("Init does nothing")
 	}
 	updated, _ := m.Update(firstRunMsg{})
-	if updated.(model).loginStage != loginAskEmail {
+	if updated.(model).loginStage != loginStarting {
 		t.Error("the first-run message does not start the sign-in")
 	}
 }
@@ -2243,11 +2441,10 @@ func TestSigningInLeadsStraightToTheKey(t *testing.T) {
 
 	m := newModel(api.New(""), &session.Session{})
 	m.lay = newLayout(90, 30)
-	if err := session.Save(&session.Session{Token: "a-token"}); err != nil {
-		t.Fatal(err)
-	}
+	m.startLogin()
+	m.loginStage = loginWaiting
 
-	updated, _ := m.Update(signedInMsg{})
+	updated, _ := m.Update(deviceApprovedMsg{attempt: m.loginAttempt, token: "a-token"})
 	after := updated.(model)
 	if !after.editingKey {
 		t.Error("after signing in the member is left to work out that `e` is next")
@@ -2279,18 +2476,17 @@ func wizardAt(t *testing.T, step wizardStep) model {
 	return m
 }
 
-// Four numbered steps, in the member's own words, with the banner over them.
+// Three numbered steps, in the member's own words, with the banner over them.
 // It replaced a screen that said "Step 1 of 2" and then handed you back to the
 // panel to find the other two yourself.
-func TestTheGuidedSetupShowsAllFourSteps(t *testing.T) {
-	out := wizardAt(t, wizardEmail).renderWizard(newLayout(96, 44))
+func TestTheGuidedSetupShowsAllThreeSteps(t *testing.T) {
+	out := wizardAt(t, wizardSignIn).renderWizard(newLayout(96, 44))
 
 	for _, want := range []string{
 		"Setting up",
-		"1. Let's get you logged in",
-		"2. Let's confirm it with the magic link",
-		"3. Let's set up your API key",
-		"4. Let's configure your tools",
+		"1. Let's get you signed in",
+		"2. Let's set up your API key",
+		"3. Let's configure your tools",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the setup screen does not show %q", want)
@@ -2308,11 +2504,11 @@ func TestTheGuidedSetupSaysWhereYouAre(t *testing.T) {
 	lines := strings.Split(third, "\n")
 	for _, line := range lines {
 		switch {
-		case strings.Contains(line, "1. Let's get you"), strings.Contains(line, "2. Let's confirm"):
+		case strings.Contains(line, "1. Let's get you"):
 			if !strings.Contains(line, "✓") {
 				t.Errorf("a finished step is not ticked: %q", strings.TrimSpace(line))
 			}
-		case strings.Contains(line, "3. Let's set up"):
+		case strings.Contains(line, "2. Let's set up"):
 			if !strings.Contains(line, "▶") {
 				t.Errorf("the current step is not marked: %q", strings.TrimSpace(line))
 			}
@@ -2322,13 +2518,13 @@ func TestTheGuidedSetupSaysWhereYouAre(t *testing.T) {
 
 // A face per step, so the mascot is doing something that matches it.
 func TestEachStepHasItsOwnFace(t *testing.T) {
-	if wizardLink.mood() != moodThinking {
-		t.Error("waiting for a link is not a thinking face")
+	if wizardSignIn.mood() != moodThinking {
+		t.Error("waiting for the browser is not a thinking face")
 	}
 	if wizardDone.mood() != moodHappy {
 		t.Error("finishing the setup is not a happy face")
 	}
-	for _, step := range []wizardStep{wizardEmail, wizardLink, wizardKey, wizardTools, wizardDone} {
+	for _, step := range []wizardStep{wizardSignIn, wizardKey, wizardTools, wizardDone} {
 		if _, ok := mascotFaces[step.mood()]; !ok {
 			t.Errorf("step %v asks for a face that does not exist", step)
 		}
@@ -2338,7 +2534,7 @@ func TestEachStepHasItsOwnFace(t *testing.T) {
 // Esc leaves the setup and lands in the panel. It must not quit the program:
 // someone who skipped a step has not asked to close the CLI.
 func TestEscapeLeavesTheSetupAndNotTheProgram(t *testing.T) {
-	m := wizardAt(t, wizardEmail)
+	m := wizardAt(t, wizardSignIn)
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	after := updated.(model)
@@ -2416,7 +2612,7 @@ func TestSigningOutStartsTheSetupAgain(t *testing.T) {
 	m.lay = newLayout(90, 30)
 
 	out := signOut(t, m)
-	if out.wizard != wizardEmail {
+	if out.wizard != wizardSignIn {
 		t.Errorf("after signing out the panel is at %v, want the first step", out.wizard)
 	}
 }
@@ -2541,7 +2737,7 @@ func TestTheKeyFieldFitsOnAShortTerminal(t *testing.T) {
 	for _, size := range [][2]int{{80, 14}, {80, 18}, {120, 22}, {120, 30}} {
 		m := setupModel(t, &session.Session{Token: "t"})
 		m.lay = newLayout(size[0], size[1])
-		m.wizard = wizardLink
+		m.wizard = wizardKey
 		m.startKeyEdit()
 		if !strings.Contains(m.View(), "paste your NaN API key here") {
 			t.Errorf("at %dx%d step 3 has no field to paste the key into", size[0], size[1])

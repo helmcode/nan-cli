@@ -62,7 +62,7 @@ func TestAnExpiredSessionCanBeSignedBackInto(t *testing.T) {
 	}
 
 	mod, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
-	if mod.(model).loginStage != loginAskEmail {
+	if mod.(model).loginStage != loginStarting {
 		t.Error("s still does nothing after the session expired")
 	}
 }
@@ -96,7 +96,7 @@ func TestOpeningOnAnExpiredSessionAsksToSignIn(t *testing.T) {
 	}
 
 	mod, _ = m.Update(sessionExpiredMsg{token: "stale", atStart: true})
-	if mod.(model).loginStage != loginAskEmail {
+	if mod.(model).loginStage != loginStarting {
 		t.Error("opening on an expired session does not start the sign-in")
 	}
 }
@@ -135,7 +135,7 @@ func TestSignInExplainsAPlatformToken(t *testing.T) {
 		m.lay = newLayout(90, 30)
 		m.startLogin()
 		flat := strings.Join(strings.Fields(m.View()), " ")
-		for _, want := range []string{"nan run and nan runs only", "email sign-in"} {
+		for _, want := range []string{"nan run and nan runs only", "browser sign-in"} {
 			if !strings.Contains(flat, want) {
 				t.Errorf("%s: the sign-in does not say %q:\n%s", name, want, m.View())
 			}
