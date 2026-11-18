@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -148,6 +150,9 @@ type configuredMsg struct {
 	msg     string
 	written []string
 	failed  []toolFailure
+	// The session the catalogue was asked with, when the platform turned it
+	// down. Handled as a sessionExpiredMsg once the spinner is off.
+	expired string
 }
 
 // Sent once, by Init, so the panel can pick up wherever the setup was left.
@@ -404,6 +409,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case configuredMsg:
 		m.configuring = false
+		if msg.expired != "" {
+			m.setupMsg = msg.msg
+			return m.Update(sessionExpiredMsg{token: msg.expired})
+		}
 		m.setupMsg = msg.msg
 		m.configured = msg.written
 		m.failures = msg.failed
@@ -664,7 +673,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// command, which is no use to someone who is looking at the panel and
 		// wants to switch accounts.
 		case "o":
-			if m.showHelp || m.wizard != wizardOff || m.sess.Token == "" {
+			if m.showHelp || m.wizard != wizardOff || m.sess.Token == "" || m.configuring {
 				break
 			}
 			if !m.confirmSignOut {
@@ -704,7 +713,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.startKeyEdit()
 			}
 		case "c":
-			if !m.showHelp && !m.configuring && (m.activeID() == tabSetup || m.wizard == wizardTools) {
+			if !m.showHelp && !m.configuring && !m.signingOut && (m.activeID() == tabSetup || m.wizard == wizardTools) {
+				// The model list comes from the member's account and nowhere
+				// else, so there is nothing to configure with until they sign
+				// in. The sign-in opens right here rather than being one more
+				// key to know about.
+				if m.sess.Token == "" {
+					cmd := m.startLogin()
+					// After startLogin, which clears loginMsg; the sign-in
+					// view shows loginMsg and not setupMsg.
+					m.loginMsg = "sign in first — Setup reads the model list from your account"
+					return m, cmd
+				}
 				// Pressing the key that configures everything and having
 				// nothing happen, with nothing said, is the worst of the
 				// three possible answers.
@@ -715,10 +735,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.configuring = true
 				m.configured = nil
 				m.setupMsg = ""
-				key, tools := m.sess.APIKey, m.sess.EnabledTools
+				client, key, tools := m.client, m.sess.APIKey, m.sess.EnabledTools
 				return m, tea.Batch(m.spin.Tick, func() tea.Msg {
-					msg, written, failed := configureTools(key, tools)
-					return configuredMsg{msg, written, failed}
+					return syncTools(client, key, tools)
 				})
 			}
 		}
@@ -832,7 +851,8 @@ func (m *model) startKeyEdit() tea.Cmd {
 //
 // It is a nudge and not a gate. Esc leaves any of them, and a member who came
 // to look at their usage is not held hostage by a setup they did not ask for -
-// the Setup tab has always worked with no session at all, and that stays true.
+// the Setup tab still shows the tools without a session; configuring them needs
+// one, because the model list comes from the member's account.
 func (m *model) resumeSetup() tea.Cmd {
 	switch {
 	case m.sess.Token == "":
@@ -932,7 +952,7 @@ func checkKey(apiKey string) tea.Cmd {
 //
 // The Models tab is the exception. An API key opens /v1/models on its own, so
 // a member who pasted a key into Setup and never logged in still gets that
-// one - which is the point of Setup working without a session at all.
+// one, so a key alone is enough to see what it can call.
 func (m model) needsLogin(id tabID) bool {
 	if m.sess.Token != "" {
 		return false
@@ -1000,25 +1020,52 @@ func (m model) fetchTabData(id tabID) tea.Cmd {
 			}
 			return fetchedMsg{tab: tabUsage, data: data}
 		case tabModels:
-			// The ids a member can put in a request come from the inference
-			// API, and it wants the API key rather than the session. Without
-			// one there is still the platform's list, which answers with
-			// deployment names: routing aliases and models on their way out.
+			// What each id is for comes from the platform, when there is a
+			// session to ask it with. The ids a member can put in a request
+			// come from the inference API, which wants the API key.
+			var platform []api.AgentModel
+			var platformErr error
+			if client.Token() != "" {
+				platform, platformErr = client.GetAgentsModels(true)
+			}
+			// An expired session is a sign-out wherever it is found out,
+			// even when the key alone could have filled this tab.
+			if errors.Is(platformErr, api.ErrSessionExpired) {
+				return fetchErrMsg{platformErr}
+			}
 			if apiKey != "" {
 				ids, err := api.ListModels(apiKey)
 				if err != nil {
 					return fetchErrMsg{err}
 				}
-				return fetchedMsg{tab: tabModels, data: ids}
+				return fetchedMsg{tab: tabModels, data: labelIDs(ids, platform)}
 			}
-			data, err := client.GetAgentsModels()
-			if err != nil {
-				return fetchErrMsg{err}
+			if platformErr != nil {
+				return fetchErrMsg{platformErr}
 			}
-			return fetchedMsg{tab: tabModels, data: data}
+			return fetchedMsg{tab: tabModels, data: platform}
 		}
 		return nil
 	}
+}
+
+// labelIDs gives each callable id the mode the platform lists it under, and
+// "unknown" when the platform does not list it (or could not be asked): an id
+// nobody documented is worth seeing, not hiding.
+func labelIDs(ids []string, platform []api.AgentModel) []api.AgentModel {
+	mode := make(map[string]string, len(platform))
+	for _, p := range platform {
+		mode[p.Name] = p.Mode
+	}
+	out := make([]api.AgentModel, 0, len(ids))
+	for _, id := range ids {
+		m, ok := mode[id]
+		if !ok {
+			m = "unknown"
+		}
+		out = append(out, api.AgentModel{Name: id, Mode: m})
+	}
+	return out
 }
 
 // ── view ──────────────────────────────────────────────────────────────────────
@@ -1297,25 +1344,18 @@ var modeLabel = map[string]string{
 	"":                    "text generation",
 	"audio_speech":        "audio speech",
 	"audio_transcription": "audio transcription",
-	"embedding":           "embedding",
+	"image_generation":    "image generation",
 }
 
 var modeColor = map[string]lipgloss.TerminalColor{
 	"":                    lipgloss.Color("#3B82F6"),
+	"chat":                lipgloss.Color("#3B82F6"),
 	"audio_speech":        lipgloss.Color("#8B5CF6"),
 	"audio_transcription": lipgloss.Color("#F59E0B"),
 	"embedding":           lipgloss.Color("#10B981"),
-	// The kinds the catalogue uses, for the ids that come from /v1/models.
-	"chat":           lipgloss.Color("#3B82F6"),
-	"chat · premium": lipgloss.Color("#A78BFA"),
-	"rerank":         lipgloss.Color("#10B981"),
-	"text to speech": lipgloss.Color("#8B5CF6"),
-	"speech to text": lipgloss.Color("#F59E0B"),
-	"image":          lipgloss.Color("#EC4899"),
-	// An id the cluster serves and this catalogue has never heard of. Worth
-	// showing rather than hiding: that is how a model nobody documented gets
-	// noticed.
-	"unknown": lipgloss.Color("#71717A"),
+	"rerank":              lipgloss.Color("#10B981"),
+	"image_generation":    lipgloss.Color("#EC4899"),
+	"unknown":             lipgloss.Color("#71717A"),
 }
 
 // A colour for a mode this build does not know, so an id it has never seen
@@ -1330,47 +1370,9 @@ func badgeColor(mode string) lipgloss.TerminalColor {
 func renderModels(data any, usageData any, l layout) string {
 	var models []modelInfo
 
-	// []string is the id list from GET /v1/models: what goes in the `model`
-	// field of a request, which is what a member came to this tab to copy.
-	if ids, ok := data.([]string); ok {
-		for _, id := range ids {
-			mi := modelInfo{name: id, mode: "unknown"}
-			if m, found := catalog.Get(id); found {
-				mi.mode = string(m.Kind)
-				if m.Premium {
-					mi.mode += " · premium"
-				}
-			}
-			models = append(models, mi)
-		}
-	} else {
-		// The platform's list, when there is no API key to ask the other one.
-		var raw []any
-		switch v := data.(type) {
-		case map[string]any:
-			if list, ok := v["models"].([]any); ok {
-				raw = list
-			}
-		case []any:
-			raw = v
-		}
-		if raw == nil {
-			return l.indent + lipgloss.NewStyle().Foreground(cGray).Render("No models found.") + "\n"
-		}
-		for _, item := range raw {
-			obj, ok := item.(map[string]any)
-			if !ok {
-				continue
-			}
-			mi := modelInfo{
-				name: fmt.Sprintf("%v", obj["name"]),
-				mode: fmt.Sprintf("%v", obj["mode"]),
-			}
-			if mi.mode == "<nil>" {
-				mi.mode = ""
-			}
-			models = append(models, mi)
-		}
+	list, _ := data.([]api.AgentModel)
+	for _, a := range list {
+		models = append(models, modelInfo{name: a.Name, mode: a.Mode})
 	}
 	if len(models) == 0 {
 		return l.indent + lipgloss.NewStyle().Foreground(cGray).Render("No models found.") + "\n"
@@ -1999,7 +2001,31 @@ func (f toolFailure) firstLine() string {
 	return strings.TrimSpace(f.reason)
 }
 
-func configureTools(apiKey string, enabledTools map[string]bool) (string, []string, []toolFailure) {
+// syncTools configures the tools with what the platform serves right now.
+// There is no list to fall back to - the one this CLI used to carry drifted
+// from the cluster three times - so without a catalogue nothing is written
+// and nothing is removed.
+func syncTools(client *api.Client, apiKey string, enabledTools map[string]bool) tea.Msg {
+	list, err := client.GetAgentsModels(false)
+	if errors.Is(err, api.ErrSessionExpired) {
+		return configuredMsg{
+			msg:     "error: nothing was written  ·  " + errSessionExpired.Error(),
+			expired: client.Token(),
+		}
+	}
+	if err != nil {
+		return configuredMsg{msg: "error: could not read the model list (" + err.Error() + ")  ·  nothing was written"}
+	}
+	msg, written, failed := configureTools(apiKey, enabledTools, catalog.FromAPI(list))
+	return configuredMsg{msg: msg, written: written, failed: failed}
+}
+
+func configureTools(apiKey string, enabledTools map[string]bool, models []catalog.Model) (string, []string, []toolFailure) {
+	// Fail closed: a sync with no models would strip every tool of the
+	// cluster, which is not what a member pressing "configure" asked for.
+	if len(models) == 0 {
+		return "error: the platform listed no models  ·  nothing was written", nil, nil
+	}
 	isEnabled := func(name string) bool {
 		if enabledTools == nil {
 			return true
@@ -2021,15 +2047,15 @@ func configureTools(apiKey string, enabledTools map[string]bool) (string, []stri
 			var err error
 			switch t.name {
 			case "Factory AI":
-				err = writeFactoryConfig(t.configPath, apiKey)
+				err = writeFactoryConfig(t.configPath, apiKey, models)
 			case "OpenCode":
-				err = writeOpencodeConfig(t.configPath, apiKey)
+				err = writeOpencodeConfig(t.configPath, apiKey, models)
 			case "Pi":
-				err = writePiConfig(t.configPath, apiKey)
+				err = writePiConfig(t.configPath, apiKey, models)
 			case "Codex":
-				err = writeCodexConfig(t.configPath, apiKey)
+				err = writeCodexConfig(t.configPath, apiKey, models)
 			case "Hermes":
-				err = writeHermesConfig(filepath.Dir(t.configPath), apiKey)
+				err = writeHermesConfig(filepath.Dir(t.configPath), apiKey, models)
 			}
 			if err == nil {
 				// Every writer above can decide it has nothing to change - a
@@ -2303,7 +2329,7 @@ func readJSONConfig(path string) (map[string]any, error) {
 	return cfg, nil
 }
 
-func writeFactoryConfig(cfgPath, apiKey string) error {
+func writeFactoryConfig(cfgPath, apiKey string, models []catalog.Model) error {
 	// A map, so unknown top-level fields (logoAnimation, etc.) survive.
 	cfg, err := readJSONConfig(cfgPath)
 	if err != nil {
@@ -2311,59 +2337,71 @@ func writeFactoryConfig(cfgPath, apiKey string) error {
 	}
 
 	// Extract existing customModels
-	var models []map[string]any
+	var entries []map[string]any
 	if raw, ok := cfg["customModels"].([]any); ok {
 		for _, item := range raw {
-			if m, ok := item.(map[string]any); ok {
-				models = append(models, m)
+			if e, ok := item.(map[string]any); ok {
+				entries = append(entries, e)
 			}
 		}
 	}
 
-	// Index NaN model IDs already present, dropping the ones the cluster no
-	// longer serves.
+	// Index NaN entries already present, dropping any model the cluster no
+	// longer serves and refreshing what the platform says it can see.
+	served := make(map[string]catalog.Model, len(models))
+	for _, m := range models {
+		served[m.ID] = m
+	}
 	existingIDs := map[string]bool{}
 	changed := false
-	kept := models[:0]
+	kept := entries[:0]
 	nextIndex := 0
-	for _, m := range models {
-		if base, _ := m["baseUrl"].(string); strings.Contains(base, "api.nan.builders") {
-			id, _ := m["model"].(string)
-			if catalog.IsRetired(id) {
+	for _, e := range entries {
+		if base, _ := e["baseUrl"].(string); strings.Contains(base, "api.nan.builders") {
+			id, _ := e["model"].(string)
+			m, ok := served[id]
+			if !ok {
+				if sds, _ := cfg["sessionDefaultSettings"].(map[string]any); sds != nil && sds["model"] == e["id"] {
+					// Only the model goes: reasoningEffort, autonomyMode and
+					// anything else the member set there stay.
+					delete(sds, "model")
+				}
 				changed = true
 				continue
 			}
-			if id != "" {
-				existingIDs[id] = true
+			existingIDs[id] = true
+			if e["noImageSupport"] != !m.Vision {
+				e["noImageSupport"] = !m.Vision
+				changed = true
 			}
 		}
 		// JSON numbers come back as float64. The next index goes past the
-		// highest one, not at len(models): with an entry taken out, len lands
+		// highest one, not at len(entries): with an entry taken out, len lands
 		// on an index someone already holds.
-		if i, ok := m["index"].(float64); ok && int(i) >= nextIndex {
+		if i, ok := e["index"].(float64); ok && int(i) >= nextIndex {
 			nextIndex = int(i) + 1
 		}
-		kept = append(kept, m)
+		kept = append(kept, e)
 	}
-	models = kept
-	if len(models) > nextIndex {
-		nextIndex = len(models)
+	entries = kept
+	if len(entries) > nextIndex {
+		nextIndex = len(entries)
 	}
 
 	// Append only missing models
-	for _, nm := range catalog.ChatModels() {
-		if !existingIDs[nm.ID] {
+	for _, m := range models {
+		if !existingIDs[m.ID] {
 			idx := nextIndex
 			nextIndex++
-			display := nm.Name + " (NaN)"
-			models = append(models, map[string]any{
-				"model":          nm.ID,
+			display := m.ID + " (NaN)"
+			entries = append(entries, map[string]any{
+				"model":          m.ID,
 				"id":             factoryCustomID(display, idx),
 				"index":          idx,
 				"baseUrl":        "https://api.nan.builders/v1",
 				"apiKey":         apiKey,
 				"displayName":    display,
-				"noImageSupport": !nm.Accepts(catalog.InputImage),
+				"noImageSupport": !m.Vision,
 				"provider":       "openai",
 			})
 			changed = true
@@ -2372,18 +2410,18 @@ func writeFactoryConfig(cfgPath, apiKey string) error {
 	if !changed {
 		return nil
 	}
-	cfg["customModels"] = models
+	cfg["customModels"] = entries
 
-	// Leave it pointing at the model the quickstart starts everyone with. It
-	// used to be qwen3.6, which the docs now call the previous generation.
-	if _, ok := cfg["sessionDefaultSettings"]; !ok {
-		for _, m := range models {
-			if id, _ := m["model"].(string); id == catalog.Default {
-				cfg["sessionDefaultSettings"] = map[string]any{
-					"model":           m["id"],
-					"reasoningEffort": "none",
-					"autonomyMode":    "normal",
-				}
+	// Leave it pointing at the platform's first model.
+	sds, _ := cfg["sessionDefaultSettings"].(map[string]any)
+	if sds == nil {
+		sds = map[string]any{"reasoningEffort": "none", "autonomyMode": "normal"}
+	}
+	if _, set := sds["model"]; !set {
+		for _, e := range entries {
+			if id, _ := e["model"].(string); id == models[0].ID {
+				sds["model"] = e["id"]
+				cfg["sessionDefaultSettings"] = sds
 				break
 			}
 		}
@@ -2396,7 +2434,7 @@ func writeFactoryConfig(cfgPath, apiKey string) error {
 	return writeConfigFile(cfgPath, data)
 }
 
-func writeOpencodeConfig(cfgPath, apiKey string) error {
+func writeOpencodeConfig(cfgPath, apiKey string, models []catalog.Model) error {
 	cfg, err := readJSONConfig(cfgPath)
 	if err != nil {
 		return err
@@ -2412,16 +2450,16 @@ func writeOpencodeConfig(cfgPath, apiKey string) error {
 	// small one. An unknown key (this used to be written as `contextWindow`)
 	// raises nothing anyone sees, which is why nan.builders/docs/opencode
 	// spells the field out and why this writes it.
-	nanModels := map[string]any{}
-	for _, m := range catalog.ChatModels() {
+	nanModels := make(map[string]any, len(models))
+	for _, m := range models {
 		nanModels[m.ID] = map[string]any{
-			"name": m.Name,
+			"name": m.ID,
 			"limit": map[string]any{
 				"context": m.Context,
 				"output":  m.Output,
 			},
 			"modalities": map[string]any{
-				"input":  m.Inputs,
+				"input":  m.Inputs(),
 				"output": []string{"text"},
 			},
 		}
@@ -2435,38 +2473,28 @@ func writeOpencodeConfig(cfgPath, apiKey string) error {
 				if existing == nil {
 					existing = map[string]any{}
 				}
+				// Every entry under our provider is ours: an id the cluster
+				// stopped serving goes, and the fields this writes are brought
+				// up to what the platform says now. Anything else the member
+				// added to an entry stays.
 				changed := false
 				for id := range existing {
-					if catalog.IsRetired(id) {
+					if _, served := nanModels[id]; !served {
 						delete(existing, id)
 						changed = true
 					}
 				}
-				for id, m := range nanModels {
+				for id, want := range nanModels {
 					found, ok := existing[id].(map[string]any)
 					if !ok {
-						existing[id] = m
+						existing[id] = want
 						changed = true
 						continue
 					}
-					// An entry written by an older version of this CLI has no
-					// `limit` at all. Filling it in is the only way those
-					// configs ever stop compacting early; anything the member
-					// set themselves is left exactly as it is.
-					for _, field := range []string{"limit", "modalities"} {
-						if _, present := found[field]; !present {
-							found[field] = m.(map[string]any)[field]
+					for field, value := range want.(map[string]any) {
+						if !sameJSON(found[field], value) {
+							found[field] = value
 							changed = true
-						}
-					}
-					if limit, ok := found["limit"].(map[string]any); ok {
-						if ctx, ok := limit["context"].(float64); ok {
-							for _, stale := range catalog.StaleContexts[id] {
-								if int(ctx) == stale {
-									limit["context"] = m.(map[string]any)["limit"].(map[string]any)["context"]
-									changed = true
-								}
-							}
 						}
 					}
 				}
@@ -2506,6 +2534,14 @@ func writeOpencodeConfig(cfgPath, apiKey string) error {
 	return writeConfigFile(cfgPath, data)
 }
 
+// sameJSON compares two values by encoding: JSON read back gives float64 and
+// []any where the writer holds int and []string.
+func sameJSON(a, b any) bool {
+	x, errA := json.Marshal(a)
+	y, errB := json.Marshal(b)
+	return errA == nil && errB == nil && bytes.Equal(x, y)
+}
+
 // Pi takes a provider two ways: a models.json, which is data, or an extension
 // that calls pi.registerProvider, which is code. Both are current in 0.85.1.
 // This used to write the extension - a TypeScript file Pi loads and runs - and
@@ -2513,7 +2549,7 @@ func writeOpencodeConfig(cfgPath, apiKey string) error {
 // validates models.json against its own schema and names the field that is
 // wrong, nothing this CLI writes has to execute on a member's machine, and the
 // two ways of setting Pi up stop being two things to keep in step.
-func writePiConfig(cfgPath, apiKey string) error {
+func writePiConfig(cfgPath, apiKey string, models []catalog.Model) error {
 	// Unlike the extension file, models.json is shared: other providers live in
 	// it and none of them are ours to touch.
 	cfg, err := readJSONConfig(cfgPath)
@@ -2526,12 +2562,12 @@ func writePiConfig(cfgPath, apiKey string) error {
 		providers = map[string]any{}
 	}
 
-	models := make([]map[string]any, 0, len(catalog.ChatModels()))
-	for _, m := range catalog.ChatModels() {
-		models = append(models, map[string]any{
+	entries := make([]map[string]any, 0, len(models))
+	for _, m := range models {
+		entries = append(entries, map[string]any{
 			"id":            m.ID,
-			"name":          m.Name,
-			"input":         piInputs(m),
+			"name":          m.ID,
+			"input":         m.Inputs(),
 			"reasoning":     m.Reasoning,
 			"contextWindow": m.Context,
 			"maxTokens":     m.Output,
@@ -2544,7 +2580,7 @@ func writePiConfig(cfgPath, apiKey string) error {
 		"apiKey":  apiKey,
 		"api":     "openai-completions",
 		"compat":  map[string]any{"supportsDeveloperRole": true},
-		"models":  models,
+		"models":  entries,
 	}
 	cfg["providers"] = providers
 
@@ -2555,14 +2591,14 @@ func writePiConfig(cfgPath, apiKey string) error {
 	if err := writeConfigFile(cfgPath, data); err != nil {
 		return err
 	}
-	return writePiDefaults(piSettingsPath(cfgPath))
+	return writePiDefaults(piSettingsPath(cfgPath), models)
 }
 
 // Pi reads the provider it calls from a second file, and until this existed
 // the CLI wrote only the first one. nan.builders/docs/pi marks this step "not
 // optional" for a reason: with models.json alone Pi goes on calling its
 // factory provider, and what the member sees is a 401 that names neither file.
-func writePiDefaults(settingsPath string) error {
+func writePiDefaults(settingsPath string, models []catalog.Model) error {
 	settings, err := readJSONConfig(settingsPath)
 	if err != nil {
 		return err
@@ -2571,11 +2607,16 @@ func writePiDefaults(settingsPath string) error {
 	// A member who already picked a default picked it, and ours is one more
 	// provider they can switch to from inside Pi. This only fills the gap that
 	// leaves a fresh install calling nothing.
-	if _, chosen := settings["defaultProvider"]; chosen {
-		return nil
+	if provider, chosen := settings["defaultProvider"]; chosen {
+		// Someone else's provider is the member's choice. Ours, pointing at a
+		// model the platform stopped serving, is a default that calls nothing.
+		current, _ := settings["defaultModel"].(string)
+		if provider != "nan" || slices.ContainsFunc(models, func(m catalog.Model) bool { return m.ID == current }) {
+			return nil
+		}
 	}
 	settings["defaultProvider"] = "nan"
-	settings["defaultModel"] = catalog.Coding
+	settings["defaultModel"] = models[0].ID
 
 	out, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
@@ -2587,19 +2628,6 @@ func writePiDefaults(settingsPath string) error {
 // settings.json sits next to models.json in Pi's agent directory.
 func piSettingsPath(cfgPath string) string {
 	return filepath.Join(filepath.Dir(cfgPath), "settings.json")
-}
-
-// Pi's schema takes "text" and "image" and nothing else, so mimo-v2.6-flash goes in
-// without its audio: a third value fails validation, and Pi then refuses the
-// whole file with every other provider in it.
-func piInputs(m catalog.Model) []string {
-	out := make([]string, 0, len(m.Inputs))
-	for _, in := range m.Inputs {
-		if in == catalog.InputText || in == catalog.InputImage {
-			out = append(out, in)
-		}
-	}
-	return out
 }
 
 // Deleting the file is no longer an option: models.json is where every Pi
@@ -2804,10 +2832,9 @@ func withCodexNaNSessionDefaults(content, codexHome string, use, other codexSwit
 	return edited
 }
 
-func writeCodexConfig(cfgPath, apiKey string) error {
+func writeCodexConfig(cfgPath, apiKey string, models []catalog.Model) error {
 	data, _ := os.ReadFile(cfgPath)
 	use, other := codexSubAgentSwitches(codexVersion())
-	codexModel, _ := catalog.Get(catalog.Coding)
 
 	if strings.Contains(string(data), "api.nan.builders") {
 		// Already pointing at the cluster, so there is nothing to add - but
@@ -2824,37 +2851,43 @@ func writeCodexConfig(cfgPath, apiKey string) error {
 		// an error dialog and nothing else. Repairing the wire_api alone left
 		// that member exactly as stuck as before, so the pruning runs first
 		// and puts the key back where it is read from.
-		repaired, pruned := codexContextWindowsPruned(data, codexModel.Context)
-		if pruned {
-			repaired = []byte(withCodexContextWindow(string(repaired), codexModel.Context))
-		}
-		rewired, changed := codexWireAPIRepaired(repaired)
-		defaulted := withCodexNaNSessionDefaults(string(rewired), filepath.Dir(cfgPath), use, other)
-		if pruned || changed || defaulted != string(rewired) {
-			if err := writeConfigFile(cfgPath, []byte(defaulted)); err != nil {
+		//
+		// Our window is taken out wherever it is and put back once, at the
+		// root, for the model the root table runs - which also brings it up
+		// to date when that model's window changed. The NaN-root defaults go
+		// in between, on a file the sweep has made parseable again: the window
+		// goes back at the end of the root, so with the defaults already
+		// above it a second run puts it back exactly where it was.
+		swept := codexContextWindowsCleared(data, codexLegacyWindowIsOurs(data))
+		defaulted := withCodexNaNSessionDefaults(string(swept), filepath.Dir(cfgPath), use, other)
+		rewired := codexWireAPIRepaired([]byte(withRootModelWindow([]byte(defaulted), models)))
+		if !bytes.Equal(rewired, data) {
+			if err := writeConfigFile(cfgPath, rewired); err != nil {
 				return err
 			}
 		}
-		return writeCodexProfiles(filepath.Dir(cfgPath), use)
+		return writeCodexProfiles(filepath.Dir(cfgPath), models, use)
 	}
 
 	// If no existing config, write a complete starter config.
 	if len(data) == 0 {
 		content := fmt.Sprintf(`model = %q
 model_provider = "nan"
-model_context_window = %d
 
 [model_providers.nan]
 name = "NaN"
 base_url = "https://api.nan.builders/v1"
 experimental_bearer_token = %q
 wire_api = "responses"
-`, codexModel.ID, codexModel.Context, apiKey)
+`, models[0].ID, apiKey)
+		// The window last, in the order a reconnect puts it back in, so a
+		// second run leaves the file byte for byte as it is.
 		content = withCodexNaNSessionDefaults(content, filepath.Dir(cfgPath), use, other)
+		content = withRootModelWindow([]byte(content), models)
 		if err := writeConfigFile(cfgPath, []byte(content)); err != nil {
 			return err
 		}
-		return writeCodexProfiles(filepath.Dir(cfgPath), use)
+		return writeCodexProfiles(filepath.Dir(cfgPath), models, use)
 	}
 
 	// Existing config: only append the provider section; preserve user's model/provider choices.
@@ -2865,14 +2898,16 @@ base_url = "https://api.nan.builders/v1"
 experimental_bearer_token = %q
 wire_api = "responses"
 `, apiKey)
-	content := strings.TrimRight(string(data), "\n") + "\n" + section
-	content = withCodexContextWindow(content, codexModel.Context)
+	// The same sweep first: an orphan marked or legacy window left by an
+	// earlier version would otherwise end up as a duplicate key.
+	content := strings.TrimRight(string(codexContextWindowsCleared(data, codexLegacyWindowIsOurs(data))), "\n") + "\n" + section
 	// A root that already says model_provider = "nan" is a NaN session too.
 	content = withCodexNaNSessionDefaults(content, filepath.Dir(cfgPath), use, other)
+	content = withRootModelWindow([]byte(content), models)
 	if err := writeConfigFile(cfgPath, []byte(content)); err != nil {
 		return err
 	}
-	return writeCodexProfiles(filepath.Dir(cfgPath), use)
+	return writeCodexProfiles(filepath.Dir(cfgPath), models, use)
 }
 
 // One file per chat model, so every model on the cluster is a flag away with
@@ -2904,20 +2939,30 @@ wire_api = "responses"
 // the disconnect as well; a root whose provider is the member's own never
 // does, since they would take search and the model list from their OpenAI
 // sessions.
-func writeCodexProfiles(codexHome string, subAgents codexSwitch) error {
+func writeCodexProfiles(codexHome string, models []catalog.Model, subAgents codexSwitch) error {
 	// Starting from none, so a model the cluster retired does not leave its
 	// profile behind to answer 401 on `--profile`.
 	if err := removeCodexProfiles(codexHome); err != nil {
 		return err
 	}
-	models, err := codexCatalog()
+	catalogJSON, err := codexCatalog(models)
 	if err != nil {
 		return err
 	}
-	if err := writeConfigFile(filepath.Join(codexHome, codexCatalogFile), models); err != nil {
+	if err := writeConfigFile(filepath.Join(codexHome, codexCatalogFile), catalogJSON); err != nil {
 		return err
 	}
-	for _, m := range catalog.ChatModels() {
+	// Two ids can map to one file name: codexProfileName drops dots, and a
+	// case-insensitive file system folds case. The first model in API order
+	// keeps the profile; the other is still in the catalogue and reachable
+	// from /model.
+	seen := map[string]bool{}
+	for _, m := range models {
+		file := strings.ToLower(codexProfileName(m.ID))
+		if seen[file] {
+			continue
+		}
+		seen[file] = true
 		body := fmt.Sprintf(`# Written by the NaN CLI. Disconnecting Codex removes it.
 model = %q
 model_provider = "nan"
@@ -2962,6 +3007,72 @@ func removeCodexProfiles(codexHome string) error {
 	return nil
 }
 
+// The root model_context_window this CLI writes carries a mark, because the
+// disconnect has no list to tell our number from the member's: it reads the
+// mark instead. Versions before the mark wrote one value only, glm5.3-flash's
+// window, so an unmarked line with exactly that value is ours too - but only
+// in a file that still points at us (see codexLegacyWindowIsOurs): anywhere
+// else the same number is as likely the member's own, a Gemini window being
+// exactly 1048576.
+const (
+	codexWindowMark   = "# nan-cli"
+	legacyCodexWindow = "1048576"
+)
+
+func codexWindowLine(window int) string {
+	return fmt.Sprintf("model_context_window = %d %s", window, codexWindowMark)
+}
+
+// codexLegacyWindowIsOurs says whether an unmarked legacy window in this file
+// can be ours: the file has our provider section, or its root runs on it.
+func codexLegacyWindowIsOurs(data []byte) bool {
+	content := string(data)
+	return codexHasNaNSection(strings.Split(content, "\n")) ||
+		codexRootKeys(content)["model_provider"] == "nan"
+}
+
+func isOurCodexWindow(value string, legacy bool) bool {
+	number, comment, commented := strings.Cut(value, "#")
+	if commented {
+		return "# "+strings.TrimSpace(comment) == codexWindowMark
+	}
+	return legacy && strings.TrimSpace(number) == legacyCodexWindow
+}
+
+// The root window belongs to the model a session without --profile runs, and
+// only when that session goes through us: a window declared over
+// model = "gpt-5", or over one of our ids served by another provider, is a
+// window forced on sessions this CLI does not route.
+func withRootModelWindow(data []byte, models []catalog.Model) string {
+	content := string(data)
+	root := codexRootKeys(content)
+	if root["model_provider"] != "nan" {
+		return content
+	}
+	for _, m := range models {
+		if m.ID == root["model"] {
+			return withCodexContextWindow(content, m.Context)
+		}
+	}
+	return content
+}
+
+// codexRootKeys reads the keys of the root table (the lines before the first
+// header) one line at a time, as TOML reads each line. Line by line rather
+// than through codexTOML, because the file this is asked about may be one
+// Codex refuses for a duplicate model_context_window - which is exactly the
+// file whose window has to be told apart.
+func codexRootKeys(content string) map[string]any {
+	lines := strings.Split(content, "\n")
+	keys := map[string]any{}
+	for _, line := range lines[:codexRootEnd(lines)] {
+		if key, value, ok := codexLine(line); ok {
+			keys[key] = value
+		}
+	}
+	return keys
+}
+
 // Codex has no metadata for a model on this cluster, so without
 // model_context_window it compacts against a window it guessed. (It prints
 // the "metadata not found" warning either way - that fires before it reads
@@ -2973,25 +3084,26 @@ func removeCodexProfiles(codexHome string) error {
 // became a key of the last project they trusted, and Codex never looked
 // there.
 func withCodexContextWindow(content string, window int) string {
-	declared := fmt.Sprintf("model_context_window = %d", window)
+	declared := codexWindowLine(window)
 	lines := strings.Split(content, "\n")
-	for i, raw := range lines {
-		trimmed := strings.TrimSpace(raw)
-		// Everything above the first table header is the root table, so this
-		// only ever reads the member's root keys.
-		if strings.HasPrefix(trimmed, "[") {
-			head := strings.TrimRight(strings.Join(lines[:i], "\n"), "\n")
-			tail := strings.Join(lines[i:], "\n")
-			if head == "" {
-				return declared + "\n\n" + tail
-			}
-			return head + "\n" + declared + "\n\n" + tail
-		}
-		if key, _, ok := strings.Cut(trimmed, "="); ok && strings.TrimSpace(key) == "model_context_window" {
+	// Everything above the first table header is the root table, so this only
+	// ever reads the member's root keys. TOML reads the key however it is
+	// quoted, so a "model_context_window" of theirs is a window too.
+	end := codexRootEnd(lines)
+	for _, raw := range lines[:end] {
+		if key, _, ok := codexLine(raw); ok && key == "model_context_window" {
 			return content // the member declared one of their own; it stands
 		}
 	}
-	return strings.TrimRight(content, "\n") + "\n" + declared + "\n"
+	if end == len(lines) {
+		return strings.TrimRight(content, "\n") + "\n" + declared + "\n"
+	}
+	head := strings.TrimRight(strings.Join(lines[:end], "\n"), "\n")
+	tail := strings.Join(lines[end:], "\n")
+	if head == "" {
+		return declared + "\n\n" + tail
+	}
+	return head + "\n" + declared + "\n\n" + tail
 }
 
 // [projects."/home/member/repo"] and the [projects] table above it. This is
@@ -3025,34 +3137,19 @@ func isCodexProjectsHeader(trimmed string) bool {
 // those by value alone took a window the member had set on a profile of their
 // own and moved it to the root, quietly changing what that profile does.
 //
-// In the root table the first one stands and any repeat after it is the
-// duplicate - unless we are taking our own work back out, where the first one
-// goes too if it reads as ours. See codexContextWindowsCleared.
+// In the root table the first one of the member's stands and any repeat after
+// it is the duplicate. One of ours goes wherever it sits in the root: the key
+// went in beside the provider section and means nothing without it, so
+// leaving it behind on a disconnect hands back a file declaring a window for
+// a model the member no longer has. Ours is a line carrying the "# nan-cli"
+// mark, or an unmarked one holding the only value earlier versions wrote
+// (see isOurCodexWindow). Anything else at the root is the member's -
+// withCodexContextWindow steps aside for it on the way in, and this steps
+// around it on the way out.
 //
 // Done line by line for the same reason the wire_api repair is: a round trip
 // through a TOML library reflows a document the member also edits by hand.
-func codexContextWindowsPruned(data []byte, window int) ([]byte, bool) {
-	return codexContextWindowsSwept(data, window, true)
-}
-
-// The disconnect half. Everything above still holds, and the root table stops
-// being off limits: the key we put there went in beside the provider section
-// and means nothing without it, so leaving it behind hands back a file
-// declaring a window for a model the member no longer has.
-//
-// Ours is the one whose value is the window we write. A root key that says
-// anything else is the member's - withCodexContextWindow steps aside for it
-// on the way in, and this steps around it on the way out. The one case both
-// halves get wrong is a member who wrote our exact number themselves before
-// we ever ran: connecting leaves their key alone and disconnecting takes it
-// for ours. Telling those apart needs a mark on the line, which the keys
-// already out there do not carry.
-func codexContextWindowsCleared(data []byte, window int) ([]byte, bool) {
-	return codexContextWindowsSwept(data, window, false)
-}
-
-func codexContextWindowsSwept(data []byte, window int, keepRoot bool) ([]byte, bool) {
-	ours := strconv.Itoa(window)
+func codexContextWindowsCleared(data []byte, legacy bool) []byte {
 	lines := strings.Split(string(data), "\n")
 	out := make([]string, 0, len(lines))
 	inTable, inProjects, keptRoot, pruned := false, false, false, false
@@ -3070,7 +3167,7 @@ func codexContextWindowsSwept(data []byte, window int, keepRoot bool) ([]byte, b
 			out = append(out, line)
 			continue
 		}
-		mine := strings.TrimSpace(value) == ours
+		mine := isOurCodexWindow(value, legacy)
 		drop := false
 		switch {
 		case inProjects:
@@ -3079,9 +3176,7 @@ func codexContextWindowsSwept(data []byte, window int, keepRoot bool) ([]byte, b
 		// below are not about it.
 		case inTable:
 			drop = false
-		case !keepRoot && mine:
-			drop = true
-		case keptRoot:
+		case mine, keptRoot:
 			drop = true
 		default:
 			keptRoot = true
@@ -3100,9 +3195,9 @@ func codexContextWindowsSwept(data []byte, window int, keepRoot bool) ([]byte, b
 		}
 	}
 	if !pruned {
-		return data, false
+		return data
 	}
-	return []byte(strings.Join(out, "\n")), true
+	return []byte(strings.Join(out, "\n"))
 }
 
 // Brings our own [model_providers.nan] section up to the only wire protocol
@@ -3118,7 +3213,7 @@ func codexContextWindowsSwept(data []byte, window int, keepRoot bool) ([]byte, b
 // Done by hand rather than through a TOML library because a round trip
 // through one reflows the whole document - a member's comments, their
 // spacing, their quoting - to satisfy a change of one word on one line.
-func codexWireAPIRepaired(data []byte) ([]byte, bool) {
+func codexWireAPIRepaired(data []byte) []byte {
 	lines := strings.Split(string(data), "\n")
 	inNaN, changed := false, false
 	for i, line := range lines {
@@ -3142,9 +3237,9 @@ func codexWireAPIRepaired(data []byte) ([]byte, bool) {
 		changed = true
 	}
 	if !changed {
-		return data, false
+		return data
 	}
-	return []byte(strings.Join(lines, "\n")), true
+	return []byte(strings.Join(lines, "\n"))
 }
 
 // [model_providers.nan] however TOML spells the header: quoted, spaced, with
@@ -3152,6 +3247,12 @@ func codexWireAPIRepaired(data []byte) ([]byte, bool) {
 func isCodexNaNProviderHeader(line string) bool {
 	path, ok := codexTablePath(line)
 	return ok && path == "model_providers.nan"
+}
+
+// Whether the file has our [model_providers.nan] section, however its header
+// is spelled.
+func codexHasNaNSection(lines []string) bool {
+	return slices.ContainsFunc(lines, isCodexNaNProviderHeader)
 }
 
 // The root keys that send Codex to NaN, taken back on a disconnect.
@@ -3304,7 +3405,7 @@ func hermesEnvPath(home string) string {
 	return filepath.Join(home, hermesEnvFile)
 }
 
-func writeHermesConfig(home, apiKey string) error {
+func writeHermesConfig(home, apiKey string, models []catalog.Model) error {
 	// The key goes into Hermes' .env, and the config points at it. Not because
 	// the config is a worse place to keep it - same machine, same member, same
 	// 0600 - but because of the way it would have to get there.
@@ -3324,7 +3425,7 @@ func writeHermesConfig(home, apiKey string) error {
 		{"model.provider", "custom"},
 		{"model.base_url", "https://api.nan.builders/v1"},
 		{"model.api_key", hermesKeyRef},
-		{"model.default", catalog.Coding},
+		{"model.default", models[0].ID},
 	}
 	for _, s := range settings {
 		if err := runHermesConfig(home, "set", s[0], s[1]); err != nil {
@@ -3446,13 +3547,19 @@ var errCodexRootNotCleared = errors.New(`config.toml sets model_provider = "nan"
 	`the NaN CLI cannot take out safely; remove the root model and model_provider lines by hand`)
 
 func removeCodexConfig(cfgPath string) error {
+	data, readErr := os.ReadFile(cfgPath)
+	// Our model_context_window goes first, judged on the file as it was: an
+	// unmarked legacy window is ours only while the file has our section or a
+	// root that runs on us, and both are taken out below. It also makes a file
+	// Codex refused for a duplicate window parse again, so the root check that
+	// follows can read it. Nothing is written yet.
+	swept := codexContextWindowsCleared(data, codexLegacyWindowIsOurs(data))
 	// A root that still points at nan after the cleanup is one written in a
 	// form the line edit cannot take out safely - a multi-line model, say.
 	// Taking the provider section anyway would leave exactly the Codex that
 	// does not start, so nothing is touched - config, profiles, catalogue -
 	// and the member is told what to remove by hand.
-	data, readErr := os.ReadFile(cfgPath)
-	content, rootCleared := codexNaNRootCleared(string(data))
+	content, rootCleared := codexNaNRootCleared(string(swept))
 	if readErr == nil {
 		if doc, ok := codexTOML(content); ok && doc["model_provider"] == "nan" {
 			return errCodexRootNotCleared
@@ -3473,18 +3580,17 @@ func removeCodexConfig(cfgPath string) error {
 	if readErr != nil {
 		return profileErr
 	}
-	// Nothing of ours in it - no root provider, no provider section - so
-	// nothing to rewrite: this is called on every sign-out, against a
-	// config.toml that may never have been ours at all.
+	// No root provider and no provider section: nothing else of ours to
+	// rewrite. This is called on every sign-out, against a config.toml that
+	// may never have been ours at all - though one whose section a member
+	// deleted by hand still loses our marked window.
 	lines := strings.Split(content, "\n")
-	hasSection := false
-	for _, line := range lines {
-		if isCodexNaNProviderHeader(line) {
-			hasSection = true
-			break
+	if !rootCleared && !codexHasNaNSection(lines) {
+		if !bytes.Equal(swept, data) {
+			if err := writeConfigFile(cfgPath, swept); err != nil {
+				return err
+			}
 		}
-	}
-	if !rootCleared && !hasSection {
 		return profileErr
 	}
 	var out []string
@@ -3506,20 +3612,6 @@ func removeCodexConfig(cfgPath string) error {
 		out = append(out, line)
 	}
 	result := strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n"
-	// The section is gone, and so is the reason for the model_context_window
-	// that went in beside it. Left behind it is a key the member never wrote,
-	// naming a window no model of theirs has - and if there are two of them
-	// it is a file their Codex does not open, now with nothing left in it to
-	// say who did that or which tool to disconnect to undo it.
-	codexModel, _ := catalog.Get(catalog.Coding)
-	if cleared, changed := codexContextWindowsCleared([]byte(result), codexModel.Context); changed {
-		result = string(cleared)
-	}
-	// Whatever went from the top - the root keys, the window - may have left
-	// the blank line that separated them from the first table.
-	if rootCleared {
-		result = strings.TrimLeft(result, "\n")
-	}
 	if strings.TrimSpace(result) == "" {
 		if err := os.Remove(cfgPath); err != nil {
 			return err

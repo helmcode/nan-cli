@@ -1,196 +1,71 @@
-// Package models is the CLI's one list of what the cluster serves.
-//
-// It existed three times before, written by hand inside each tool writer in
-// internal/tui, and all three had drifted to the same stale set: qwen3.6,
-// gemma4 and deepseek-v4-flash. The cluster serves seven chat models, so a
-// member who ran `nan` got a tool configured for three of them and no way to
-// discover the rest. The windows were worse than stale: Pi was configured with
-// 128000 tokens on models served at 1,048,576, so it compacted the
-// conversation at an eighth of the real window.
-//
-// The numbers here are the ones nan.builders publishes on the setup guides
-// (/docs/opencode, /docs/pi), measured against the proxy on 2026-09-11. When
-// the platform moves one, this is the file to change.
+// Package models turns the platform's model list into what the tool writers
+// need. There is no list in here: a hand-written one drifted from the cluster
+// three times, so Setup asks GET /api/agents/models every time it runs and
+// writes nothing when it cannot.
 package models
 
-// What the model is for. Everything except Chat is here so the Models tab can
-// say what an id is; only Chat models go into the tool configs, because a
-// coding agent has nothing to do with a reranker.
-type Kind string
+import (
+	"regexp"
 
-const (
-	Chat      Kind = "chat"
-	Embedding Kind = "embedding"
-	Rerank    Kind = "rerank"
-	TTS       Kind = "text to speech"
-	STT       Kind = "speech to text"
-	Image     Kind = "image"
+	"github.com/nxssie/nan-cli/internal/api"
 )
+
+// Used when the platform does not report a figure. Short on purpose: a window
+// written short makes a tool compact early, one written long makes it fill
+// the conversation until the model refuses the request.
+const (
+	FallbackContext = 131_072
+	FallbackOutput  = 8_192
+)
+
+// An id ends up in TOML strings, JSON keys and Codex profile file names, so
+// anything that is not a plain model id is skipped rather than escaped.
+var validID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
 type Model struct {
-	ID   string
-	Kind Kind
-	// As the setup guides name it, so a picker in one tool reads like the
-	// picker in the next.
-	Name string
+	ID string
 	// The window the proxy serves, in tokens.
 	Context int
-	// The answer budget a client should plan a turn against. Not a server cap:
-	// vLLM bounds a completion by the window minus the prompt.
-	Output int
-	// Input modalities. Output is text on every model here.
-	Inputs []string
-	// Whether it reasons before answering.
+	// The answer budget a client should plan a turn against.
+	Output    int
+	Vision    bool
 	Reasoning bool
-	// Callable only with a key on the premium tier. Left in the configs it
-	// writes, with the tier in its display name, because leaving it out is how
-	// a member on premium ends up not knowing they have it.
-	Premium bool
 }
 
-const (
-	InputText  = "text"
-	InputImage = "image"
-	InputAudio = "audio"
-)
-
-var All = []Model{
-	{
-		ID:        "deepseek-v4-flash",
-		Kind:      Chat,
-		Name:      "DeepSeek V4 Flash",
-		Context:   1_048_575,
-		Output:    32_768,
-		Inputs:    []string{InputText, InputImage},
-		Reasoning: true,
-	},
-	{
-		ID:        "glm5.3-flash",
-		Kind:      Chat,
-		Name:      "GLM 5.3 Flash",
-		Context:   1_048_576,
-		Output:    32_768,
-		Inputs:    []string{InputText, InputImage},
-		Reasoning: true,
-	},
-	{
-		ID:   "qwen3.8-flash",
-		Kind: Chat,
-		Name: "Qwen 3.8 Flash",
-		// Served at 1,048,576 since 2026-09-29 (nan.builders/docs/models). It
-		// said 262,144 here, the model's native window, so every tool compacted
-		// it at a quarter of what the API takes.
-		Context:   1_048_576,
-		Output:    32_768,
-		Inputs:    []string{InputText, InputImage},
-		Reasoning: true,
-	},
-	{
-		ID:        "mimo-v2.6-flash",
-		Kind:      Chat,
-		Name:      "Xiaomi MiMo V2.6 Flash",
-		Context:   1_048_576,
-		Output:    32_768,
-		Inputs:    []string{InputText, InputImage, InputAudio},
-		Reasoning: true,
-	},
-	{
-		ID:        "gemma4",
-		Kind:      Chat,
-		Name:      "Gemma 4",
-		Context:   262_144,
-		Output:    65_536,
-		Inputs:    []string{InputText, InputImage},
-		Reasoning: true,
-	},
-	{
-		ID:        "qwen3.6",
-		Kind:      Chat,
-		Name:      "Qwen 3.6",
-		Context:   262_144,
-		Output:    65_536,
-		Inputs:    []string{InputText, InputImage},
-		Reasoning: true,
-	},
-	{
-		ID:        "glm5.3",
-		Kind:      Chat,
-		Name:      "GLM 5.3 (premium)",
-		Context:   1_048_576,
-		Output:    32_768,
-		Inputs:    []string{InputText},
-		Reasoning: true,
-		Premium:   true,
-	},
-
-	// Not chat, and not in any tool config: they are here so the Models tab can
-	// say what an id is for. A window is meaningless on most of them.
-	{ID: "qwen3-embedding", Kind: Embedding, Name: "Qwen 3 Embedding", Inputs: []string{InputText}},
-	{ID: "rerank", Kind: Rerank, Name: "Qwen 3 Reranker", Inputs: []string{InputText}},
-	{ID: "kokoro", Kind: TTS, Name: "Kokoro", Inputs: []string{InputText}},
-	{ID: "whisper", Kind: STT, Name: "Whisper large-v3", Inputs: []string{InputAudio}},
-	{ID: "flux-2-klein", Kind: Image, Name: "FLUX.2 Klein", Inputs: []string{InputText, InputImage}},
+// Inputs is what every harness takes: text, and image when the model sees.
+// Nothing else is ever yielded: audio and video are not modalities the
+// harnesses can send.
+func (m Model) Inputs() []string {
+	if m.Vision {
+		return []string{"text", "image"}
+	}
+	return []string{"text"}
 }
 
-// ChatModels is what a coding tool gets configured with. The rest of the
-// catalogue has no business in an agent's model picker.
-func ChatModels() []Model {
-	out := make([]Model, 0, len(All))
-	for _, m := range All {
-		if m.Kind == Chat {
-			out = append(out, m)
+// FromAPI keeps the platform's order (the first entry is the default model)
+// and fills what it did not report with the conservative defaults above.
+func FromAPI(list []api.AgentModel) []Model {
+	out := make([]Model, 0, len(list))
+	seen := make(map[string]bool, len(list))
+	for _, a := range list {
+		if !validID.MatchString(a.Name) || seen[a.Name] {
+			continue
 		}
+		seen[a.Name] = true
+		out = append(out, Model{
+			ID:        a.Name,
+			Context:   positiveOr(a.ContextWindow, FallbackContext),
+			Output:    positiveOr(a.MaxOutputTokens, FallbackOutput),
+			Vision:    a.SupportsVision != nil && *a.SupportsVision,
+			Reasoning: a.SupportsReasoning != nil && *a.SupportsReasoning,
+		})
 	}
 	return out
 }
 
-// Retired are ids the cluster served once and no longer does. Asking for one
-// gets `401 This API key does not have access to the requested model`, which
-// reads like a problem with the key and is not. The writers that merge into a
-// config rather than rewrite it - opencode, droid, the Codex profiles - would
-// otherwise keep offering them forever, so they take these out on the next
-// setup run.
-var Retired = []string{
-	"mimo-v2.5", // replaced by mimo-v2.6-flash on 2026-10
-}
-
-// StaleContexts are windows this CLI once wrote for a model and has since
-// corrected. opencode keeps a `limit` that is already there, since it may be
-// the member's own, but one that matches a figure we wrote is ours to fix.
-var StaleContexts = map[string][]int{
-	"qwen3.8-flash": {262_144},
-}
-
-func IsRetired(id string) bool {
-	for _, r := range Retired {
-		if r == id {
-			return true
-		}
+func positiveOr(v *int, fallback int) int {
+	if v == nil || *v <= 0 {
+		return fallback
 	}
-	return false
-}
-
-// Default is what a tool is left pointing at when it has no preference of its
-// own: the model the quickstart on nan.builders starts everyone with.
-const Default = "deepseek-v4-flash"
-
-// Coding is for tools whose whole job is an editor or an agent in a repo.
-const Coding = "glm5.3-flash"
-
-func (m Model) Accepts(input string) bool {
-	for _, i := range m.Inputs {
-		if i == input {
-			return true
-		}
-	}
-	return false
-}
-
-func Get(id string) (Model, bool) {
-	for _, m := range All {
-		if m.ID == id {
-			return m, true
-		}
-	}
-	return Model{}, false
+	return *v
 }
