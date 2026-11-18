@@ -86,3 +86,53 @@ func TestAnExpiredSessionIsNamedAsOne(t *testing.T) {
 		t.Error("a platform that is down reads as an expired session")
 	}
 }
+
+func TestGetAgentsModels(t *testing.T) {
+	var gotURI, gotCookie string
+	status := http.StatusOK
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURI = r.URL.RequestURI()
+		gotCookie = r.Header.Get("Cookie")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(`{"models":[
+			{"name":"glm5.3-flash","mode":"chat","context_window":1048576,"max_output_tokens":32768,"supports_vision":true,"supports_reasoning":false},
+			{"name":"bare","mode":"chat"}]}`))
+	}))
+	defer srv.Close()
+	c := &Client{token: "tok", http: srv.Client(), baseURL: srv.URL}
+
+	got, err := c.GetAgentsModels(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotURI != "/agents/models" {
+		t.Errorf("asked %q, want no ?all", gotURI)
+	}
+	if !strings.Contains(gotCookie, "nan_session=tok") {
+		t.Errorf("cookie %q does not carry the session", gotCookie)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d models", len(got))
+	}
+	full := got[0]
+	if full.ContextWindow == nil || *full.ContextWindow != 1048576 || *full.MaxOutputTokens != 32768 ||
+		full.SupportsVision == nil || !*full.SupportsVision || full.SupportsReasoning == nil || *full.SupportsReasoning {
+		t.Errorf("metadata decoded wrong: %+v", full)
+	}
+	bare := got[1]
+	if bare.ContextWindow != nil || bare.MaxOutputTokens != nil || bare.SupportsVision != nil || bare.SupportsReasoning != nil {
+		t.Errorf("a missing field did not stay nil: %+v", bare)
+	}
+
+	if _, err := c.GetAgentsModels(true); err != nil {
+		t.Fatal(err)
+	}
+	if gotURI != "/agents/models?all=true" {
+		t.Errorf("asked %q, want ?all=true", gotURI)
+	}
+
+	status = http.StatusUnauthorized
+	if _, err := c.GetAgentsModels(false); !errors.Is(err, ErrSessionExpired) {
+		t.Errorf("401 with a token gave %v, want ErrSessionExpired", err)
+	}
+}

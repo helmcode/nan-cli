@@ -109,9 +109,8 @@ func (c *Client) GetMetricsUsage() (map[string]any, error) {
 const InferenceBaseURL = "https://api.nan.builders/v1"
 
 // ListModels returns the ids from GET /v1/models, which is the list the docs
-// call definitive: `/agents/models` on the platform answers with deployment
-// names instead, so it carries routing aliases (`-fallback`) and models that
-// are on their way out.
+// call definitive. `/agents/models` on the platform says what each model is for
+// and needs a session; this list is what the key itself can call.
 func ListModels(apiKey string) ([]string, error) {
 	req, err := http.NewRequest(http.MethodGet, InferenceBaseURL+"/models", nil)
 	if err != nil {
@@ -176,11 +175,33 @@ func (c *Client) GetKeyStatus() (*KeyStatus, error) {
 	return &status, nil
 }
 
-func (c *Client) GetAgentsModels() (any, error) {
-	body, err := c.get("/agents/models")
+// AgentModel is one entry of GET /api/agents/models. The four metadata
+// fields are nil when the platform does not know them.
+type AgentModel struct {
+	Name              string `json:"name"`
+	Mode              string `json:"mode"`
+	ContextWindow     *int   `json:"context_window,omitempty"`
+	MaxOutputTokens   *int   `json:"max_output_tokens,omitempty"`
+	SupportsVision    *bool  `json:"supports_vision,omitempty"`
+	SupportsReasoning *bool  `json:"supports_reasoning,omitempty"`
+}
+
+// GetAgentsModels lists the models the platform serves: chat models only,
+// unless all asks for every mode (embeddings, speech, images).
+func (c *Client) GetAgentsModels(all bool) ([]AgentModel, error) {
+	path := "/agents/models"
+	if all {
+		path += "?all=true"
+	}
+	body, err := c.get(path)
 	if err != nil {
 		return nil, err
 	}
-	var result any
-	return result, json.Unmarshal(body, &result)
+	var out struct {
+		Models []AgentModel `json:"models"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, err
+	}
+	return out.Models, nil
 }
