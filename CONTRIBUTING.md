@@ -4,7 +4,7 @@ Thanks for your interest in contributing. This document covers how to get the pr
 
 ## Prerequisites
 
-- **Go 1.27.2+**, the version in `go.mod`, which is where the standard
+- **Go 1.27.4+**, the version in `go.mod`, which is where the standard
   library carries the current security fixes. The project uses [mise](https://mise.jdx.dev/) to pin it, with golangci-lint, lefthook and just: run `just setup` (or `mise install`) in the repo root.
 - A [nan.builders](https://nan.builders) account with an API key (needed to try the dashboard at runtime).
 
