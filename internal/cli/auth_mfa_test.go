@@ -449,3 +449,42 @@ func assertNoChallengeOnDisk(t *testing.T, home string) {
 		t.Fatal(err)
 	}
 }
+
+// With no terminal, the email, the link and the code are three lines of
+// stdin, as they were before the forms: main read them through one scanner,
+// and the rebuild had stopped after the email with "nothing to read from
+// here" while the link sat unread in the pipe. The code needs --totp -, as
+// it does on main: without a terminal it is never read unasked.
+func TestLoginCommandReadsEverythingFromAPipe(t *testing.T) {
+	home := fakeHome(t, "")
+	p := mfaPlatform(t, true)
+	withStdin(t, "me@example.com\n"+testLink+"\n"+authtest.Code+"\n")
+	rootCmd.SetArgs([]string{"auth", "login", "--totp", "-"})
+	rootCmd.SetOut(io.Discard)
+	rootCmd.SetErr(io.Discard)
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if sess, _ := readSession(t, home); sess["token"] != authtest.Session {
+		t.Errorf("session.json = %v", sess)
+	}
+	if n := len(p.Verifies()); n != 1 {
+		t.Errorf("verify POSTs = %d, want 1", n)
+	}
+}
+
+// The second half from a pipe, the address on the command line.
+func TestLoginCommandReadsTheLinkFromAPipe(t *testing.T) {
+	home := fakeHome(t, "")
+	mfaPlatform(t, false)
+	withStdin(t, testLink+"\n")
+	rootCmd.SetArgs([]string{"auth", "login", "--email", "me@example.com"})
+	rootCmd.SetOut(io.Discard)
+	rootCmd.SetErr(io.Discard)
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if sess, _ := readSession(t, home); sess["token"] != authtest.Session {
+		t.Errorf("session.json = %v", sess)
+	}
+}

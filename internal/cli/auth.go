@@ -118,10 +118,15 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	}
 
 	p := NewPrinter(false, false)
+	// Without a terminal the three answers come from stdin, one line each,
+	// through one scanner: a pipe that carries all three has been read into
+	// its buffer by the time the second is asked for, so a second reader
+	// would find nothing. Bounded, like every other read of stdin here.
+	in := bufio.NewScanner(io.LimitReader(os.Stdin, 4096))
 	email := strings.TrimSpace(emailFlag)
 	if email == "" {
 		var err error
-		if email, err = askEmail(cmd.Context(), p); err != nil {
+		if email, err = askEmail(cmd.Context(), p, in); err != nil {
 			return err
 		}
 	}
@@ -137,15 +142,20 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	}
 	announceLink(p, client, email)
 
-	pasted, err := askLink(cmd.Context(), p, client)
+	pasted, err := askLink(cmd.Context(), p, client, in)
 	if err != nil || pasted == "" {
 		return err // an empty paste is the CI dead end, already explained
 	}
-	// The forms ended on the terminal; the code is read from it, hidden. With
-	// --totp - the line comes from stdin instead, the same bounded reader.
-	stdin := bufio.NewReader(io.LimitReader(os.Stdin, 1024))
+	// On a terminal the code is read from it, hidden. Otherwise, and with
+	// --totp -, the line comes from the same scanner as the two before it.
 	return finishLogin(cmd.Context(), client, pasted, newCodeInput(os.Stdin, func() (string, error) {
-		return stdin.ReadString('\n')
+		if in.Scan() {
+			return in.Text(), nil
+		}
+		if err := in.Err(); err != nil {
+			return "", err
+		}
+		return "", io.EOF
 	}), os.Stdout, os.Stderr)
 }
 
@@ -157,9 +167,14 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 const emailHint = "pass it instead:\n\n  nan auth login --email you@example.com"
 
 // askEmail is the first half of the flow.
-func askEmail(ctx context.Context, p *Printer) (string, error) {
+func askEmail(ctx context.Context, p *Printer, in *bufio.Scanner) (string, error) {
 	if !p.Interactive() {
-		return "", fmt.Errorf("nothing to read from here - %s", emailHint)
+		fmt.Print("Email: ")
+		if !in.Scan() {
+			fmt.Println()
+			return "", fmt.Errorf("nothing to read from here - %s", emailHint)
+		}
+		return strings.TrimSpace(in.Text()), nil
 	}
 	var email string
 	form := ui.NewForm(huh.NewGroup(
@@ -202,8 +217,17 @@ func announceLink(p *Printer, client *api.Client, email string) {
 //
 // An empty return with no error is the CI dead end: the email has already
 // gone, so there is nothing to report, only a second command to run.
-func askLink(ctx context.Context, p *Printer, client *api.Client) (string, error) {
+func askLink(ctx context.Context, p *Printer, client *api.Client, in *bufio.Scanner) (string, error) {
 	if !p.Interactive() {
+		fmt.Print("Paste the link: ")
+		if in.Scan() {
+			if pasted := strings.TrimSpace(in.Text()); pasted != "" {
+				return pasted, nil
+			}
+		}
+		// Nobody at the keyboard: the email has gone, so this is not a
+		// failure, it is the second half of the flow as a command.
+		fmt.Println()
 		p.Line(indent + ui.Value("Nothing to read from here. Finish the login with:"))
 		p.Blank()
 		p.Line(indent + ui.Mono(`  nan auth login --link "<the link>"`))
