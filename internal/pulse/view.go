@@ -3,6 +3,7 @@ package pulse
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -469,7 +470,12 @@ func table(cols []column, rows []row, cursor, width, lines int, mo motion) strin
 	if len(rows) == 0 {
 		return b.String() + "  " + ui.Faint("Nothing here yet.") + "\n"
 	}
-	show := max(lines-3, 1)
+	// The header takes two lines, and the "1-3 of 9" line one more, but
+	// only when there is something it does not show.
+	show := max(lines-2, 1)
+	if len(rows) > show {
+		show = max(lines-3, 1)
+	}
 	first := 0
 	if cursor >= show {
 		first = cursor - show + 1
@@ -543,16 +549,21 @@ func (m model) renderUsage(w, room int) string {
 	// No blank line between the credits and the chart: the chart's top row
 	// is mostly empty and is the gap, and on an 80x24 terminal that line
 	// is the difference between the chart fitting and not.
-	b.WriteString(m.renderCredits(w))
+	b.WriteString(m.renderCredits(w - 2))
 	// What is left goes, in order, to the table (its header and three
 	// rows at least: the figures per model matter most), the chart, and
 	// last the "By model" heading, which the table's own header already
 	// says. So an 80x24 terminal gets the chart and loses only the heading.
-	need := 2 + min(len(m.rows(areaUsage)), 3)
-	left := room - lipgloss.Height(b.String())
-	if chart := m.renderChart(w); left-lipgloss.Height(chart)-1 >= need {
+	need := 2 + len(m.rows(areaUsage))
+	if need > 5 {
+		need = 2 + 3 + 1 // three rows and the "1-3 of n" line
+	}
+	// Lines, counted as newlines: every piece here ends with one, and
+	// lipgloss.Height counts the empty line after it as one more.
+	left := room - strings.Count(b.String(), "\n")
+	if chart := m.renderChart(w); left-strings.Count(chart, "\n")-1 >= need {
 		b.WriteString(chart)
-		left -= lipgloss.Height(chart)
+		left -= strings.Count(chart, "\n")
 	}
 	if left-3 >= need {
 		b.WriteString("\n" + m.eyebrow("By model") + "\n\n")
@@ -560,7 +571,7 @@ func (m model) renderUsage(w, room int) string {
 		b.WriteString("\n")
 	}
 	head := b.String()
-	return head + table(m.usageColumns(), m.rows(areaUsage), m.cursor[areaUsage], w, room-lipgloss.Height(head), m.motion())
+	return head + table(m.usageColumns(), m.rows(areaUsage), m.cursor[areaUsage], w, room-strings.Count(head, "\n"), m.motion())
 }
 
 // renderChart is the tokens of each of the last thirty days, and the
@@ -584,10 +595,11 @@ func (m model) renderChart(w int) string {
 	return b.String()
 }
 
-// renderCredits is the member's credits this period in a line: how much of
-// the pool is spent, what is left, the pack on top and when it renews. A
-// second line says when they cannot be spent at all. Nothing for a member
-// not on credits.
+// renderCredits is the member's credits this period, drawn as the web
+// dashboard's card is: a heading with what is left on the right, a bar the
+// width of the area, and under it what was used, when it resets and what
+// the prompt cache saved. Then the credits bought on top, and a line when
+// they cannot be spent at all. Nothing for a member not on credits.
 func (m model) renderCredits(w int) string {
 	c := m.snap.credits
 	if c == nil || !c.Enabled {
@@ -598,30 +610,78 @@ func (m model) renderCredits(w int) string {
 		frac = c.UsedCredits / c.AllowanceCredits
 	}
 	now := time.Now()
-	line := ui.Faint("Credits  ") + ui.LevelBar(frac, 12) + "  " +
-		ui.Value(credits(c.UsedCredits)) + ui.Faint(" of "+credits(c.AllowanceCredits)+" used · ") +
-		ui.Value(credits(c.RemainingCredits)) + ui.Faint(" left")
+	var b strings.Builder
+
+	left := ui.Value(credits(c.RemainingCredits)) + ui.Faint(" left")
+	b.WriteString(spread(ui.Value("Credits this period"), left, w) + "\n")
+	b.WriteString(creditsBar(frac*m.reveal, c.UsedCredits > 0, w) + "\n")
+
+	used := ui.Value(credits(c.UsedCredits)) + ui.Faint(" / "+credits(c.AllowanceCredits)+" used")
 	if c.PeriodEnd != "" {
-		line += ui.Faint(" · resets " + soon(c.PeriodEnd, now))
+		used += ui.Faint(" · resets " + soon(c.PeriodEnd, now))
 	}
-	out := ansi.Truncate(line, w, "…") + "\n"
+	saved := ""
+	if c.CacheSavedCredits > 0 {
+		saved = ui.Success("cache saved " + credits(c.CacheSavedCredits))
+	}
+	b.WriteString(spread(used, saved, w) + "\n")
+
 	if c.PackCredits > 0 {
 		pack := "+ " + credits(c.PackCredits) + " bought"
 		if c.PackExpiresAt != nil {
 			pack += ", until " + soon(*c.PackExpiresAt, now)
 		}
-		out += strings.Repeat(" ", len("Credits  ")) + ansi.Truncate(ui.Faint(pack), w-len("Credits  "), "…") + "\n"
-	}
-	if c.CacheSavedCredits > 0 {
-		out += strings.Repeat(" ", len("Credits  ")) + ansi.Truncate(ui.Success("prompt cache saved "+credits(c.CacheSavedCredits)+" this period"), w-len("Credits  "), "…") + "\n"
+		b.WriteString(ansi.Truncate(ui.Faint(pack), w, "…") + "\n")
 	}
 	switch {
 	case c.Frozen:
-		out += ansi.Truncate(ui.Warn("Credits are on hold: requests that use them are refused until the membership is active again."), w, "…") + "\n"
+		b.WriteString(ansi.Truncate(ui.Warn("Credits are on hold: requests that use them are refused until the membership is active again."), w, "…") + "\n")
 	case c.FrontierPaused:
-		out += ansi.Truncate(ui.Faint("Frontier models are paused for now; the others answer as usual."), w, "…") + "\n"
+		b.WriteString(ansi.Truncate(ui.Faint("Frontier models are paused for now; the others answer as usual."), w, "…") + "\n")
 	}
-	return out
+	return b.String()
+}
+
+// spread puts left at the start of a line of width w and right at its end,
+// dropping right when the two do not fit.
+func spread(left, right string, w int) string {
+	gap := w - ansi.StringWidth(left) - ansi.StringWidth(right)
+	if right == "" || gap < 2 {
+		return ansi.Truncate(left, w, "…")
+	}
+	return left + strings.Repeat(" ", gap) + right
+}
+
+// partials are the left-aligned eighth blocks, so a bar's end lands on an
+// eighth of a cell rather than a whole one.
+var partials = []string{"", "▏", "▎", "▍", "▌", "▋", "▊", "▉"}
+
+// creditsBar is fraction of width filled. The fill is the brand's colour,
+// turning to the usage scale's yellow and red once three quarters are gone;
+// the track is a lighter shade, so the two differ without colour too. Any
+// use at all shows: 455 of 20,000 is a sliver, not nothing.
+func creditsBar(fraction float64, used bool, width int) string {
+	if width < 1 {
+		return ""
+	}
+	fraction = min(max(fraction, 0), 1)
+	eighths := int(math.Round(fraction * float64(width*8)))
+	if used && eighths == 0 {
+		eighths = 1
+	}
+	full, part := eighths/8, eighths%8
+	t := ui.Current()
+	fill := t.Accent
+	if fraction >= 0.75 {
+		fill = ui.Level(fraction)
+	}
+	bar := strings.Repeat("█", full) + partials[part]
+	cells := full
+	if part > 0 {
+		cells++
+	}
+	return lipgloss.NewStyle().Foreground(fill).Render(bar) +
+		lipgloss.NewStyle().Foreground(t.Line).Render(strings.Repeat("░", width-cells))
 }
 
 // credits is an amount of credits as the web dashboard writes it: to a

@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/helmcode/nan-cli/internal/api"
 )
 
@@ -58,7 +60,7 @@ func TestUsageShowsCreditsAndTheMonthOnASmallTerminal(t *testing.T) {
 	m, _ := demoModel(t, 80, 24)
 	m = withMonth(m)
 	out := screen(press(t, m, keyOf("3")))
-	for _, want := range []string{"Credits", "312.4 of 500 used", "187.6 left", "resets", "+ 50 bought", "tokens per day", "busiest", "glm5.3-flash", "deepseek-v4-flash"} {
+	for _, want := range []string{"Credits", "312.4 / 500 used", "187.6 left", "resets", "+ 50 bought", "tokens per day", "busiest", "glm5.3-flash", "deepseek-v4-flash"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("Usage at 80x24 lacks %q:\n%s", want, out)
 		}
@@ -135,7 +137,7 @@ func TestUsageSaysWhatEachModelCostInCredits(t *testing.T) {
 		Models:            []api.ModelCredits{{Model: "glm5.3-flash", CreditsThisMonth: 1396.9}},
 	}
 	out := screen(press(t, m, keyOf("3")))
-	for _, want := range []string{"Credits", "1,396.9", "19,544.8 left", "20,000 used", "cache saved 12,396.7"} {
+	for _, want := range []string{"Credits", "1,396.9", "19,544.8 left", "/ 20,000 used", "cache saved 12,396.7"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("Usage lacks %q:\n%s", want, out)
 		}
@@ -154,5 +156,39 @@ func TestCreditsAreWrittenAsTheWebWritesThem(t *testing.T) {
 		if got := credits(in); got != want {
 			t.Errorf("credits(%v) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// The credits bar spans the width it is given, ends on an eighth of a cell,
+// and shows any use at all: 455 of 20,000 is a sliver, not an empty track.
+func TestTheCreditsBarShowsWhatWasUsed(t *testing.T) {
+	for _, c := range []struct {
+		frac float64
+		used bool
+		fill string
+	}{
+		{0, false, ""},
+		{0.0001, true, "▏"},
+		{455.2 / 20000, true, "▉"}, // 7.3 eighths of 40 cells
+		{1, true, strings.Repeat("█", 40)},
+	} {
+		bar := ansi.Strip(creditsBar(c.frac, c.used, 40))
+		if got := ansi.StringWidth(bar); got != 40 {
+			t.Errorf("%v: the bar is %d wide, want 40", c.frac, got)
+		}
+		fill := strings.TrimRight(bar, "░")
+		if c.fill == "" && fill != "" || c.fill != "" && !strings.HasPrefix(fill, c.fill) {
+			t.Errorf("%v: filled %q, want it to start with %q", c.frac, fill, c.fill)
+		}
+	}
+}
+
+// A table whose rows all fit shows them all: it used to keep a line for
+// "1-1 of 2" whether or not anything was left out, and show one row less.
+func TestATableShowsEveryRowThatFits(t *testing.T) {
+	rows := []row{{id: "a", cells: []string{"a"}}, {id: "b", cells: []string{"b"}}}
+	out := ansi.Strip(table([]column{{title: "Model"}}, rows, 0, 40, 4, motion{reveal: 1}))
+	if !strings.Contains(out, "b") || strings.Contains(out, "of 2") {
+		t.Errorf("two rows in four lines:\n%s", out)
 	}
 }
