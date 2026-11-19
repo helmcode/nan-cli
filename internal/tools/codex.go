@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	catalog "github.com/nxssie/nan-cli/internal/models"
+	catalog "github.com/helmcode/nan-cli/internal/models"
 )
 
 func writeCodexConfig(cfgPath, apiKey string) error {

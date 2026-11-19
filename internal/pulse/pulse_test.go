@@ -13,9 +13,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/nxssie/nan-cli/internal/api"
-	"github.com/nxssie/nan-cli/internal/session"
-	"github.com/nxssie/nan-cli/internal/ui"
+	"github.com/helmcode/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/session"
+	"github.com/helmcode/nan-cli/internal/ui"
 )
 
 // ── fixtures ─────────────────────────────────────────────────────────────

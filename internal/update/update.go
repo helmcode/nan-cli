@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nxssie/nan-cli/internal/build"
+	"github.com/helmcode/nan-cli/internal/build"
 )
 
 // CheckEvery is how often the latest version is asked for: often enough to
@@ -167,7 +167,7 @@ func commandFor(goos, exe, gopath string) string {
 	switch {
 	// go install first: a copy built by it is replaced by it, on Windows too.
 	case isGoBin(dir, gopath):
-		return "go install github.com/nxssie/nan-cli/cmd/nan@latest"
+		return "go install github.com/helmcode/nan-cli/cmd/nan@latest"
 	case goos == "windows":
 		return "irm https://nan.builders/install.ps1 | iex"
 	case dir == "/usr/local/bin" || dir == ".":

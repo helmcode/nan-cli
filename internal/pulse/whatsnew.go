@@ -3,8 +3,8 @@ package pulse
 import (
 	"time"
 
-	"github.com/nxssie/nan-cli/internal/build"
-	"github.com/nxssie/nan-cli/internal/update"
+	"github.com/helmcode/nan-cli/internal/build"
+	"github.com/helmcode/nan-cli/internal/update"
 )
 
 // What changed since the last run: a model the key can call that it could

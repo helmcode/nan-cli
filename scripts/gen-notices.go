@@ -128,7 +128,7 @@ func linkedModules() []module {
 
 	seen := map[string]module{}
 	for _, pkg := range strings.Fields(pkgs) {
-		if strings.HasPrefix(pkg, "github.com/nxssie/nan-cli") {
+		if strings.HasPrefix(pkg, "github.com/helmcode/nan-cli") {
 			continue
 		}
 		line := strings.TrimSpace(run("go", "list", "-f",

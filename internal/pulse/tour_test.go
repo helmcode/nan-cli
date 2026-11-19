@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nxssie/nan-cli/internal/api"
-	"github.com/nxssie/nan-cli/internal/build"
-	"github.com/nxssie/nan-cli/internal/update"
+	"github.com/helmcode/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/build"
+	"github.com/helmcode/nan-cli/internal/update"
 )
 
 // footer is the last line of the screen.

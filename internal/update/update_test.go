@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nxssie/nan-cli/internal/build"
+	"github.com/helmcode/nan-cli/internal/build"
 )
 
 func TestNewerComparesSemanticVersions(t *testing.T) {
@@ -73,8 +73,8 @@ func TestTheCommandMatchesHowItWasInstalled(t *testing.T) {
 		goos, exe, gopath, want string
 	}{
 		"windows":     {"windows", `C:\tools\helmcode.exe`, "", "irm https://nan.builders/install.ps1 | iex"},
-		"go install":  {"linux", filepath.Join(home, "go", "bin", "helmcode"), "", "go install github.com/nxssie/nan-cli/cmd/nan@latest"},
-		"GOPATH":      {"linux", "/opt/gopath/bin/helmcode", "/opt/gopath", "go install github.com/nxssie/nan-cli/cmd/nan@latest"},
+		"go install":  {"linux", filepath.Join(home, "go", "bin", "helmcode"), "", "go install github.com/helmcode/nan-cli/cmd/nan@latest"},
+		"GOPATH":      {"linux", "/opt/gopath/bin/helmcode", "/opt/gopath", "go install github.com/helmcode/nan-cli/cmd/nan@latest"},
 		"script":      {"darwin", "/usr/local/bin/helmcode", "", "curl -fsSL https://nan.builders/install | bash"},
 		"script, dir": {"linux", filepath.Join(home, ".local", "bin", "helmcode"), "", "INSTALL_DIR=" + filepath.Join(home, ".local", "bin") + " curl -fsSL https://nan.builders/install | bash"},
 	}

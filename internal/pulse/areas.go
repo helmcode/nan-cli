@@ -3,7 +3,7 @@ package pulse
 import (
 	"fmt"
 
-	"github.com/nxssie/nan-cli/internal/ui"
+	"github.com/helmcode/nan-cli/internal/ui"
 )
 
 // Areas: the inventory, always on screen.

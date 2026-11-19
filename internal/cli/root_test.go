@@ -7,9 +7,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/nxssie/nan-cli/internal/api"
-	"github.com/nxssie/nan-cli/internal/build"
-	"github.com/nxssie/nan-cli/internal/session"
+	"github.com/helmcode/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/build"
+	"github.com/helmcode/nan-cli/internal/session"
 )
 
 // rootCmd is the tree the package's tests drive. The run commands are

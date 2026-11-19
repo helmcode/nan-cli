@@ -7,7 +7,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/sahilm/fuzzy"
 
-	"github.com/nxssie/nan-cli/internal/ui"
+	"github.com/helmcode/nan-cli/internal/ui"
 )
 
 // The palette: one box that finds anything.

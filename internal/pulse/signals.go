@@ -5,10 +5,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/nxssie/nan-cli/internal/api"
-	"github.com/nxssie/nan-cli/internal/build"
-	"github.com/nxssie/nan-cli/internal/runs"
-	"github.com/nxssie/nan-cli/internal/tools"
+	"github.com/helmcode/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/build"
+	"github.com/helmcode/nan-cli/internal/runs"
+	"github.com/helmcode/nan-cli/internal/tools"
 )
 
 // Signals: what needs the member, worked out from the snapshot.

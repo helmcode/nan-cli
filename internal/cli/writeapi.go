@@ -14,9 +14,9 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
-	"github.com/nxssie/nan-cli/internal/api"
-	"github.com/nxssie/nan-cli/internal/runs"
-	"github.com/nxssie/nan-cli/internal/session"
+	"github.com/helmcode/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/runs"
+	"github.com/helmcode/nan-cli/internal/session"
 )
 
 // The write API (helmcode/nan-devops AGENT-AUTOMATIONS-PHASE3-WRITE-API.md):

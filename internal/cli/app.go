@@ -1,8 +1,8 @@
 package cli
 
 import (
-	"github.com/nxssie/nan-cli/internal/api"
-	"github.com/nxssie/nan-cli/internal/session"
+	"github.com/helmcode/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/session"
 )
 
 // app is what the dashboard-side commands are handed: somewhere to print, a

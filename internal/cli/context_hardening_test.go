@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nxssie/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/api"
 )
 
 // The review findings of #62 (QA and Security), each as a test first.

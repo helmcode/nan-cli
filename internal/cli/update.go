@@ -8,10 +8,10 @@ import (
 
 	"github.com/charmbracelet/x/term"
 
-	"github.com/nxssie/nan-cli/internal/api"
-	"github.com/nxssie/nan-cli/internal/build"
-	"github.com/nxssie/nan-cli/internal/ui"
-	"github.com/nxssie/nan-cli/internal/update"
+	"github.com/helmcode/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/build"
+	"github.com/helmcode/nan-cli/internal/ui"
+	"github.com/helmcode/nan-cli/internal/update"
 )
 
 // After a command, one line when a newer release is out - what gh and most

@@ -12,8 +12,8 @@ import (
 
 	"charm.land/fang/v2"
 
-	"github.com/nxssie/nan-cli/internal/build"
-	"github.com/nxssie/nan-cli/internal/cli"
+	"github.com/helmcode/nan-cli/internal/build"
+	"github.com/helmcode/nan-cli/internal/cli"
 )
 
 func main() {

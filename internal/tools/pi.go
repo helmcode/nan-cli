@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	catalog "github.com/nxssie/nan-cli/internal/models"
+	catalog "github.com/helmcode/nan-cli/internal/models"
 )
 
 // Pi takes a provider two ways: a models.json, which is data, or an extension

@@ -23,9 +23,9 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/text/unicode/norm"
 
-	"github.com/nxssie/nan-cli/internal/api"
-	"github.com/nxssie/nan-cli/internal/contexts"
-	"github.com/nxssie/nan-cli/internal/runs"
+	"github.com/helmcode/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/contexts"
+	"github.com/helmcode/nan-cli/internal/runs"
 )
 
 // Agent contexts (helmcode/nan-devops AGENT-CONTEXT.md §6): a versioned file

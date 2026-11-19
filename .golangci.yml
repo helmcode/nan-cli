@@ -55,4 +55,4 @@ formatters:
       sections:
         - standard
         - default
-        - prefix(github.com/nxssie/nan-cli)
+        - prefix(github.com/helmcode/nan-cli)

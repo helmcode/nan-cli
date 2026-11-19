@@ -7,8 +7,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	catalog "github.com/nxssie/nan-cli/internal/models"
-	"github.com/nxssie/nan-cli/internal/ui"
+	catalog "github.com/helmcode/nan-cli/internal/models"
+	"github.com/helmcode/nan-cli/internal/ui"
 )
 
 // Cards: what enter shows about one thing, over the area it lives in.

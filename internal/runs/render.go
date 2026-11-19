@@ -16,7 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/nxssie/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/api"
 )
 
 // Sanitize removes ANSI escape sequences and control characters from text

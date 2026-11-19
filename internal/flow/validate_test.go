@@ -10,7 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/nxssie/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/api"
 )
 
 // fakeCluster is the inference API's model list, which is what decides

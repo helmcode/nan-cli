@@ -18,7 +18,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
-	"github.com/nxssie/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/api"
 )
 
 // The write API (helmcode/nan-devops AGENT-AUTOMATIONS-PHASE3-WRITE-API.md,

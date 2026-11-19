@@ -11,13 +11,13 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/nxssie/nan-cli/internal/api"
-	"github.com/nxssie/nan-cli/internal/build"
-	"github.com/nxssie/nan-cli/internal/flow"
-	"github.com/nxssie/nan-cli/internal/session"
-	"github.com/nxssie/nan-cli/internal/tools"
-	"github.com/nxssie/nan-cli/internal/ui"
-	"github.com/nxssie/nan-cli/internal/update"
+	"github.com/helmcode/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/build"
+	"github.com/helmcode/nan-cli/internal/flow"
+	"github.com/helmcode/nan-cli/internal/session"
+	"github.com/helmcode/nan-cli/internal/tools"
+	"github.com/helmcode/nan-cli/internal/ui"
+	"github.com/helmcode/nan-cli/internal/update"
 )
 
 const (

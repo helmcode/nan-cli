@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/nxssie/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/api"
 )
 
 // The platform's runs, approvals and automations name their workspace and

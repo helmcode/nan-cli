@@ -9,9 +9,9 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/nxssie/nan-cli/internal/api"
-	"github.com/nxssie/nan-cli/internal/runs"
-	"github.com/nxssie/nan-cli/internal/session"
+	"github.com/helmcode/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/runs"
+	"github.com/helmcode/nan-cli/internal/session"
 )
 
 // tokenEnvVar holds a platform token (nan_pat_...) or an API key (sk-...)

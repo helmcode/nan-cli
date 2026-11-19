@@ -17,7 +17,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/nxssie/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/api"
 )
 
 // The Phase 2 contract (AGENT-AUTOMATIONS-PHASE2 §3.4, §4.4, §7.6, §11) as a

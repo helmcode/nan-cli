@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	catalog "github.com/nxssie/nan-cli/internal/models"
+	catalog "github.com/helmcode/nan-cli/internal/models"
 )
 
 // factoryCustomID is the id Factory knows one of our models by, built the way

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nxssie/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/api"
 )
 
 // nan context (helmcode/nan-devops AGENT-CONTEXT.md §6, C1 test list),

@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	catalog "github.com/nxssie/nan-cli/internal/models"
+	catalog "github.com/helmcode/nan-cli/internal/models"
 )
 
 func writeOpencodeConfig(cfgPath, apiKey string) error {

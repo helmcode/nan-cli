@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 
-	catalog "github.com/nxssie/nan-cli/internal/models"
+	catalog "github.com/helmcode/nan-cli/internal/models"
 )
 
 // Codex fills its /model picker from a catalogue of OpenAI's models, and the

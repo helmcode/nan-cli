@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/nxssie/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/api"
 )
 
 // goldenEnv serves cloud-api's own golden responses (copied into

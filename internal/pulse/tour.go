@@ -5,7 +5,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/nxssie/nan-cli/internal/ui"
+	"github.com/helmcode/nan-cli/internal/ui"
 )
 
 // The tour: a minute through the dashboard, on the member's own data. Each

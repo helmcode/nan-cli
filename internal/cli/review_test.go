@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nxssie/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/api"
 )
 
 // `nan runs logs -f` meets the same 401 and 404 as the rest, only on the

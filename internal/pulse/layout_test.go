@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nxssie/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/api"
 )
 
 // lastLines is the bottom of the screen, where the footer is.

@@ -10,11 +10,11 @@ import (
 	"charm.land/huh/v2"
 	"github.com/spf13/cobra"
 
-	"github.com/nxssie/nan-cli/internal/api"
-	"github.com/nxssie/nan-cli/internal/build"
-	"github.com/nxssie/nan-cli/internal/session"
-	"github.com/nxssie/nan-cli/internal/tools"
-	"github.com/nxssie/nan-cli/internal/ui"
+	"github.com/helmcode/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/build"
+	"github.com/helmcode/nan-cli/internal/session"
+	"github.com/helmcode/nan-cli/internal/tools"
+	"github.com/helmcode/nan-cli/internal/ui"
 )
 
 func newSetupCmd(get func() *app) *cobra.Command {

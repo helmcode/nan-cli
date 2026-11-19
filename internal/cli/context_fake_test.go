@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nxssie/nan-cli/internal/api"
-	"github.com/nxssie/nan-cli/internal/contexts"
+	"github.com/helmcode/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/contexts"
 )
 
 // fakeCtx is an in-memory /v1/contexts with the shapes, codes and status

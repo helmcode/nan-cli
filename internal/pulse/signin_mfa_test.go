@@ -7,9 +7,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/nxssie/nan-cli/internal/api"
-	"github.com/nxssie/nan-cli/internal/api/authtest"
-	"github.com/nxssie/nan-cli/internal/session"
+	"github.com/helmcode/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/api/authtest"
+	"github.com/helmcode/nan-cli/internal/session"
 )
 
 // typeInto sends text to the dashboard one key at a time. What a keystroke

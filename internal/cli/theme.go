@@ -6,7 +6,7 @@ import (
 	"charm.land/fang/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/nxssie/nan-cli/internal/ui"
+	"github.com/helmcode/nan-cli/internal/ui"
 )
 
 // ColorScheme is Helmcode's palette, applied to the help and error output

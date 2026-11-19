@@ -1,4 +1,4 @@
-module github.com/nxssie/nan-cli
+module github.com/helmcode/nan-cli
 
 go 1.26.11
 

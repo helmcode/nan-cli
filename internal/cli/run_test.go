@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nxssie/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/api"
 )
 
 const testRunID = "6f1c2a9b-0000-4000-8000-000000000001"

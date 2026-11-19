@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nxssie/nan-cli/internal/api/authtest"
+	"github.com/helmcode/nan-cli/internal/api/authtest"
 )
 
 // fakePlatform starts the contract's fake and a client pointed at it.

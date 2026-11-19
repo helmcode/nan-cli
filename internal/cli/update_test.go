@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nxssie/nan-cli/internal/api"
-	"github.com/nxssie/nan-cli/internal/update"
+	"github.com/helmcode/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/update"
 )
 
 // A check that failed is still a check. Only a successful one used to be

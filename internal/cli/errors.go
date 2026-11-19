@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/term"
 
-	"github.com/nxssie/nan-cli/internal/runs"
+	"github.com/helmcode/nan-cli/internal/runs"
 )
 
 // ErrorHandler prints a failed command's error, framed like the rest of

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	catalog "github.com/nxssie/nan-cli/internal/models"
+	catalog "github.com/helmcode/nan-cli/internal/models"
 )
 
 const testKey = "sk-test-key-not-a-real-one"

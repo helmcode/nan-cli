@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nxssie/nan-cli/internal/api/authtest"
+	"github.com/helmcode/nan-cli/internal/api/authtest"
 )
 
 // Two-factor sign-in from `nan auth login`, against a fake platform written

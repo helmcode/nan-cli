@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nxssie/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/api"
 )
 
 // BYOK (bring your own key), AGENT-AUTOMATIONS-PHASE3-BYOK.md §2: a run or

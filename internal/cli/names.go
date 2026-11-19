@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nxssie/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/api"
 )
 
 // The platform names a run's or an approval's workspace and automation by id

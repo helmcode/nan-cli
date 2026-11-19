@@ -7,10 +7,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/nxssie/nan-cli/internal/api"
-	catalog "github.com/nxssie/nan-cli/internal/models"
-	"github.com/nxssie/nan-cli/internal/runs"
-	"github.com/nxssie/nan-cli/internal/tools"
+	"github.com/helmcode/nan-cli/internal/api"
+	catalog "github.com/helmcode/nan-cli/internal/models"
+	"github.com/helmcode/nan-cli/internal/runs"
+	"github.com/helmcode/nan-cli/internal/tools"
 )
 
 // snapshot is everything the dashboard knows, fetched together.
