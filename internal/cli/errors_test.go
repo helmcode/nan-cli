@@ -49,3 +49,18 @@ func TestErrorsToAPipeAreTheBareMessage(t *testing.T) {
 		t.Errorf("to a pipe the error printed %q, want %q", got, want)
 	}
 }
+
+// An error can carry what a server said. A terminal executes what it is
+// sent, so an escape sequence in it is dropped; a line break, which a hint
+// uses, stays.
+func TestErrorsDropEscapeSequences(t *testing.T) {
+	var out bytes.Buffer
+	ErrorHandler(&out, fang.Styles{}, errors.New("bad\x1b]52;c;cHduZWQ=\x07 key\nsee --help"))
+	got := out.String()
+	if strings.Contains(got, "\x1b]52") {
+		t.Errorf("an OSC 52 sequence reached the terminal: %q", got)
+	}
+	if !strings.Contains(got, "see --help") || !strings.Contains(got, "\n") {
+		t.Errorf("the hint on its own line was lost: %q", got)
+	}
+}

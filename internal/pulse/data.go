@@ -9,6 +9,7 @@ import (
 
 	"github.com/nxssie/nan-cli/internal/api"
 	catalog "github.com/nxssie/nan-cli/internal/models"
+	"github.com/nxssie/nan-cli/internal/runs"
 	"github.com/nxssie/nan-cli/internal/tools"
 )
 
@@ -78,7 +79,7 @@ func load(ctx context.Context, c *api.Client, apiKey string, askRelease bool) sn
 	}
 	if c.Token() != "" {
 		run(func() { me, err := c.Me(ctx); keep(err); s.me = me })
-		run(func() { u, err := c.Usage(ctx); keep(err); s.usage = u })
+		run(func() { u, err := c.Usage(ctx); keep(err); s.usage = cleanUsage(u) })
 		// The key's status only says where to find a key, so a failure to
 		// read it is not worth saying.
 		run(func() { k, _ := c.KeyStatus(ctx); s.keyStatus = k })
@@ -97,6 +98,22 @@ func load(ctx context.Context, c *api.Client, apiKey string, askRelease bool) sn
 	return s
 }
 
+// cleanUsage strips control characters from the model names in a usage
+// report. They go into table cells through Truncate and Pad, which keep
+// escape sequences on purpose, so a name carrying one would reach the
+// terminal as a command.
+func cleanUsage(u *api.Usage) *api.Usage {
+	if u == nil {
+		return nil
+	}
+	for _, p := range []*api.Period{&u.Last24h, &u.Last30d, &u.AllTime} {
+		for i := range p.ByModel {
+			p.ByModel[i].Model = runs.SanitizeLine(p.ByModel[i].Model)
+		}
+	}
+	return u
+}
+
 // loadModels asks the cluster which models the key can call - the list the
 // docs call definitive - and falls back on the platform's own list when
 // there is no key to ask with.
@@ -111,6 +128,7 @@ func loadModels(ctx context.Context, c *api.Client, apiKey string) ([]modelInfo,
 		}
 		out := make([]modelInfo, 0, len(ids))
 		for _, id := range ids {
+			id = runs.SanitizeLine(id)
 			out = append(out, modelInfo{id: id, kind: kindOf(id)})
 		}
 		return out, false, nil
@@ -128,7 +146,7 @@ func loadModels(ctx context.Context, c *api.Client, apiKey string) ([]modelInfo,
 		if kind == "" {
 			kind = strings.ReplaceAll(m.Mode, "_", " ")
 		}
-		out = append(out, modelInfo{id: m.Name, kind: kind})
+		out = append(out, modelInfo{id: runs.SanitizeLine(m.Name), kind: runs.SanitizeLine(kind)})
 	}
 	return out, false, nil
 }

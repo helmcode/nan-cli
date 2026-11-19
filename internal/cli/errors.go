@@ -8,6 +8,8 @@ import (
 	"charm.land/fang/v2"
 	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/term"
+
+	"github.com/nxssie/nan-cli/internal/runs"
 )
 
 // ErrorHandler prints a failed command's error, framed like the rest of
@@ -22,7 +24,9 @@ func ErrorHandler(w io.Writer, styles fang.Styles, err error) {
 	if Silent(err) {
 		return
 	}
-	msg := err.Error()
+	// The text can carry what a server said, and a terminal executes what
+	// it is sent: escape sequences go, line breaks stay.
+	msg := runs.Sanitize(err.Error())
 	// To a pipe or a file: the message and nothing else, for whatever is
 	// reading it.
 	if !toTerminal(w) {

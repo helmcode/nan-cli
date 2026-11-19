@@ -3,6 +3,8 @@ package pulse
 import (
 	"strings"
 	"testing"
+
+	"github.com/nxssie/nan-cli/internal/api"
 )
 
 // lastLines is the bottom of the screen, where the footer is.
@@ -73,5 +75,14 @@ func TestFormsSitAtTheMargin(t *testing.T) {
 	}
 	if !seen {
 		t.Fatal("no form on screen after e")
+	}
+}
+
+// Model names go into table cells through Truncate and Pad, which keep
+// escape sequences, so they are cleaned when they arrive.
+func TestUsageModelNamesLoseEscapeSequences(t *testing.T) {
+	u := cleanUsage(&api.Usage{Last30d: api.Period{ByModel: []api.ModelUsage{{Model: "glm\x1b[2J\x1b]0;owned\x07"}}}})
+	if got := u.Last30d.ByModel[0].Model; strings.ContainsRune(got, 0x1b) {
+		t.Errorf("a usage model name kept an escape: %q", got)
 	}
 }

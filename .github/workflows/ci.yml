@@ -13,6 +13,11 @@ on:
   push:
     branches: [main]
 
+
+# Read the code, nothing more: no job here writes to the repository.
+permissions:
+  contents: read
+
 jobs:
   # The same lint and the same checks as the Helmcode CLI, so the two repos
   # are held to one standard and a fix in either reads the same in both.
