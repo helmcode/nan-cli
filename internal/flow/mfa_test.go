@@ -155,8 +155,15 @@ func TestTheFlowSaysHowManyRecoveryCodesAreLeft(t *testing.T) {
 	if !s.Done() || s.Token != authtest.Session {
 		t.Fatalf("done=%v token=%q", s.Done(), s.Token)
 	}
-	if !strings.Contains(s.Notice, "1 left") || !strings.Contains(s.Notice, "Two-factor authentication") {
+	if !strings.Contains(s.Notice, "1 left") || !strings.Contains(s.Notice, "cloud.nan.builders, Settings") {
 		t.Errorf("Notice = %q", s.Notice)
+	}
+	// It goes on the dashboard's flash line, which is cut at 68 columns at
+	// the smallest size the dashboard draws.
+	for _, n := range []string{s.Notice, RecoveryCodesNotice(0), RecoveryCodesNotice(10)} {
+		if len(n) > 68 {
+			t.Errorf("%q is %d columns, longer than the flash line", n, len(n))
+		}
 	}
 	if last := RecoveryCodesNotice(0); !strings.Contains(last, "last recovery code") {
 		t.Errorf("RecoveryCodesNotice(0) = %q", last)

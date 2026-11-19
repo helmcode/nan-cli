@@ -334,11 +334,15 @@ func answer(ctx context.Context, client *api.Client, challenge *api.MFARequiredE
 // the member in: each works once, and running out is the way to be locked
 // out.
 func RecoveryCodesNotice(left int) string {
-	const where = "cloud.nan.builders, Settings > Account > Two-factor authentication"
+	// Short enough for the flash line at the dashboard's narrowest (68
+	// columns inside its margins), which cut the longer one before the place
+	// to go; and no ">"
+	// in the path, which wrapped inside a form reads as the input prompt.
+	const where = "New: cloud.nan.builders, Settings"
 	if left == 0 {
-		return "That was your last recovery code - make new ones before you need one: " + where
+		return "That was your last recovery code. " + where
 	}
-	return fmt.Sprintf("Signed in with a recovery code, %d left - you can make new ones at %s", left, where)
+	return fmt.Sprintf("Recovery code used, %d left. %s", left, where)
 }
 
 // Label is what the loader should say for the step the flow is on. The

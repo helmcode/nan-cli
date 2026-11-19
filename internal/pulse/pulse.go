@@ -414,10 +414,14 @@ func (m model) afterSignIn() (tea.Model, tea.Cmd) {
 	cmds := []tea.Cmd{m.startLoad()}
 	hint := flow.KeyHint(m.snap.keyStatus)
 	if notice != "" {
-		// A recovery code was spent: said on the flash line, and above the
-		// next step when there is one, where it outlasts the flash.
-		cmds = append(cmds, m.say(notice, false))
-		hint = strings.TrimSpace(notice + "\n\n" + hint)
+		// A recovery code was spent: said above the next step when there is
+		// one, where it outlasts the flash, and on the flash line otherwise.
+		// Not both: on one screen it read twice.
+		if m.session.APIKey == "" {
+			hint = strings.TrimSpace(notice + "\n\n" + hint)
+		} else {
+			cmds = append(cmds, m.say(notice, false))
+		}
 	}
 	if m.session.APIKey == "" {
 		cmds = append(cmds, m.setup.Onboard(hint, flow.Guide{Keys: guide, Tour: true}))

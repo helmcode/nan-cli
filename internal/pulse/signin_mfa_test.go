@@ -89,7 +89,10 @@ func TestTheDashboardAsksAgainAfterAWrongCodeAndSaysWhenARecoveryCodeWasSpent(t 
 		t.Fatalf("a recovery code did not sign in:\n%s", screen(m))
 	}
 	out := strings.Join(strings.Fields(screen(m)), " ")
-	if !strings.Contains(out, "1 left") || !strings.Contains(out, "Two-factor authentication") {
+	if !strings.Contains(out, "1 left") || !strings.Contains(out, "cloud.nan.builders, Settings") {
 		t.Errorf("the next step does not say how many recovery codes are left:\n%s", screen(m))
+	}
+	if strings.Count(out, "1 left") != 1 {
+		t.Errorf("the recovery-code notice is on screen more than once:\n%s", screen(m))
 	}
 }
