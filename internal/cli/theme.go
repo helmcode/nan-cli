@@ -3,8 +3,8 @@ package cli
 import (
 	"image/color"
 
+	"charm.land/fang/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/fang"
 
 	"github.com/nxssie/nan-cli/internal/ui"
 )

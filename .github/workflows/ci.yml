@@ -20,8 +20,8 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -31,7 +31,7 @@ jobs:
         with:
           # Pinned, not "latest": a release of the linter should not turn
           # this repo's CI red on a morning nobody touched it.
-          version: v2.14.0
+          version: v2.15.0
           args: --timeout=5m
 
       # `go fmt ./...` rewrites the files and exits 0 either way, so as a CI
@@ -60,9 +60,9 @@ jobs:
         os: [ubuntu-latest, macos-latest]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -239,9 +239,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -249,7 +249,7 @@ jobs:
       # A fixed version rather than @latest: a check that can fail the build
       # should not change under it on the morning somebody tags that module.
       - name: govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
 
   # The other half of the same gap: scripts/install.sh is the way in for every
   # member on macOS and Linux, and nothing had ever run it end to end. It was
@@ -274,7 +274,7 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # INSTALL_DIR inside the runner's temp, so there is no sudo prompt and
       # nothing to clean up. The default path is /usr/local/bin and that is

@@ -396,7 +396,7 @@ with `mfa enabled update nan cli`. Update, then ask for a new link.
 
 ## Build from source
 
-Requires Go 1.27.4+ ([mise](https://mise.jdx.dev/) recommended), the version
+Requires Go 1.26.11+ ([mise](https://mise.jdx.dev/) recommended), the version
 in `go.mod`, which is where the standard library carries the current security
 fixes:
 

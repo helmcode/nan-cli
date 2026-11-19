@@ -39,7 +39,7 @@ jobs:
       tag: ${{ steps.tag.outputs.value }}
       created: ${{ steps.tag.outputs.created }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The commit CI passed on, not whatever main has drifted to since.
           ref: ${{ github.event.workflow_run.head_sha }}

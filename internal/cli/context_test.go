@@ -694,7 +694,7 @@ func TestContextHelp(t *testing.T) {
 			t.Errorf("nan context help lacks %q", want)
 		}
 	}
-	if strings.Contains(all.String(), "—") {
+	if strings.Contains(all.String(), "\u2014") {
 		t.Error("an em-dash in the context help")
 	}
 	for verb, want := range map[string]string{"list": "ls", "upload": "push", "delete": "rm", "frobnicate": "unknown command"} {

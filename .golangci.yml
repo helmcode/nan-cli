@@ -35,11 +35,21 @@ linters:
         linters: [revive]
       - path: _test\.go
         linters: [gosec, unparam]
+      # A verbatim copy of cloud-api's path validator, compared byte for
+      # byte by cloud-api's CI. A lint rewrite here would break the parity
+      # check, so findings are fixed upstream or not at all.
+      - path: internal/contexts/path\.go
+        linters: [staticcheck]
+        text: QF1001
 
 formatters:
   enable:
     - gofumpt
     - gci
+  exclusions:
+    paths:
+      # The parity table of the copy above, kept as cloud-api has it.
+      - internal/contexts/path_test\.go
   settings:
     gci:
       sections:

@@ -5,7 +5,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/charmbracelet/fang"
+	"charm.land/fang/v2"
 	"github.com/charmbracelet/x/term"
 )
 

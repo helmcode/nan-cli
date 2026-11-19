@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/fang"
+	"charm.land/fang/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 

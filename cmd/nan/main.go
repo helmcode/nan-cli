@@ -10,7 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/charmbracelet/fang"
+	"charm.land/fang/v2"
 
 	"github.com/nxssie/nan-cli/internal/build"
 	"github.com/nxssie/nan-cli/internal/cli"

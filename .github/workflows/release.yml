@@ -53,7 +53,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Build the tag, not the branch. When a tag push starts this the two
           # are the same commit, but when tag.yml calls it main has already
@@ -62,7 +62,7 @@ jobs:
           # that triggered the run is the tag itself.
           ref: ${{ inputs.tag }}
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
