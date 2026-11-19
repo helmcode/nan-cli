@@ -158,7 +158,15 @@ func codeForm() *huh.Form {
 			Placeholder("123456").
 			// Dots, always: a recovery code works until it is used, so it is
 			// no more fit for a shared screen than the link was.
-			EchoMode(huh.EchoModePassword),
+			EchoMode(huh.EchoModePassword).
+			// An empty enter is a slip, not an answer: said here, in a line,
+			// rather than by the long refusal of something that is not a code.
+			Validate(func(v string) error {
+				if strings.TrimSpace(v) == "" {
+					return errors.New("type the code first")
+				}
+				return nil
+			}),
 	))
 }
 
@@ -235,6 +243,17 @@ func (s SignIn) Update(ctx context.Context, msg tea.Msg, client *api.Client) (Si
 			if s.stage == signInLink {
 				s.stage = signInEmail
 				s.err = nil
+				s.form = emailForm(s.email)
+				return s, s.form.Init()
+			}
+			// From the code, back one step is the link, and the link was
+			// spent opening the challenge: the step before that is the
+			// address, filled in, so enter sends a new one. The footer says
+			// "esc back", and closing the whole sign-in was not back.
+			if s.stage == signInCode {
+				s.challenge = nil
+				s.stage = signInEmail
+				s.err = errors.New("that link is spent - press enter for a new one")
 				s.form = emailForm(s.email)
 				return s, s.form.Init()
 			}

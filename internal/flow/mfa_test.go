@@ -163,21 +163,48 @@ func TestTheFlowSaysHowManyRecoveryCodesAreLeft(t *testing.T) {
 	}
 }
 
-// Esc leaves the code question and forgets the challenge; an exchange that
-// answers after the member left does not bring the question back.
+// Esc from the code goes back, as the footer says: the link before it is
+// spent, so to the address, filled in, with the challenge forgotten. An
+// exchange that answers after the member left does not bring the question
+// back.
 func TestEscapeForgetsTheChallenge(t *testing.T) {
 	s, client, _ := atTheCode(t)
+	email := s.email
 	s = drive(t, s, client, tea.KeyPressMsg{Code: tea.KeyEscape})
-	if s.Active() || s.challenge != nil {
-		t.Errorf("active=%v, challenge kept: %v", s.Active(), s.challenge != nil)
+	if !s.Active() || s.stage != signInEmail || s.challenge != nil {
+		t.Errorf("active=%v stage=%d, challenge kept: %v", s.Active(), s.stage, s.challenge != nil)
+	}
+	if s.form.GetString(fieldEmail) != email && !strings.Contains(view(s), email) {
+		t.Errorf("the address is not filled in after esc:\n%s", view(s))
+	}
+	if !strings.Contains(view(s), "spent") {
+		t.Errorf("esc does not say the link is spent:\n%s", view(s))
 	}
 
 	late, client, _ := atTheCode(t)
 	challenge := late.challenge
 	late = drive(t, late, client, tea.KeyPressMsg{Code: tea.KeyEscape})
 	late = drive(t, late, client, challengeMsg{challenge})
-	if late.Active() || late.challenge != nil {
-		t.Errorf("a late challenge reopened the sign-in: stage %d", late.stage)
+	if late.stage == signInCode || late.challenge != nil {
+		t.Errorf("a late challenge reopened the code question: stage %d", late.stage)
+	}
+}
+
+// Enter on an empty code is caught in the field, in a line, and nothing is
+// sent. It used to get the long refusal of something that is not a code,
+// cut off at 80 columns.
+func TestAnEmptyCodeIsNotSent(t *testing.T) {
+	s, client, p := atTheCode(t)
+	before := len(p.Challenges())
+	s = drive(t, s, client, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if s.stage != signInCode {
+		t.Errorf("an empty code left the code question: stage %d", s.stage)
+	}
+	if n := len(p.Challenges()); n != before {
+		t.Errorf("an empty code was sent: %d challenge POSTs", n-before)
+	}
+	if !strings.Contains(view(s), "type the code first") {
+		t.Errorf("an empty enter is not answered in the field:\n%s", view(s))
 	}
 }
 
