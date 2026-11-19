@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"charm.land/fang/v2"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/term"
 )
 
@@ -24,7 +25,7 @@ func ErrorHandler(w io.Writer, styles fang.Styles, err error) {
 	msg := err.Error()
 	// To a pipe or a file: the message and nothing else, for whatever is
 	// reading it.
-	if f, ok := w.(term.File); ok && !term.IsTerminal(f.Fd()) {
+	if !toTerminal(w) {
 		_, _ = fmt.Fprintln(w, msg)
 		return
 	}
@@ -34,4 +35,16 @@ func ErrorHandler(w io.Writer, styles fang.Styles, err error) {
 	_, _ = fmt.Fprintln(w, styles.ErrorHeader.String())
 	_, _ = fmt.Fprintln(w, styles.ErrorText.UnsetTransform().Render(msg))
 	_, _ = fmt.Fprintln(w)
+}
+
+// toTerminal says whether w ends at a terminal. fang wraps stderr in a
+// colorprofile.Writer before handing it over, so the file is one level down.
+// A writer that is not a file at all (a buffer in a test) counts as a
+// terminal, which keeps the framed output testable.
+func toTerminal(w io.Writer) bool {
+	if cw, ok := w.(*colorprofile.Writer); ok {
+		w = cw.Forward
+	}
+	f, ok := w.(term.File)
+	return !ok || term.IsTerminal(f.Fd())
 }
