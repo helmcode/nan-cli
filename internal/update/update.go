@@ -41,8 +41,9 @@ type State struct {
 
 // Path is the state file.
 func Path() string {
-	// XDG_CACHE_HOME when set, on every platform, as the session does with
-	// XDG_CONFIG_HOME; otherwise the OS's cache directory.
+	// XDG_CACHE_HOME when set, on every platform; otherwise the OS's cache
+	// directory. (The session does not follow XDG_CONFIG_HOME: it stays at
+	// ~/.config/nan on every OS, where every earlier version kept it.)
 	if xdg := os.Getenv("XDG_CACHE_HOME"); filepath.IsAbs(xdg) {
 		return filepath.Join(xdg, build.Name, "state.json")
 	}

@@ -488,3 +488,21 @@ func TestLoginCommandReadsTheLinkFromAPipe(t *testing.T) {
 		t.Errorf("session.json = %v", sess)
 	}
 }
+
+// --token - and --link - read stdin to the end. A pipe of something else (a
+// file, a log) is refused, not read whole nor cut into a token.
+func TestAFlagReadFromStdinIsBounded(t *testing.T) {
+	home := fakeHome(t, "")
+	mfaPlatform(t, false)
+	withStdin(t, strings.Repeat("x", 9000))
+	rootCmd.SetArgs([]string{"auth", "login", "--token", "-"})
+	rootCmd.SetOut(io.Discard)
+	rootCmd.SetErr(io.Discard)
+	err := rootCmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "not a link or a token") {
+		t.Fatalf("err = %v", err)
+	}
+	if sess, _ := readSession(t, home); sess != nil {
+		t.Errorf("saved %v", sess)
+	}
+}

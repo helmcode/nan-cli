@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/nxssie/nan-cli/internal/build"
+	"github.com/nxssie/nan-cli/internal/tools"
 )
 
 // Signals: what needs the member, worked out from the snapshot.
@@ -58,7 +59,7 @@ func (m model) signals() []signal {
 	default:
 		var waiting []string
 		for _, t := range s.installedTools() {
-			if !t.Configured && enabled(m.session.EnabledTools, t.Name) {
+			if !t.Configured && tools.Enabled(m.session.EnabledTools, t.Name) {
 				waiting = append(waiting, t.Name)
 			}
 		}
@@ -73,15 +74,6 @@ func (m model) signals() []signal {
 
 	sort.SliceStable(out, func(a, b int) bool { return out[a].sev > out[b].sev })
 	return out
-}
-
-// enabled is tools.Enabled, here so this file reads on its own: a tool
-// nobody has unticked counts as wanted.
-func enabled(ticked map[string]bool, name string) bool {
-	if v, ok := ticked[name]; ok {
-		return v
-	}
-	return true
 }
 
 func plural(n int, one, many string) string {

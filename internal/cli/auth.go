@@ -465,9 +465,17 @@ func flagValue(value string) (string, error) {
 	if value != "-" {
 		return strings.TrimSpace(value), nil
 	}
-	read, err := io.ReadAll(os.Stdin)
+	// A link or a session token is well under this; the bound keeps a
+	// mistaken pipe (a file, a log) from being read into memory whole, and
+	// anything longer is refused rather than cut into a credential that is
+	// not one.
+	const maxValue = 8192
+	read, err := io.ReadAll(io.LimitReader(os.Stdin, maxValue+1))
 	if err != nil {
 		return "", fmt.Errorf("could not read it from stdin: %w", err)
+	}
+	if len(read) > maxValue {
+		return "", fmt.Errorf("more than %d bytes arrived on stdin: that is not a link or a token", maxValue)
 	}
 	value = strings.TrimSpace(string(read))
 	if value == "" {

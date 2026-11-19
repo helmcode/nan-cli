@@ -598,7 +598,7 @@ func (m model) renderHarness(w int) string {
 		switch {
 		case h.Configured:
 			state = ui.Success("configured with NaN")
-		case !enabled(m.session.EnabledTools, h.Name):
+		case !tools.Enabled(m.session.EnabledTools, h.Name):
 			state = ui.Faint("unticked")
 		}
 		b.WriteString("  " + ui.Value(ui.Pad(h.Name, 12)) + ui.Pad(state, 22) + ui.Faint(ui.HomePath(h.ConfigPath)) + "\n")
