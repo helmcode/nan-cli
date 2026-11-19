@@ -105,6 +105,7 @@ func NewRootCmd() *cobra.Command {
 		approvalsCmd,
 		secretsCmd,
 		notificationsCmd,
+		contextCmd,
 	)
 	return root
 }

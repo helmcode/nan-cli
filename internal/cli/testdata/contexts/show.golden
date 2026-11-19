@@ -1,0 +1,12 @@
+name          acme-api
+id            c7000000-0000-4000-8000-000000000001
+description   Acme API conventions
+version       3 (2026-10-21 10:00)
+files         3, 83 B
+instructions  yes
+skills        pr-review
+
+PATH                       SIZE  SHA256
+AGENTS.md                  10 B  2d812d6fdf8…
+files/spec.md              6 B   6b04df15eab…
+skills/pr-review/SKILL.md  67 B  da1195fa204…

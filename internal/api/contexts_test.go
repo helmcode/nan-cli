@@ -27,22 +27,34 @@ func TestContextErrorCarriesTheExtraFields(t *testing.T) {
 		body  string
 		check func(*ContextError) bool
 	}{
-		{`{"error":{"message":"changed","type":"invalid_request_error","param":"base_version","code":"version_conflict"},"current_version":7}`,
+		{
+			`{"error":{"message":"changed","type":"invalid_request_error","param":"base_version","code":"version_conflict"},"current_version":7}`,
 			func(e *ContextError) bool {
 				return e.CurrentVersion != nil && *e.CurrentVersion == 7 && e.Param == "base_version"
-			}},
-		{`{"error":{"message":"gone","type":"invalid_request_error","param":null,"code":"blob_missing"},"sha256":["aa","bb"]}`,
-			func(e *ContextError) bool { return strings.Join(e.MissingBlobs, ",") == "aa,bb" }},
-		{`{"error":{"message":"names","type":"invalid_request_error","param":null,"code":"invalid_path"},"files":[{"path":"files/.env","reason":"dotfile"}]}`,
-			func(e *ContextError) bool { return len(e.Files) == 1 && e.Files[0].Reason == "dotfile" }},
-		{`{"error":{"message":"secrets","type":"invalid_request_error","param":null,"code":"context_secret_detected"},"findings":[{"path":"AGENTS.md","line":3,"pattern":"github_token"}]}`,
-			func(e *ContextError) bool { return len(e.Findings) == 1 && e.Findings[0].Line == 3 }},
-		{`{"error":{"message":"quota","type":"invalid_request_error","param":null,"code":"context_quota_exceeded"},"used":10,"quota":5,"growing":true}`,
-			func(e *ContextError) bool { return e.Used == 10 && e.Quota == 5 }},
-		{`{"error":{"message":"in use","type":"invalid_request_error","param":null,"code":"context_in_use"},"automations":[{"id":"a1","name":"PR review"}]}`,
-			func(e *ContextError) bool { return len(e.Automations) == 1 && e.Automations[0].Name == "PR review" }},
+			},
+		},
+		{
+			`{"error":{"message":"gone","type":"invalid_request_error","param":null,"code":"blob_missing"},"sha256":["aa","bb"]}`,
+			func(e *ContextError) bool { return strings.Join(e.MissingBlobs, ",") == "aa,bb" },
+		},
+		{
+			`{"error":{"message":"names","type":"invalid_request_error","param":null,"code":"invalid_path"},"files":[{"path":"files/.env","reason":"dotfile"}]}`,
+			func(e *ContextError) bool { return len(e.Files) == 1 && e.Files[0].Reason == "dotfile" },
+		},
+		{
+			`{"error":{"message":"secrets","type":"invalid_request_error","param":null,"code":"context_secret_detected"},"findings":[{"path":"AGENTS.md","line":3,"pattern":"github_token"}]}`,
+			func(e *ContextError) bool { return len(e.Findings) == 1 && e.Findings[0].Line == 3 },
+		},
+		{
+			`{"error":{"message":"quota","type":"invalid_request_error","param":null,"code":"context_quota_exceeded"},"used":10,"quota":5,"growing":true}`,
+			func(e *ContextError) bool { return e.Used == 10 && e.Quota == 5 },
+		},
+		{
+			`{"error":{"message":"in use","type":"invalid_request_error","param":null,"code":"context_in_use"},"automations":[{"id":"a1","name":"PR review"}]}`,
+			func(e *ContextError) bool { return len(e.Automations) == 1 && e.Automations[0].Name == "PR review" },
+		},
 	} {
-		c := ctxServer(t, func(w http.ResponseWriter, r *http.Request) {
+		c := ctxServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Retry-After", "5")
 			w.WriteHeader(409)
 			_, _ = io.WriteString(w, tc.body)
@@ -61,7 +73,7 @@ func TestContextErrorCarriesTheExtraFields(t *testing.T) {
 }
 
 func TestContextSessionExpired(t *testing.T) {
-	c := ctxServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(401) })
+	c := ctxServer(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(401) })
 	if _, err := c.ListContexts(context.Background()); !errors.Is(err, ErrSessionExpired) {
 		t.Errorf("%v", err)
 	}
