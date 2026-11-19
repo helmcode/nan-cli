@@ -16,6 +16,7 @@ import (
 	"context"
 	"math"
 	"os"
+	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/help"
@@ -407,11 +408,19 @@ func (m model) afterSignIn() (tea.Model, tea.Cmd) {
 	// and the platform answers `unauthorized`: exactly what a failed
 	// sign-in looks like.
 	m.client = api.New(m.signIn.Token)
+	notice := m.signIn.Notice
 	m.signIn = flow.NewSignIn()
 	m.expiredNotice = false
 	cmds := []tea.Cmd{m.startLoad()}
+	hint := flow.KeyHint(m.snap.keyStatus)
+	if notice != "" {
+		// A recovery code was spent: said on the flash line, and above the
+		// next step when there is one, where it outlasts the flash.
+		cmds = append(cmds, m.say(notice, false))
+		hint = strings.TrimSpace(notice + "\n\n" + hint)
+	}
 	if m.session.APIKey == "" {
-		cmds = append(cmds, m.setup.Onboard(flow.KeyHint(m.snap.keyStatus), flow.Guide{Keys: guide, Tour: true}))
+		cmds = append(cmds, m.setup.Onboard(hint, flow.Guide{Keys: guide, Tour: true}))
 	}
 	return m, tea.Batch(cmds...)
 }

@@ -30,6 +30,19 @@ import (
 // those in turn is thirteen seconds of test for a form with an email in it.
 func drive(t *testing.T, s SignIn, client *api.Client, msgs ...tea.Msg) SignIn {
 	t.Helper()
+	s, _ = driveToNetwork(t, s, client, msgs...)
+	return s
+}
+
+// atNetwork is whether the stage is one that would talk to the network.
+func (s SignIn) atNetwork() bool {
+	return s.stage == signInSending || s.stage == signInVerifying || s.stage == signInChecking
+}
+
+// driveToNetwork is drive, handing back the command that would have talked
+// to the network, for a test that wants to run it against a fake.
+func driveToNetwork(t *testing.T, s SignIn, client *api.Client, msgs ...tea.Msg) (SignIn, tea.Cmd) {
+	t.Helper()
 	ctx := context.Background()
 
 	queue := append([]tea.Msg{}, msgs...)
@@ -42,10 +55,10 @@ func drive(t *testing.T, s SignIn, client *api.Client, msgs ...tea.Msg) SignIn {
 
 		// Stop at the first stage that would talk to the network: what these
 		// tests check is what the flow decided to send, not the sending.
-		if s.stage == signInSending || s.stage == signInVerifying || cmd == nil {
-			if s.stage == signInSending || s.stage == signInVerifying {
-				return s
-			}
+		if s.atNetwork() {
+			return s, cmd
+		}
+		if cmd == nil {
 			continue
 		}
 
@@ -61,7 +74,7 @@ func drive(t *testing.T, s SignIn, client *api.Client, msgs ...tea.Msg) SignIn {
 			// nothing here is waiting on one.
 		}
 	}
-	return s
+	return s, nil
 }
 
 func typed(text string) []tea.Msg {

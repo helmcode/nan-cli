@@ -10,6 +10,8 @@ package flow
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -27,12 +29,17 @@ const (
 	signInSending
 	signInLink
 	signInVerifying
+	// signInCode is the third question, for an account with two-factor
+	// authentication: the code from its authenticator app.
+	signInCode
+	signInChecking
 	signInDone
 )
 
 // SignIn is the magic-link flow: ask for an address, send a link, take it
-// back. nan.builders has no password, so this is the first thing anybody
-// meets and the only thing that works before it is done.
+// back, and for an account with two-factor authentication ask for the code
+// its authenticator app shows. nan.builders has no password, so this is the
+// first thing anybody meets and the only thing that works before it is done.
 type SignIn struct {
 	stage signInStage
 	form  *huh.Form
@@ -42,8 +49,16 @@ type SignIn struct {
 	// credential the dashboard cannot use.
 	notice string
 
+	// challenge is the two-factor sign-in the link opened, while the code is
+	// asked for. In memory only, like everything else about it: the flow is
+	// never serialised, and its error prints without it.
+	challenge *api.MFARequiredError
+
 	// Token is the session the platform issued, once the flow is done.
 	Token string
+	// Notice is something to read once it worked: a recovery code was spent
+	// and how many are left. Empty otherwise.
+	Notice string
 }
 
 // linkSent and signedIn are this flow's own messages. A parent forwards
@@ -51,9 +66,14 @@ type SignIn struct {
 type linkSentMsg struct{ err error }
 
 type signedInMsg struct {
-	token string
-	err   error
+	token  string
+	notice string
+	err    error
 }
+
+// challengeMsg is a link that worked for an account with two-factor
+// authentication: the session comes once the challenge is answered.
+type challengeMsg struct{ challenge *api.MFARequiredError }
 
 // NewSignIn returns a flow that is not running yet.
 func NewSignIn() SignIn { return SignIn{} }
@@ -89,6 +109,7 @@ func (s *SignIn) Start(notice string) tea.Cmd {
 const (
 	fieldEmail = "email"
 	fieldLink  = "link"
+	fieldCode  = "code"
 )
 
 func emailForm(previous string) *huh.Form {
@@ -128,6 +149,19 @@ func linkForm(client *api.Client) *huh.Form {
 	))
 }
 
+func codeForm() *huh.Form {
+	return ui.NewForm(huh.NewGroup(
+		huh.NewInput().
+			Key(fieldCode).
+			Title("Authenticator code").
+			Description("This account uses two-factor authentication. Enter the 6-digit code from your authenticator app, or one of your recovery codes.").
+			Placeholder("123456").
+			// Dots, always: a recovery code works until it is used, so it is
+			// no more fit for a shared screen than the link was.
+			EchoMode(huh.EchoModePassword),
+	))
+}
+
 // Resize rewraps the open form, if there is one, for a terminal of w by h.
 func (s *SignIn) Resize(w, h int) { ui.FitForm(s.form, w, h) }
 
@@ -146,7 +180,35 @@ func (s SignIn) Update(ctx context.Context, msg tea.Msg, client *api.Client) (Si
 		s.form = linkForm(client)
 		return s, s.form.Init()
 
+	case challengeMsg:
+		// Left with esc while the link was being exchanged: nothing to ask.
+		if s.stage != signInVerifying {
+			return s, nil
+		}
+		s.err = nil
+		s.challenge = msg.challenge
+		s.stage = signInCode
+		s.form = codeForm()
+		return s, s.form.Init()
+
 	case signedInMsg:
+		if s.challenge != nil && msg.err != nil {
+			s.err = msg.err
+			if api.Retryable(msg.err) {
+				// The same question again, empty, with what went wrong and
+				// how many tries are left.
+				s.stage = signInCode
+				s.form = codeForm()
+				return s, s.form.Init()
+			}
+			// The challenge is over, and the link that opened it was spent
+			// opening it: back to the address, filled in, so enter asks for
+			// a new one.
+			s.challenge = nil
+			s.stage = signInEmail
+			s.form = emailForm(s.email)
+			return s, s.form.Init()
+		}
 		if msg.err != nil {
 			// Back to the link, not to the start: the email has been spent
 			// and asking for another to fix a bad paste is a worse flow.
@@ -156,7 +218,9 @@ func (s SignIn) Update(ctx context.Context, msg tea.Msg, client *api.Client) (Si
 			return s, s.form.Init()
 		}
 		s.err = nil
+		s.challenge = nil
 		s.Token = msg.token
+		s.Notice = msg.notice
 		s.stage = signInDone
 		return s, nil
 
@@ -178,7 +242,7 @@ func (s SignIn) Update(ctx context.Context, msg tea.Msg, client *api.Client) (Si
 		}
 	}
 
-	if s.form == nil || s.stage == signInSending || s.stage == signInVerifying {
+	if s.form == nil || s.stage == signInSending || s.stage == signInVerifying || s.stage == signInChecking {
 		return s, nil
 	}
 
@@ -206,6 +270,9 @@ func (s SignIn) Update(ctx context.Context, msg tea.Msg, client *api.Client) (Si
 			}
 			s.stage = signInVerifying
 			return s, verify(ctx, client, token)
+		case signInCode:
+			s.stage = signInChecking
+			return s, answer(ctx, client, s.challenge, s.form.GetString(fieldCode))
 		}
 	}
 	return s, cmd
@@ -220,8 +287,39 @@ func requestLink(ctx context.Context, client *api.Client, email string) tea.Cmd 
 func verify(ctx context.Context, client *api.Client, token string) tea.Cmd {
 	return func() tea.Msg {
 		session, err := client.Verify(ctx, token)
+		var challenge *api.MFARequiredError
+		if errors.As(err, &challenge) {
+			return challengeMsg{challenge}
+		}
 		return signedInMsg{token: session, err: err}
 	}
+}
+
+// answer posts the code the member typed against the challenge the link
+// opened.
+func answer(ctx context.Context, client *api.Client, challenge *api.MFARequiredError, code string) tea.Cmd {
+	return func() tea.Msg {
+		signIn, err := client.CompleteMFA(ctx, challenge, code)
+		if err != nil {
+			return signedInMsg{err: err}
+		}
+		msg := signedInMsg{token: signIn.Session}
+		if signIn.UsedRecoveryCode {
+			msg.notice = RecoveryCodesNotice(signIn.RecoveryCodesLeft)
+		}
+		return msg
+	}
+}
+
+// RecoveryCodesNotice is what the dashboard says after a recovery code got
+// the member in: each works once, and running out is the way to be locked
+// out.
+func RecoveryCodesNotice(left int) string {
+	const where = "cloud.nan.builders, Settings > Account > Two-factor authentication"
+	if left == 0 {
+		return "That was your last recovery code - make new ones before you need one: " + where
+	}
+	return fmt.Sprintf("Signed in with a recovery code, %d left - you can make new ones at %s", left, where)
 }
 
 // Label is what the loader should say for the step the flow is on. The
@@ -234,6 +332,8 @@ func (s SignIn) Label() string {
 		return "Sending the link"
 	case signInVerifying:
 		return "Checking the link"
+	case signInChecking:
+		return "Checking the code"
 	default:
 		return "Loading"
 	}
@@ -259,7 +359,10 @@ func (s SignIn) View(indent, spinner string, apiHost string) string {
 
 		b.WriteString("\n" + s.form.View() + "\n")
 
-	case signInVerifying:
+	case signInCode:
+		b.WriteString(s.form.View() + "\n")
+
+	case signInVerifying, signInChecking:
 		b.WriteString(indent + spinner + "\n")
 	}
 

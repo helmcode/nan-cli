@@ -89,6 +89,9 @@ func TestRefusedLinkSaysWhatToDoAboutIt(t *testing.T) {
 		{"expired or already spent", "invalid_link", "15 minutes"},
 		{"incomplete", "missing_token", "most recent email"},
 		{"a reason this build does not know", "a_reason_from_tomorrow", "a reason from tomorrow"},
+		{"two-factor, from a build that cannot ask", "mfa_enabled_update_nan_cli", "update"},
+		{"unfinished sign-up with two-factor", "finish_onboarding_in_the_browser", "finish it in the browser"},
+		{"not shaped like a reason", "\x1b[2J", "ask for a new link"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got := linkReasonMessage(c.reason)
@@ -121,7 +124,9 @@ func TestVerifyDeclaresTheCLI(t *testing.T) {
 	if path != "/api/auth/login/verify" {
 		t.Errorf("posted to %s", path)
 	}
-	if form.Get("token") != "tok" || form.Get("client") != "cli" || form.Has("flow") {
+	// mfa=1 says this build can answer a two-factor challenge; without it the
+	// platform turns an account that has a factor away.
+	if form.Get("token") != "tok" || form.Get("client") != "cli" || form.Get("mfa") != "1" || form.Has("flow") {
 		t.Errorf("form = %v", form)
 	}
 }
