@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/helmcode/nan-cli/internal/api"
 	catalog "github.com/helmcode/nan-cli/internal/models"
@@ -23,7 +24,12 @@ type snapshot struct {
 	me        *api.Me
 	usage     *api.Usage
 	keyStatus *api.KeyStatus
-	models    []modelInfo
+	// credits is the member's credits this period, and discord their
+	// Discord link. Either can be missing: neither failing is worth a
+	// signal, the area just shows less.
+	credits *api.Credits
+	discord *api.Discord
+	models  []modelInfo
 	// tools is every supported tool and its state on this machine, read
 	// here rather than on every frame: it means reading their configs.
 	tools []tools.Status
@@ -83,6 +89,8 @@ func load(ctx context.Context, c *api.Client, apiKey string, askRelease bool) sn
 		// The key's status only says where to find a key, so a failure to
 		// read it is not worth saying.
 		run(func() { k, _ := c.KeyStatus(ctx); s.keyStatus = k })
+		run(func() { cr, _ := c.Credits(ctx); s.credits = cleanCredits(cr) })
+		run(func() { d, _ := c.Discord(ctx); s.discord = cleanDiscord(d) })
 	}
 	run(func() {
 		models, refused, err := loadModels(ctx, c, apiKey)
@@ -111,7 +119,52 @@ func cleanUsage(u *api.Usage) *api.Usage {
 			p.ByModel[i].Model = runs.SanitizeLine(p.ByModel[i].Model)
 		}
 	}
+	for i := range u.Daily {
+		u.Daily[i].Model = runs.SanitizeLine(u.Daily[i].Model)
+	}
 	return u
+}
+
+// cleanCredits and cleanDiscord do the same for the names in those answers.
+func cleanCredits(c *api.Credits) *api.Credits {
+	if c == nil {
+		return nil
+	}
+	for i := range c.Models {
+		c.Models[i].Model = runs.SanitizeLine(c.Models[i].Model)
+		c.Models[i].DisplayName = runs.SanitizeLine(c.Models[i].DisplayName)
+	}
+	return c
+}
+
+func cleanDiscord(d *api.Discord) *api.Discord {
+	if d != nil {
+		d.Username = runs.SanitizeLine(d.Username)
+	}
+	return d
+}
+
+// chartDays is how far back the usage chart goes: what the platform sends.
+const chartDays = 30
+
+// daily is the tokens of each of the last chartDays days up to today (UTC,
+// as the platform dates them), oldest first. A day with no traffic is zero
+// rather than missing, so a quiet week shows as a gap in the chart.
+func (s snapshot) daily(now time.Time) (dates []string, totals []float64) {
+	if s.usage == nil {
+		return nil, nil
+	}
+	sum := map[string]float64{}
+	for _, d := range s.usage.Daily {
+		sum[d.Date] += float64(d.InputTokens + d.OutputTokens)
+	}
+	today := now.UTC()
+	for i := chartDays - 1; i >= 0; i-- {
+		d := today.AddDate(0, 0, -i).Format("2006-01-02")
+		dates = append(dates, d)
+		totals = append(totals, sum[d])
+	}
+	return dates, totals
 }
 
 // loadModels asks the cluster which models the key can call - the list the

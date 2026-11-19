@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
@@ -539,9 +540,128 @@ func (m model) renderUsage(w, room int) string {
 			ui.Tokens(in)+" in · "+ui.Tokens(out)+" out"))
 	}
 	b.WriteString(figures(w, cells...) + "\n\n")
-	b.WriteString(m.eyebrow("By model") + "\n\n")
+	// No blank line between the credits and the chart: the chart's top row
+	// is mostly empty and is the gap, and on an 80x24 terminal that line
+	// is the difference between the chart fitting and not.
+	b.WriteString(m.renderCredits(w))
+	// What is left goes, in order, to the table (its header and three
+	// rows at least: the figures per model matter most), the chart, and
+	// last the "By model" heading, which the table's own header already
+	// says. So an 80x24 terminal gets the chart and loses only the heading.
+	need := 2 + min(len(m.rows(areaUsage)), 3)
+	left := room - lipgloss.Height(b.String())
+	if chart := m.renderChart(w); left-lipgloss.Height(chart)-1 >= need {
+		b.WriteString(chart)
+		left -= lipgloss.Height(chart)
+	}
+	if left-3 >= need {
+		b.WriteString("\n" + m.eyebrow("By model") + "\n\n")
+	} else {
+		b.WriteString("\n")
+	}
 	head := b.String()
-	return head + table(areaUsage.columns(), m.rows(areaUsage), m.cursor[areaUsage], w, room-lipgloss.Height(head), m.motion())
+	return head + table(m.usageColumns(), m.rows(areaUsage), m.cursor[areaUsage], w, room-lipgloss.Height(head), m.motion())
+}
+
+// renderChart is the tokens of each of the last thirty days, and the
+// busiest of them.
+func (m model) renderChart(w int) string {
+	dates, totals := m.snap.daily(time.Now())
+	if len(totals) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, line := range sparkline(totals, w-2, m.reveal) {
+		b.WriteString(line + "\n")
+	}
+	label := "tokens per day, last " + fmt.Sprint(len(totals)) + " days"
+	if i := peakDay(totals); i >= 0 && totals[i] > 0 {
+		label += " · busiest " + shortDate(dates[i]) + ", " + ui.Tokens(totals[i])
+	} else {
+		label += " · none yet"
+	}
+	b.WriteString(ui.Faint(label) + "\n")
+	return b.String()
+}
+
+// renderCredits is the member's credits this period in a line: how much of
+// the pool is spent, what is left, the pack on top and when it renews. A
+// second line says when they cannot be spent at all. Nothing for a member
+// not on credits.
+func (m model) renderCredits(w int) string {
+	c := m.snap.credits
+	if c == nil || !c.Enabled {
+		return ""
+	}
+	frac := 0.0
+	if c.AllowanceCredits > 0 {
+		frac = c.UsedCredits / c.AllowanceCredits
+	}
+	now := time.Now()
+	line := ui.Faint("Credits  ") + ui.LevelBar(frac, 12) + "  " +
+		ui.Value(credits(c.UsedCredits)) + ui.Faint(" of "+credits(c.AllowanceCredits)+" used · ") +
+		ui.Value(credits(c.RemainingCredits)) + ui.Faint(" left")
+	if c.PeriodEnd != "" {
+		line += ui.Faint(" · resets " + soon(c.PeriodEnd, now))
+	}
+	out := ansi.Truncate(line, w, "…") + "\n"
+	if c.PackCredits > 0 {
+		pack := "+ " + credits(c.PackCredits) + " bought"
+		if c.PackExpiresAt != nil {
+			pack += ", until " + soon(*c.PackExpiresAt, now)
+		}
+		out += strings.Repeat(" ", len("Credits  ")) + ansi.Truncate(ui.Faint(pack), w-len("Credits  "), "…") + "\n"
+	}
+	if c.CacheSavedCredits > 0 {
+		out += strings.Repeat(" ", len("Credits  ")) + ansi.Truncate(ui.Success("prompt cache saved "+credits(c.CacheSavedCredits)+" this period"), w-len("Credits  "), "…") + "\n"
+	}
+	switch {
+	case c.Frozen:
+		out += ansi.Truncate(ui.Warn("Credits are on hold: requests that use them are refused until the membership is active again."), w, "…") + "\n"
+	case c.FrontierPaused:
+		out += ansi.Truncate(ui.Faint("Frontier models are paused for now; the others answer as usual."), w, "…") + "\n"
+	}
+	return out
+}
+
+// credits is an amount of credits as the web dashboard writes it: to a
+// tenth, without a trailing ".0", thousands separated (19,544.8).
+func credits(n float64) string {
+	s := strings.TrimSuffix(fmt.Sprintf("%.1f", n), ".0")
+	whole, frac, _ := strings.Cut(s, ".")
+	neg := strings.HasPrefix(whole, "-")
+	whole = strings.TrimPrefix(whole, "-")
+	for i := len(whole) - 3; i > 0; i -= 3 {
+		whole = whole[:i] + "," + whole[i:]
+	}
+	if neg {
+		whole = "-" + whole
+	}
+	if frac != "" {
+		return whole + "." + frac
+	}
+	return whole
+}
+
+// soon is an RFC 3339 time as a day, without the year when it is within the
+// next eleven months, which is every renewal and most packs: "1 Dec".
+func soon(ts string, now time.Time) string {
+	t, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return day(ts)
+	}
+	if t.After(now.AddDate(0, 11, 0)) || t.Before(now.AddDate(0, -1, 0)) {
+		return t.Local().Format("2 Jan 2006")
+	}
+	return t.Local().Format("2 Jan")
+}
+
+// shortDate is a YYYY-MM-DD day as "2 Nov", or the text as it came.
+func shortDate(d string) string {
+	if t, err := time.Parse("2006-01-02", d); err == nil {
+		return t.Format("2 Jan")
+	}
+	return d
 }
 
 func (m model) renderModels(w, room int) string {

@@ -84,6 +84,17 @@ type Usage struct {
 	Last24h Period `json:"last24h"`
 	Last30d Period `json:"last30d"`
 	AllTime Period `json:"allTime"`
+	// Daily is the last thirty days, one entry per day and model that had
+	// any traffic: a day with none is absent, not zero.
+	Daily []DayUsage `json:"timeSeries"`
+}
+
+// DayUsage is what one model took on one day, the date as YYYY-MM-DD (UTC).
+type DayUsage struct {
+	Date         string `json:"date"`
+	Model        string `json:"model"`
+	InputTokens  Count  `json:"inputTokens"`
+	OutputTokens Count  `json:"outputTokens"`
 }
 
 // Usage fetches the member's usage.

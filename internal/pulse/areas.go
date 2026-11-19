@@ -111,6 +111,14 @@ func (m model) rows(a area) []row {
 		if s.me.GraceUntil != "" {
 			out = append(out, row{id: "field:grace", cells: []string{"Membership ends", day(s.me.GraceUntil)}})
 		}
+		// The Discord name is shown whole: it is the public handle the
+		// member chose for the community, not an identifier to protect.
+		switch d := s.discord; {
+		case d != nil && d.Linked && d.Username != "":
+			out = append(out, row{id: "field:discord", cells: []string{"Discord", d.Username}})
+		case d != nil && !d.Linked:
+			out = append(out, row{id: "field:discord", cells: []string{"Discord", "not linked (cloud.nan.builders, Settings)"}})
+		}
 		return out
 
 	case areaUsage:
@@ -118,6 +126,7 @@ func (m model) rows(a area) []row {
 			return nil
 		}
 		total30 := float64(s.usage.Last30d.TotalTokens)
+		spent := s.creditsByModel()
 		var out []row
 		for _, name := range s.usedModels() {
 			t24, t30, all := tokensIn(s.usage.Last24h, name), tokensIn(s.usage.Last30d, name), tokensIn(s.usage.AllTime, name)
@@ -126,9 +135,18 @@ func (m model) rows(a area) []row {
 				f := t30 / total30
 				share = ui.Bar(f*m.reveal, 10, false) + " " + ui.Percent(f)
 			}
+			// On credits, what each model cost this period takes the place
+			// of its all-time tokens, which the figures above already sum.
+			fourth := tokensOrDash(all)
+			if spent != nil {
+				fourth = "-"
+				if c, ok := spent[name]; ok && c > 0 {
+					fourth = credits(c)
+				}
+			}
 			out = append(out, row{
 				id: name, model: name,
-				cells: []string{name, tokensOrDash(t24), tokensOrDash(t30), tokensOrDash(all), share},
+				cells: []string{name, tokensOrDash(t24), tokensOrDash(t30), fourth, share},
 				dim:   t30 == 0,
 			})
 		}
@@ -213,4 +231,27 @@ func (m model) count(a area) string {
 		}
 	}
 	return ""
+}
+
+// usageColumns are Usage's columns: the fourth is the credits each model
+// cost this period for a member on credits, all-time tokens otherwise.
+func (m model) usageColumns() []column {
+	cols := areaUsage.columns()
+	if m.snap.creditsByModel() != nil {
+		cols[3] = column{title: "Credits", width: 9, right: true}
+	}
+	return cols
+}
+
+// creditsByModel is the credits each model cost this period, by model id,
+// or nil for a member not on credits.
+func (s snapshot) creditsByModel() map[string]float64 {
+	if s.credits == nil || !s.credits.Enabled {
+		return nil
+	}
+	out := make(map[string]float64, len(s.credits.Models))
+	for _, mc := range s.credits.Models {
+		out[mc.Model] += mc.CreditsThisMonth
+	}
+	return out
 }
