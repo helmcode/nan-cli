@@ -4,7 +4,11 @@ set -euo pipefail
 # Overridable so a fork can install its own build, and so the failure paths
 # below can be exercised against a repo that is not there.
 REPO="${REPO:-helmcode/nan-cli}"
-INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+# The directory the one-liner uses. Kept separate from INSTALL_DIR because
+# check_path only edits a shell profile for this default: a custom INSTALL_DIR
+# is a deliberate choice and must not come with a silent profile edit.
+DEFAULT_INSTALL_DIR="$HOME/.local/bin"
+INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
 VERSION="${VERSION:-}"
 
 if [ -t 1 ]; then
@@ -180,20 +184,101 @@ install_bin() {
   sudo install -d "$dest_dir" && sudo install -m 755 "$src" "$dest_dir/nan"
 }
 
-check_path() {
-  local dir="$1"
-  case ":$PATH:" in
-    *":$dir:"*) ;;
-    *)
-      warn "$dir is not in your PATH"
-      warn "add this to your shell profile:"
-      printf "    export PATH=\"%s:\$PATH\"\n" "$dir"
-      ;;
+# The shell the member logs in with, by name (zsh, bash, fish...). It is
+# $SHELL and not the shell running this script, which under `curl | bash` is
+# always bash.
+login_shell() { basename "${SHELL:-sh}"; }
+
+# The startup file a new terminal of that shell reads.
+shell_profile() {
+  case "$(login_shell)" in
+    zsh)  echo "${ZDOTDIR:-$HOME}/.zshrc" ;;
+    # macOS terminals start login shells, which read .bash_profile and not
+    # .bashrc. Linux terminals start interactive non-login shells, which read
+    # .bashrc and not .bash_profile.
+    bash) if [ "$(detect_os)" = "darwin" ]; then echo "$HOME/.bash_profile"; else echo "$HOME/.bashrc"; fi ;;
+    fish) echo "${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish" ;;
+    *)    echo "$HOME/.profile" ;;
   esac
 }
 
+# $1 as one literal word for the login shell: single-quoted, so $, `, spaces
+# and double quotes inside it mean nothing. A ' inside is closed, escaped and
+# reopened in sh/bash/zsh; fish escapes it (and backslashes) in place.
+quote_for_shell() {
+  if [ "$(login_shell)" = "fish" ]; then
+    printf "'%s'" "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e "s/'/\\\\'/g")"
+  else
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+  fi
+}
+
+# The line that puts $1 first on PATH, in the login shell's syntax. Prepended,
+# so an older nan later in PATH (say /usr/local/bin) loses. The default
+# directory is written as "$HOME/.local/bin" - expanded by the shell that reads
+# it, so whatever characters the home path holds need no quoting.
+path_line() {
+  local dir_word
+  if [ "$1" = "$DEFAULT_INSTALL_DIR" ]; then
+    dir_word='"$HOME/.local/bin"'
+  else
+    dir_word="$(quote_for_shell "$1")"
+  fi
+  if [ "$(login_shell)" = "fish" ]; then
+    echo "fish_add_path $dir_word"
+  else
+    echo "export PATH=$dir_word:\"\$PATH\""
+  fi
+}
+
+# Make a new terminal find nan. Only the default directory gets a profile
+# edit: a custom INSTALL_DIR is a deliberate choice, so for it this prints the
+# line and leaves the files alone.
+check_path() {
+  local dir="$1" profile line
+  case ":$PATH:" in
+    *":$dir:"*) info "$dir is already in PATH"; return ;;
+  esac
+
+  line="$(path_line "$dir")"
+  if [ "$dir" != "$DEFAULT_INSTALL_DIR" ]; then
+    warn "$dir is not in your PATH; add this line to your shell profile:"
+    printf "    %s\n" "$line"
+    return
+  fi
+
+  profile="$(shell_profile)"
+  if grep -qxF "$line" "$profile" 2>/dev/null; then
+    warn "$profile already adds $dir, but this terminal predates it: open a new one"
+    return
+  fi
+  if ! { mkdir -p "$(dirname "$profile")" && printf '\n# Added by the nan installer\n%s\n' "$line" >> "$profile"; } 2>/dev/null; then
+    warn "could not write $profile; add this line to it yourself:"
+    printf "    %s\n" "$line"
+    return
+  fi
+  log "added $dir to PATH in $profile"
+  warn "open a new terminal to use nan, or run: source $(quote_for_shell "$profile")"
+}
+
+# A nan that was on PATH before this install and lives somewhere else, most
+# often /usr/local/bin from the installer's old default. It can keep running
+# instead of the new one, and silently.
+warn_if_shadowed() {
+  local found="$1" install_dir="$2" found_dir
+  [ -n "$found" ] || return 0
+  found_dir="$(cd "$(dirname "$found")" 2>/dev/null && pwd -P)" || return 0
+  [ "$found_dir" != "$(cd "$install_dir" 2>/dev/null && pwd -P)" ] || return 0
+  warn "an older nan at $found may run instead of $install_dir/nan"
+  if [ -w "$found_dir" ]; then
+    warn "remove it: rm $(quote_for_shell "$found")"
+  else
+    warn "remove it: sudo rm $(quote_for_shell "$found")"
+  fi
+}
+
 main() {
-  local os arch version archive url checksums_url expected_checksum
+  local os arch version archive url checksums_url expected_checksum existing_nan
 
   os="$(detect_os)"
   arch="$(detect_arch)"
@@ -227,11 +312,16 @@ main() {
 
   tar xz -C "$tmpdir" -f "$tmpdir/$archive"
 
+  existing_nan="$(type -P nan 2>/dev/null || true)"
+
   info "installing to ${INSTALL_DIR}/nan..."
   install_bin "$tmpdir/nan" "$INSTALL_DIR"
 
   log "installed ${BOLD}${version}${RESET} to ${INSTALL_DIR}/nan"
+  warn_if_shadowed "$existing_nan" "$INSTALL_DIR"
   check_path "$INSTALL_DIR"
 }
 
-main "$@"
+if [ -z "${BASH_SOURCE[0]:-}" ] || [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi
