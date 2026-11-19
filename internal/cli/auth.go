@@ -501,6 +501,11 @@ func runLogout(cmd *cobra.Command, _ []string) error {
 	if err := session.Delete(); err != nil {
 		return err
 	}
+	// Unfinished context uploads are remembered per credential, so a push
+	// can resume. A machine signed out of keeps nothing of that account.
+	if dir, err := ctxUploadStateDir(); err == nil {
+		_ = os.RemoveAll(dir)
+	}
 	fmt.Println("Logged out.")
 
 	// Deleting session.json is only half of what logging out means here. The

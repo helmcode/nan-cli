@@ -119,3 +119,28 @@ func TestLogoutWithoutASessionTokenSendsNothing(t *testing.T) {
 		t.Error("session.json survived the logout")
 	}
 }
+
+// A context push remembers an unfinished upload per credential, to resume
+// it. Signing out leaves nothing of that account on the machine.
+func TestLogoutForgetsUnfinishedUploads(t *testing.T) {
+	fakeHome(t, `{"token":"t"}`)
+	_, u := logoutServer(t, http.StatusOK)
+	withAPIBase(t, u)
+	keepToolsFlag = true
+	t.Cleanup(func() { keepToolsFlag = false })
+	state := filepath.Join(t.TempDir(), "context-uploads")
+	if err := os.MkdirAll(filepath.Join(state, "abc"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "abc", "sha.json"), []byte(`{"upload_id":"u"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	swap(t, &ctxUploadStateDir, func() (string, error) { return state, nil })
+
+	if err := runLogout(logoutCmd, nil); err != nil {
+		t.Fatalf("runLogout: %v", err)
+	}
+	if _, err := os.Stat(state); err == nil {
+		t.Error("the upload state survived the logout")
+	}
+}
