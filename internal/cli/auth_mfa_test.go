@@ -506,3 +506,37 @@ func TestAFlagReadFromStdinIsBounded(t *testing.T) {
 		t.Errorf("saved %v", sess)
 	}
 }
+
+// A session token typed on the command line stays in the shell's history.
+// It is saved, and the member is told how to avoid that next time; from
+// stdin nothing is said.
+func TestATokenOnTheCommandLineIsWarnedAbout(t *testing.T) {
+	for _, c := range []struct {
+		args  []string
+		stdin string
+		warn  bool
+	}{
+		{[]string{"--token", "sess-inline"}, "", true},
+		{[]string{"--token", "-"}, "sess-piped\n", false},
+	} {
+		home := fakeHome(t, "")
+		mfaPlatform(t, false)
+		if c.stdin != "" {
+			withStdin(t, c.stdin)
+		}
+		var warned bytes.Buffer
+		swap(t, &loginWarnings, io.Writer(&warned))
+		rootCmd.SetArgs(append([]string{"auth", "login"}, c.args...))
+		rootCmd.SetOut(io.Discard)
+		rootCmd.SetErr(io.Discard)
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		if sess, _ := readSession(t, home); sess["token"] == nil {
+			t.Errorf("%v: the token was not saved", c.args)
+		}
+		if got := strings.Contains(warned.String(), "--token -"); got != c.warn {
+			t.Errorf("%v: warned=%v, want %v (%q)", c.args, got, c.warn, warned.String())
+		}
+	}
+}

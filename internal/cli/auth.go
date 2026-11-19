@@ -96,6 +96,12 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 		if err != nil {
 			return err
 		}
+		if tokenFlag != "-" {
+			// A session lasts until it expires, unlike the link, which is
+			// spent by this very command: typed into the command line it
+			// stays in the shell's history and is visible in ps meanwhile.
+			_, _ = fmt.Fprintln(loginWarnings, "The session token is now in your shell history. Next time pass --token - and pipe it in.")
+		}
 		return saveToken(token)
 	}
 
@@ -483,6 +489,10 @@ func flagValue(value string) (string, error) {
 	}
 	return value, nil
 }
+
+// loginWarnings is where `nan auth login` says a credential was typed where
+// it stays readable. A variable so the tests can read it.
+var loginWarnings io.Writer = os.Stderr
 
 // logoutWarnings is where `nan auth logout` says the platform did not confirm
 // the sign-out. A variable so the tests can read it.
