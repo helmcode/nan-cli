@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -219,18 +220,48 @@ func (m model) renderFooter() string {
 				binds = append(binds, hint(it.key, strings.ToLower(it.label)))
 			}
 		}
-		binds = append(binds, k.Setup, k.NextArea, k.Area, k.Find)
+		// The way to every other key, and out, come before the rest: on a
+		// narrow terminal the line is cut from the right, and `?` and `q`
+		// are the two that must never be what goes.
+		binds = append(binds, k.Help, k.Quit, k.Find)
 		if m.session.SignedIn() {
 			binds = append(binds, k.SignOut)
 		} else {
 			binds = append(binds, k.SignIn)
 		}
-		if m.help.ShowAll {
-			binds = append(binds, k.Reload, k.Back, k.Tour)
+		if m.area != areaHarness {
+			binds = append(binds, k.Setup)
 		}
-		binds = append(binds, k.Help, k.Quit)
+		binds = append(binds, k.NextArea, k.Area)
+		if m.help.ShowAll {
+			// Everything, on as many lines as it takes: `?` is the one
+			// place a key cut off the single line can be read.
+			binds = append(binds, k.Reload, k.Back, k.Tour)
+			return "\n" + pad() + strings.Join(wrapHelp(m.help, binds, m.w-2*margin), "\n"+pad())
+		}
 	}
 	return "\n" + pad() + ui.Truncate(m.help.ShortHelpView(binds), m.w-2*margin)
+}
+
+// wrapHelp lays the bindings out on lines no wider than width, breaking
+// between bindings, never inside one.
+func wrapHelp(h help.Model, binds []key.Binding, width int) []string {
+	// help cuts its own line at its width with an ellipsis, which would
+	// hide every break; this copy measures the whole line.
+	h.SetWidth(0)
+	var lines []string
+	var line []key.Binding
+	for _, b := range binds {
+		if len(line) > 0 && ansi.StringWidth(h.ShortHelpView(append(line, b))) > width {
+			lines = append(lines, h.ShortHelpView(line))
+			line = nil
+		}
+		line = append(line, b)
+	}
+	if len(line) > 0 {
+		lines = append(lines, ui.Truncate(h.ShortHelpView(line), width))
+	}
+	return lines
 }
 
 // hint is a footer entry that is not a binding of its own.
@@ -554,6 +585,24 @@ func (m model) renderHarness(w int) string {
 	}
 	b.WriteString("\n" + selectable(true, "Set up the tools") + "  " + ui.Faint("enter or e") + "\n")
 
+	// Which tools here already use NaN comes before the explanation: it is
+	// what a member opens this area to find out, and on a short terminal
+	// the explanation is what gets cut.
+	b.WriteString("\n" + m.eyebrow("On this machine") + "\n\n")
+	installed := m.snap.installedTools()
+	if len(installed) == 0 {
+		b.WriteString("  " + ui.Faint("None of the supported tools is installed: "+tools.List()+".") + "\n")
+	}
+	for _, h := range installed {
+		state := lipgloss.NewStyle().Foreground(ui.Current().Yellow).Render("○ not configured")
+		switch {
+		case h.Configured:
+			state = ui.Success("configured with NaN")
+		case !enabled(m.session.EnabledTools, h.Name):
+			state = ui.Faint("unticked")
+		}
+		b.WriteString("  " + ui.Value(ui.Pad(h.Name, 12)) + ui.Pad(state, 22) + ui.Faint(ui.HomePath(h.ConfigPath)) + "\n")
+	}
 	// What setting it does, said as the steps it is, because "paste your
 	// key" alone does not say that it will edit other programs' files.
 	b.WriteString("\n" + m.eyebrow("What setting the key does") + "\n\n")
@@ -572,23 +621,6 @@ func (m model) renderHarness(w int) string {
 	}
 	for _, line := range strings.Split(ansi.Wrap("Untick a tool to take NaN back out of it; signing out (o) takes it out of all of them.", max(w-7, 20), ""), "\n") {
 		b.WriteString(hang + ui.Faint(line) + "\n")
-	}
-
-	b.WriteString("\n" + m.eyebrow("On this machine") + "\n\n")
-	installed := m.snap.installedTools()
-	if len(installed) == 0 {
-		b.WriteString("  " + ui.Faint("None of the supported tools is installed: "+tools.List()+".") + "\n")
-		return b.String()
-	}
-	for _, h := range installed {
-		state := lipgloss.NewStyle().Foreground(ui.Current().Yellow).Render("○ not configured")
-		switch {
-		case h.Configured:
-			state = ui.Success("configured with NaN")
-		case !enabled(m.session.EnabledTools, h.Name):
-			state = ui.Faint("unticked")
-		}
-		b.WriteString("  " + ui.Value(ui.Pad(h.Name, 12)) + ui.Pad(state, 22) + ui.Faint(ui.HomePath(h.ConfigPath)) + "\n")
 	}
 	return b.String()
 }

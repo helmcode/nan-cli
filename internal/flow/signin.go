@@ -349,7 +349,7 @@ func (s SignIn) View(indent, spinner string, apiHost string) string {
 		if s.notice != "" {
 			b.WriteString(indent + ui.Warn(s.notice) + "\n\n")
 		}
-		b.WriteString(s.form.View() + "\n")
+		b.WriteString(ui.Indent(s.form.View(), indent) + "\n")
 
 	case signInSending:
 		b.WriteString(indent + spinner + "\n")
@@ -357,10 +357,10 @@ func (s SignIn) View(indent, spinner string, apiHost string) string {
 	case signInLink:
 		s.linkSent(&b, indent, apiHost)
 
-		b.WriteString("\n" + s.form.View() + "\n")
+		b.WriteString("\n" + ui.Indent(s.form.View(), indent) + "\n")
 
 	case signInCode:
-		b.WriteString(s.form.View() + "\n")
+		b.WriteString(ui.Indent(s.form.View(), indent) + "\n")
 
 	case signInVerifying, signInChecking:
 		b.WriteString(indent + spinner + "\n")

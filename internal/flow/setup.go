@@ -388,7 +388,7 @@ func (s Setup) View(indent, spinner string) string {
 				b.WriteString(indent + ui.Success(fmt.Sprintf("Key accepted by the cluster · %d models", s.models)) + "\n\n")
 			}
 		}
-		b.WriteString(s.form.View() + "\n")
+		b.WriteString(ui.Indent(s.form.View(), indent) + "\n")
 
 	case setupChecking, setupApplying:
 		b.WriteString(indent + spinner + "\n")
