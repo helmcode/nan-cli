@@ -184,7 +184,7 @@ func TestEscFromTheLinkStepGoesBackToTheAddress(t *testing.T) {
 	client := api.New("")
 	s := NewSignIn()
 	s.Start("")
-	s = drive(t, s, client, typed("dev@acme.com")...)
+	s = drive(t, s, client, typed("dev@example.com")...)
 	s = drive(t, s, client, linkSentMsg{})
 	if s.stage != signInLink {
 		t.Fatalf("not at the link step: %d", s.stage)
@@ -194,7 +194,7 @@ func TestEscFromTheLinkStepGoesBackToTheAddress(t *testing.T) {
 	if s.stage != signInEmail {
 		t.Fatalf("esc from the link step left the flow at stage %d, want the email step", s.stage)
 	}
-	if !strings.Contains(s.form.View(), "dev@acme.com") {
+	if !strings.Contains(s.form.View(), "dev@example.com") {
 		t.Error("the address was not filled back in")
 	}
 

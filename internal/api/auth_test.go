@@ -156,14 +156,14 @@ func TestRequestingALink(t *testing.T) {
 	defer srv.Close()
 	c := New("", WithBaseURL(srv.URL))
 
-	if err := c.RequestMagicLink(context.Background(), "ana@acme.com"); err != nil {
+	if err := c.RequestMagicLink(context.Background(), "ana@example.com"); err != nil {
 		t.Fatal(err)
 	}
-	if body != `/api/auth/login/request {"email":"ana@acme.com"}` {
+	if body != `/api/auth/login/request {"email":"ana@example.com"}` {
 		t.Errorf("sent %s", body)
 	}
 	status = http.StatusTooManyRequests
-	if err := c.RequestMagicLink(context.Background(), "ana@acme.com"); err == nil || !strings.Contains(err.Error(), "too many") {
+	if err := c.RequestMagicLink(context.Background(), "ana@example.com"); err == nil || !strings.Contains(err.Error(), "too many") {
 		t.Errorf("a 429 reads as %v", err)
 	}
 }

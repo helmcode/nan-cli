@@ -91,7 +91,7 @@
     "source": "nan"
   },
   "input": {
-    "delivery": "72d3162e-cc78-11e3-81ab-4c9367dc0958",
+    "delivery": "f0000000-0000-4000-8000-000000000004",
     "event": "pull_request",
     "payload": {
       "number": 42,

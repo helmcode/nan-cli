@@ -90,14 +90,14 @@ func TestTheTypedEmailSurvivesTheModelBeingCopied(t *testing.T) {
 
 	s := NewSignIn()
 	s.Start("")
-	s = drive(t, s, client, typed("dev@acme.com")...)
+	s = drive(t, s, client, typed("dev@example.com")...)
 
 	if s.stage != signInSending {
 		t.Fatalf("the flow is at stage %d after submitting an address, want signInSending", s.stage)
 	}
-	if s.email != "dev@acme.com" {
+	if s.email != "dev@example.com" {
 		t.Fatalf("the flow kept %q as the address to send to, want %q - "+
-			"an empty one reaches the control plane as invalid_request", s.email, "dev@acme.com")
+			"an empty one reaches the control plane as invalid_request", s.email, "dev@example.com")
 	}
 }
 
@@ -108,7 +108,7 @@ func TestThePastedLinkSurvivesTheModelBeingCopied(t *testing.T) {
 
 	s := NewSignIn()
 	s.Start("")
-	s = drive(t, s, client, typed("dev@acme.com")...)
+	s = drive(t, s, client, typed("dev@example.com")...)
 
 	// The link step opens when the send comes back.
 	s = drive(t, s, client, linkSentMsg{})

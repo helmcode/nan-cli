@@ -7,10 +7,10 @@ import (
 )
 
 // Me is what this CLI shows of the signed-in member, and all it reads of
-// /api/auth/me. The platform's answer also carries its own workings - feature
-// flags, entitlements, roles, the deployment it runs in - which are not the
-// member's business and not this CLI's to print, so they are never decoded:
-// a field the platform adds tomorrow stays out until somebody chooses it.
+// /api/auth/me. The platform's answer also carries fields it uses for itself,
+// which are not the member's business and not this CLI's to print, so they
+// are never decoded: a field the platform adds tomorrow stays out until
+// somebody chooses it.
 type Me struct {
 	Email string `json:"email"`
 	// Tier is the plan: free, inference and so on.

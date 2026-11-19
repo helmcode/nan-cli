@@ -137,7 +137,7 @@ func TestAnEndedMembershipIsOnHome(t *testing.T) {
 // it is what says which account this is.
 func TestProfileKeepsTheEmailDomain(t *testing.T) {
 	for in, want := range map[string]string{
-		"cristian@example.com": "cristi...@example.com",
+		"someone@example.com": "someon...@example.com",
 		"ab@example.com":       "...@example.com",
 		"no-at-sign":           "no-at-...",
 	} {

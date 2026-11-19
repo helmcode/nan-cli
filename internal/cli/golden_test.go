@@ -159,5 +159,5 @@ func TestGoldenRender(t *testing.T) {
 	if err := doAutomationsDeliveries(ctx, env, "PR review api"); err != nil {
 		t.Fatal(err)
 	}
-	wantAll(t, "deliveries", out.String(), "run_created", run, "72d3162e-cc78-11e3-81ab-4c9367dc0958")
+	wantAll(t, "deliveries", out.String(), "run_created", run, "f0000000-0000-4000-8000-000000000004")
 }

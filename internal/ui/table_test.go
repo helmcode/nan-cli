@@ -24,8 +24,8 @@ func keysTable(width int) Table {
 			{Title: "by", Max: 28, DropBelow: 78},
 		},
 		Rows: [][]string{
-			{"production-api", "hke_9f3a…7c21", "just now", "2026-05-27", "cristian@acme.com"},
-			{"ci-runner", "hke_2b8d…441e", "2 days ago", "2026-05-27", "cristian@acme.com"},
+			{"production-api", "hke_9f3a…7c21", "just now", "2026-05-27", "someone@example.com"},
+			{"ci-runner", "hke_2b8d…441e", "2 days ago", "2026-05-27", "someone@example.com"},
 		},
 	}
 }
@@ -50,7 +50,7 @@ func TestATableDoesNotStretchToFillTheTerminal(t *testing.T) {
 	narrow := Table{
 		Width:   200,
 		Columns: []Column{{Title: "email"}, {Title: "role"}},
-		Rows:    [][]string{{"dev@acme.com", "MEMBER"}},
+		Rows:    [][]string{{"dev@example.com", "MEMBER"}},
 	}
 
 	if w := widestLine(narrow.Render()); w > 40 {
@@ -115,7 +115,7 @@ func TestColumnsWithoutDropBelowAreNeverDropped(t *testing.T) {
 	}
 	// And the two that ARE droppable went, rather than everything being
 	// squeezed together.
-	for _, gone := range []string{"CREATED", "cristian@acme.com"} {
+	for _, gone := range []string{"CREATED", "someone@example.com"} {
 		if strings.Contains(out, gone) {
 			t.Errorf("%s survived at 30 columns:\n%s", gone, out)
 		}

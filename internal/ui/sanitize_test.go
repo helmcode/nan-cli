@@ -81,7 +81,7 @@ func TestInvalidUTF8IsReplaced(t *testing.T) {
 }
 
 func TestSanitiseLeavesOrdinaryTextAlone(t *testing.T) {
-	for _, s := range []string{"production-api", "cristian@acme.com", "Acme Industrial", "€1,497", "已完成"} {
+	for _, s := range []string{"production-api", "someone@example.com", "Acme Industrial", "€1,497", "已完成"} {
 		if got := sanitize(s); got != s {
 			t.Errorf("sanitize(%q) changed it to %q", s, got)
 		}

@@ -29,7 +29,7 @@ func atTheCode(t *testing.T) (SignIn, *api.Client, *authtest.Platform) {
 
 	s := NewSignIn()
 	s.Start("")
-	s = drive(t, s, client, typed("me@acme.io")...)
+	s = drive(t, s, client, typed("me@example.com")...)
 	s = drive(t, s, client, linkSentMsg{})
 	s, verifying := driveToNetwork(t, s, client, typed(mfaTestLink)...)
 	if s.stage != signInVerifying {
@@ -137,7 +137,7 @@ func TestTheFlowStartsAgainWhenTheSignInEnds(t *testing.T) {
 	if s.stage != signInEmail || s.challenge != nil {
 		t.Fatalf("stage %d, challenge kept: %v", s.stage, s.challenge != nil)
 	}
-	if got := view(s); !strings.Contains(got, "me@acme.io") {
+	if got := view(s); !strings.Contains(got, "me@example.com") {
 		t.Errorf("the address field is not filled in:\n%s", got)
 	}
 	if s.err == nil || !strings.Contains(s.err.Error(), "new link") {
@@ -235,7 +235,7 @@ func TestTheFlowSendsAnUnfinishedSignUpToTheBrowser(t *testing.T) {
 
 	s := NewSignIn()
 	s.Start("")
-	s = drive(t, s, client, typed("me@acme.io")...)
+	s = drive(t, s, client, typed("me@example.com")...)
 	s = drive(t, s, client, linkSentMsg{})
 	s, verifying := driveToNetwork(t, s, client, typed(mfaTestLink)...)
 	s = drive(t, s, client, verifying())

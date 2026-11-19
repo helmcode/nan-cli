@@ -58,16 +58,14 @@ func TestKeyStatusSaysWhenThereIsNoKey(t *testing.T) {
 	}
 }
 
-// /api/auth/me also carries the platform's own workings: feature flags,
-// entitlements, roles, the deployment it runs in. None of it is the member's
-// to see, and `nan me` prints whatever Me holds, so Me holds only what was
+// /api/auth/me also carries fields the platform uses for itself. None of it
+// is the member's to see, and `nan me` prints whatever Me holds, so Me holds only what was
 // chosen and the rest is never decoded.
 func TestMeReadsOnlyWhatIsShown(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"email":"a@b.co","tier":"inference","graceUntil":null,` +
-			`"userUUID":"u-1","discordId":"d-1","namespace":"ns-1","isAdmin":true,"roles":["x"],` +
-			`"environment":"prod","inferenceProfile":"litellm-prod","workspaces_beta":true,` +
-			`"features":{"ephemeral":true},"entitlements":{"apps":true},"profile":{"fullName":"A"}}`))
+		_, _ = w.Write([]byte(`{"email":"a@example.com","tier":"inference","graceUntil":null,` +
+			`"internalId":"id-1","linkedAccountId":"id-2","isAdmin":true,"roles":["x"],` +
+			`"someFlag":true,"someSetting":"value","flags":{"a":true},"profile":{"fullName":"A"}}`))
 	}))
 	defer srv.Close()
 
@@ -75,14 +73,14 @@ func TestMeReadsOnlyWhatIsShown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if me.Email != "a@b.co" || me.Tier != "inference" || me.GraceUntil != "" {
+	if me.Email != "a@example.com" || me.Tier != "inference" || me.GraceUntil != "" {
 		t.Errorf("me parsed wrong: %+v", me)
 	}
 	out, err := json.Marshal(me)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := string(out), `{"email":"a@b.co","tier":"inference"}`; got != want {
+	if got, want := string(out), `{"email":"a@example.com","tier":"inference"}`; got != want {
 		t.Errorf("nan me would print %s, want %s", got, want)
 	}
 }

@@ -39,7 +39,7 @@ func signInTo(t *testing.T, p *authtest.Platform) model {
 	if !m.signIn.Active() {
 		t.Fatal("a fresh machine was not asked to sign in")
 	}
-	m = typeInto(t, m, "me@acme.io")
+	m = typeInto(t, m, "me@example.com")
 	m = press(t, m, keyOf("enter"))
 	m = typeInto(t, m, authtest.LinkToken)
 	m = press(t, m, keyOf("enter"))
