@@ -125,3 +125,22 @@ func TestStateSurvivesARun(t *testing.T) {
 		t.Errorf("loaded %+v", got)
 	}
 }
+
+// The release check is the one request that does not go to nan.builders,
+// and a member can turn it off.
+func TestTheReleaseCheckCanBeTurnedOff(t *testing.T) {
+	never := State{}
+	for _, env := range [][2]string{{"NAN_NO_UPDATE_CHECK", "1"}, {"DO_NOT_TRACK", "1"}} {
+		t.Run(env[0], func(t *testing.T) {
+			t.Setenv("NAN_NO_UPDATE_CHECK", "")
+			t.Setenv("DO_NOT_TRACK", "")
+			if !never.DueForCheck(time.Now()) {
+				t.Fatal("a machine that never checked is not due")
+			}
+			t.Setenv(env[0], env[1])
+			if never.DueForCheck(time.Now()) {
+				t.Errorf("%s=%s still checks", env[0], env[1])
+			}
+		})
+	}
+}

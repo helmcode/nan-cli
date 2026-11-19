@@ -76,6 +76,9 @@ shows every key and `q` quits.
 
 When a newer release is out, the header says so and Home has the command that
 updates your copy; after any other command, one line on stderr says the same.
+To find out, nan asks GitHub's public releases API at most once a day; the
+request carries nothing but nan's version. `NAN_NO_UPDATE_CHECK=1` (or
+`DO_NOT_TRACK=1`) turns it off. Nothing else is sent anywhere but nan.builders.
 
 ### Setting up your tools
 

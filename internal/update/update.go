@@ -95,6 +95,9 @@ func (s State) Save() error {
 
 // DueForCheck is whether the latest version should be asked for again.
 func (s State) DueForCheck(now time.Time) bool {
+	if CheckDisabled() {
+		return false
+	}
 	t, err := time.Parse(time.RFC3339, s.CheckedAt)
 	return err != nil || now.Sub(t) >= CheckEvery
 }
@@ -231,4 +234,13 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// CheckDisabled is the member having said no to the release check: the one
+// request this CLI makes that is not to nan.builders, a GET to GitHub's
+// public releases API that carries nothing but the version in its
+// User-Agent. NAN_NO_UPDATE_CHECK set to anything turns it off, and so does
+// DO_NOT_TRACK=1, the convention other CLIs honour.
+func CheckDisabled() bool {
+	return os.Getenv("NAN_NO_UPDATE_CHECK") != "" || os.Getenv("DO_NOT_TRACK") == "1"
 }
