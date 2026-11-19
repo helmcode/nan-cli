@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"charm.land/huh/v2"
@@ -67,9 +69,18 @@ func runSetup(ctx context.Context, a *app, apiKey string, all bool) error {
 	// Checked before a byte is written. A key that fails here is one
 	// message; the same key written into five configs is five tools that
 	// start, answer, and fail deep into a session.
+	// Only a refusal stops it. A cluster that cannot be reached, or answers
+	// with its own trouble, says nothing about the key: refusing then would
+	// leave somebody offline unable to set up at all, and the dashboard's
+	// Setup lets it through for the same reason.
 	models, err := api.ListModels(ctx, apiKey)
-	if err != nil {
+	checked := "Key accepted by the cluster · " + fmt.Sprintf("%d models", len(models))
+	switch {
+	case errors.Is(err, api.ErrKeyRefused):
 		return fmt.Errorf("the cluster refused this key - %w", err)
+	case err != nil:
+		p.Warn("Could not check the key (%v): it is used as it is.", err)
+		checked = "Key not checked"
 	}
 
 	installed := tools.Installed(tools.Detect())
@@ -78,7 +89,7 @@ func runSetup(ctx context.Context, a *app, apiKey string, all bool) error {
 		if err := session.Save(a.session); err != nil {
 			return err
 		}
-		p.Success("Key accepted by the cluster · %d models. Saved.", len(models))
+		p.Success("%s. Saved.", checked)
 		p.Note("None of %s is installed on this machine yet.", tools.List())
 		return nil
 	}
@@ -96,7 +107,7 @@ func runSetup(ctx context.Context, a *app, apiKey string, all bool) error {
 		return err
 	}
 
-	p.Success("Key accepted by the cluster · %d models  ·  %s", len(models), result.Summary())
+	p.Success("%s  ·  %s", checked, result.Summary())
 	if len(result.Written) > 0 {
 		p.Section("now open them")
 		steps := map[string]tools.Tool{}
@@ -271,8 +282,12 @@ func newSetupRemoveCmd(get func() *app) *cobra.Command {
 
 			a.session.APIKey = ""
 			a.session.EnabledTools = nil
-			if err := session.Save(a.session); err != nil {
-				return err
+			// A machine that never had a session keeps not having one: an
+			// empty file written here would read as a sign-in that expired.
+			if _, statErr := os.Stat(session.Path()); statErr == nil {
+				if err := session.Save(a.session); err != nil {
+					return err
+				}
 			}
 
 			if len(removed) > 0 {
