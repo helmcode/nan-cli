@@ -45,7 +45,8 @@ func (m model) render() string {
 	}
 	if m.w < minW || m.h < minH {
 		// Every area is also a command, which fits any terminal.
-		return fmt.Sprintf("\n  This dashboard needs %dx%d; the terminal is %dx%d.\n  Make it bigger, or use the commands: nan me, nan metrics usage, nan setup...\n", minW, minH, m.w, m.h)
+		// Every key still works here; q is the one worth saying.
+		return fmt.Sprintf("\n  This dashboard needs %dx%d; the terminal is %dx%d.\n  Make it bigger, or use the commands (nan --help lists them).\n  q quits.\n", minW, minH, m.w, m.h)
 	}
 
 	header := m.renderHeader()
@@ -370,10 +371,12 @@ func (m model) renderHome(w, room int) string {
 	}
 	rows := m.rows(areaHome)
 	cur := m.cursor[areaHome]
+	// A shape each, not only a colour: with NO_COLOR, or to a reader who
+	// does not tell red from yellow, an alarm and a warning still differ.
 	dot := map[severity]string{
-		sevAlarm: lipgloss.NewStyle().Foreground(t.Red).Render("●"),
-		sevWarn:  lipgloss.NewStyle().Foreground(t.Yellow).Render("●"),
-		sevInfo:  lipgloss.NewStyle().Foreground(t.TextFaint).Render("○"),
+		sevAlarm: lipgloss.NewStyle().Foreground(t.Red).Render(sevMark[sevAlarm]),
+		sevWarn:  lipgloss.NewStyle().Foreground(t.Yellow).Render(sevMark[sevWarn]),
+		sevInfo:  lipgloss.NewStyle().Foreground(t.TextFaint).Render(sevMark[sevInfo]),
 	}
 	arrive := func(i int, text string) string {
 		if p := stagger(m.reveal, i); p < 1 {
@@ -743,3 +746,6 @@ func loadProblem(err error) error {
 	}
 	return fmt.Errorf("%w - r to try again", err)
 }
+
+// sevMark is the shape a signal's severity is drawn with.
+var sevMark = map[severity]string{sevAlarm: "✗", sevWarn: "!", sevInfo: "○"}

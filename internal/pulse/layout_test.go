@@ -146,3 +146,35 @@ func TestProfileKeepsTheEmailDomain(t *testing.T) {
 		}
 	}
 }
+
+// Below the size the dashboard draws at, it says how to get out, and q does.
+func TestATerminalTooSmallSaysHowToQuit(t *testing.T) {
+	m, _ := demoModel(t, 60, 20)
+	out := screen(m)
+	if !strings.Contains(out, "q quits") || strings.Contains(out, "...") {
+		t.Errorf("the too-small screen:\n%s", out)
+	}
+	m = press(t, m, keyOf("q"))
+	if !m.quitting {
+		t.Error("q does not quit a terminal that is too small")
+	}
+}
+
+// An alarm and a warning on Home differ by shape, not only by colour.
+func TestSignalSeveritiesDifferWithoutColour(t *testing.T) {
+	m, _ := demoModel(t, 120, 40)
+	m.snap.keyRefused = true // an alarm; the ended membership is a warning
+	m.sigs = m.signals()
+	var alarm, warn string
+	for _, l := range strings.Split(screen(m), "\n") {
+		switch {
+		case strings.Contains(l, "refused the API key"):
+			alarm = l
+		case strings.Contains(l, "membership has ended"):
+			warn = l
+		}
+	}
+	if !strings.Contains(alarm, sevMark[sevAlarm]) || !strings.Contains(warn, sevMark[sevWarn]) || sevMark[sevAlarm] == sevMark[sevWarn] {
+		t.Errorf("alarm %q and warning %q are not told apart by shape", alarm, warn)
+	}
+}
