@@ -95,17 +95,6 @@ func (c *Client) Usage(ctx context.Context) (*Usage, error) {
 	return &out, nil
 }
 
-// UsageRaw is the same answer untouched, for `nan metrics usage`, which
-// prints what the platform sent rather than what this version understood of
-// it.
-func (c *Client) UsageRaw(ctx context.Context) (map[string]any, error) {
-	var out map[string]any
-	if err := c.get(ctx, "/api/metrics/usage", &out); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // KeyStatus is what the platform will say about a member's API key. Note
 // what is not in it: the key. The secret is handed over once, when it is
 // created, and never again, so Setup cannot fetch a key on a member's

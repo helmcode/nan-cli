@@ -29,7 +29,10 @@ func runMetricsUsage(cmd *cobra.Command, _ []string) error {
 	}
 
 	client := newAPIClient(sess.Token)
-	usage, err := client.UsageRaw(cmd.Context())
+	// The typed answer, not the platform's JSON as it came: like `nan me`,
+	// this prints what was chosen to show, and a field the platform adds
+	// for itself tomorrow does not reach the member's terminal or logs.
+	usage, err := client.Usage(cmd.Context())
 	if err != nil {
 		return err
 	}

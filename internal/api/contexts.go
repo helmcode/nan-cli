@@ -247,7 +247,7 @@ func (c *RunsClient) rawRequest(ctx context.Context, method, path string, body i
 	req.ContentLength = size
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "nan-cli")
+	req.Header.Set("User-Agent", userAgent())
 	c.authorize(req)
 	return req, nil
 }
