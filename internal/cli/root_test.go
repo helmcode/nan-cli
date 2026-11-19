@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -35,9 +34,8 @@ func TestVersionPrintsOneLine(t *testing.T) {
 		if err := rootCmd.Execute(); err != nil {
 			t.Fatalf("%s: %v", flag, err)
 		}
-		first, _, _ := strings.Cut(out.String(), "\n")
-		if want := "nan " + build.Version; first != want {
-			t.Errorf("%s printed %q first, want %q", flag, first, want)
+		if want := "nan " + build.Version + "\n"; out.String() != want {
+			t.Errorf("%s printed %q, want exactly %q", flag, out.String(), want)
 		}
 		_ = rootCmd.Flags().Set("version", "false")
 	}

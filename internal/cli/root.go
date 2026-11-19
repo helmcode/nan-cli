@@ -81,10 +81,11 @@ func NewRootCmd() *cobra.Command {
 	root.PersistentFlags().BoolVar(&noColor, "no-color", false,
 		"print without styling (NO_COLOR in the environment does the same)")
 
-	// One line a script can parse (`nan --version | cut -d' ' -f2`), then the
-	// toolchain. See build.Line for why this is not the banner.
+	// One line a script can parse (`nan --version | cut -d' ' -f2`), as it
+	// has always been: a second line made that print two values. See
+	// build.Line for why this is not the banner.
 	root.Version = build.Version
-	root.SetVersionTemplate(build.Line() + "\n" + build.Detail() + "\n")
+	root.SetVersionTemplate(build.Line() + "\n")
 
 	// Lazily, and not only in PersistentPreRunE: cobra runs just the CLOSEST
 	// PersistentPreRunE up the chain.

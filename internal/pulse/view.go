@@ -630,6 +630,7 @@ func (m model) renderAbout(w, room int) string {
 	b.WriteString("\n" + m.banner(w, room) + "\n")
 	rows := [][2]string{
 		{"Version", ui.Value(build.Version)},
+		{"Built with", ui.Faint(build.Detail())},
 		{"Platform", ui.Accent("https://nan.builders")},
 		{"Cloud", ui.Accent("https://cloud.nan.builders")},
 		{"Source", ui.Accent(build.Repo)},

@@ -36,19 +36,24 @@ func noticeUpdate(ctx context.Context, a *app, dashboard bool) {
 		ctx, cancel := context.WithTimeout(ctx, updateCheckTimeout)
 		release, err := api.LatestRelease(ctx)
 		cancel()
-		if err == nil {
-			// Checked, whatever the answer: "nothing newer" is an answer, and
-			// asking again on the next run would make every run pay for it.
-			st.CheckedAt = time.Now().UTC().Format(time.RFC3339)
-			if release != nil {
-				st.Latest = release.Version
-			}
-			_ = st.Save()
-		}
+		recordCheck(&st, time.Now(), release, err)
+		_ = st.Save()
 	}
 	if v := st.Available(); v != "" {
 		_, _ = fmt.Fprintf(a.p.errOut, "\n%s%s %s\n%s%s\n", indent,
 			ui.Accent(build.Name+" "+v+" is out"), ui.Faint("(you have "+build.Version+"). Update with:"),
 			indent+"  ", ui.Value(update.Command()))
+	}
+}
+
+// recordCheck notes that a check happened, whatever came of it: "nothing
+// newer" is an answer, and so is a network that did not answer. Asking again
+// on the next run would make every run pay for it, up to the timeout each on
+// a machine that is offline. The newest release seen is kept when the check
+// failed.
+func recordCheck(st *update.State, now time.Time, release *api.Release, err error) {
+	st.CheckedAt = now.UTC().Format(time.RFC3339)
+	if err == nil && release != nil {
+		st.Latest = release.Version
 	}
 }

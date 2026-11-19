@@ -32,9 +32,9 @@ func Line() string {
 	return Name + " " + Version
 }
 
-// Detail is the second line: the toolchain and platform this binary was built
-// for. It costs nothing and it is the first thing anybody asks for in a bug
-// report.
+// Detail is the toolchain and platform this binary was built for, shown on
+// the About area. It costs nothing and it is the first thing anybody asks for
+// in a bug report; it is not on --version, which stays one line.
 func Detail() string {
 	return runtime.Version() + " " + runtime.GOOS + "/" + runtime.GOARCH
 }
