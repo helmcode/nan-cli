@@ -226,7 +226,7 @@ func (c *RunsClient) ProposalDiff(ctx context.Context, id string) (string, error
 	if err != nil {
 		return "", fmt.Errorf("could not reach nan.builders: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxDiff+1))
 	if err != nil {
 		return "", fmt.Errorf("could not read the answer from nan.builders: %w", err)

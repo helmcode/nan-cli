@@ -114,7 +114,7 @@ func TestRejectRunSendsTheReason(t *testing.T) {
 }
 
 func TestRejectRunNotAwaitingIsAnAPIError(t *testing.T) {
-	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusConflict)
 		_, _ = io.WriteString(w, `{"error":{"message":"the run is not awaiting approval","type":"invalid_request_error","code":"not_awaiting_approval"}}`)
 	}), "sess", "")
@@ -242,7 +242,7 @@ func TestListSecretsUsesTheSession(t *testing.T) {
 // /api's newer envelope carries the code in "error" and the text in
 // "message"; the code is what callers branch on.
 func TestBareEnvelopeWithCodeAndMessage(t *testing.T) {
-	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	c := testRunsClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = io.WriteString(w, `{"error":"browser_session_required","message":"sign in in the browser","param":"x"}`)
 	}), "sess", "")

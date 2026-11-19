@@ -169,8 +169,8 @@ func AsContextError(err error) (*ContextError, bool) {
 
 func (c *RunsClient) contextError(status int, header http.Header, body []byte) error {
 	err := c.statusError(status, body)
-	apiErr, ok := err.(*APIError)
-	if !ok {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
 		return err
 	}
 	ce := &ContextError{APIError: apiErr}
@@ -207,7 +207,7 @@ func (c *RunsClient) ctxDo(client *http.Client, req *http.Request, out any) (int
 	if err != nil {
 		return 0, fmt.Errorf("could not reach nan.builders: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse))
 	if err != nil {
 		return resp.StatusCode, fmt.Errorf("could not read the answer from nan.builders: %w", err)
@@ -223,15 +223,16 @@ func (c *RunsClient) ctxDo(client *http.Client, req *http.Request, out any) (int
 	return resp.StatusCode, nil
 }
 
-func (c *RunsClient) ctxJSON(ctx context.Context, method, path string, body, out any, idemKey string) (int, error) {
+func (c *RunsClient) ctxJSON(ctx context.Context, method, path string, body, out any, idemKey string) error {
 	req, err := c.newRequest(ctx, method, path, body)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	if idemKey != "" {
 		req.Header.Set("Idempotency-Key", idemKey)
 	}
-	return c.ctxDo(c.http, req, out)
+	_, err = c.ctxDo(c.http, req, out)
+	return err
 }
 
 // rawRequest is a request whose body is streamed bytes of a known length.
@@ -246,7 +247,7 @@ func (c *RunsClient) rawRequest(ctx context.Context, method, path string, body i
 	req.ContentLength = size
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "nan-cli")
+	req.Header.Set("User-Agent", userAgent())
 	c.authorize(req)
 	return req, nil
 }
@@ -265,14 +266,14 @@ func uploadPath(sha, uploadID string) string {
 // ListContexts is GET /v1/contexts.
 func (c *RunsClient) ListContexts(ctx context.Context) (*ContextList, error) {
 	out := &ContextList{}
-	_, err := c.ctxJSON(ctx, http.MethodGet, "/v1/contexts", nil, out, "")
+	err := c.ctxJSON(ctx, http.MethodGet, "/v1/contexts", nil, out, "")
 	return out, err
 }
 
 // GetContext is GET /v1/contexts/{id_or_name}.
 func (c *RunsClient) GetContext(ctx context.Context, idOrName string) (*ContextDetail, error) {
 	out := &ContextDetail{}
-	_, err := c.ctxJSON(ctx, http.MethodGet, contextPath(idOrName), nil, out, "")
+	err := c.ctxJSON(ctx, http.MethodGet, contextPath(idOrName), nil, out, "")
 	return out, err
 }
 
@@ -283,7 +284,7 @@ func (c *RunsClient) CreateContext(ctx context.Context, name, description, idemK
 		body["description"] = description
 	}
 	out := &Context{}
-	_, err := c.ctxJSON(ctx, http.MethodPost, "/v1/contexts", body, out, idemKey)
+	err := c.ctxJSON(ctx, http.MethodPost, "/v1/contexts", body, out, idemKey)
 	return out, err
 }
 
@@ -291,14 +292,14 @@ func (c *RunsClient) CreateContext(ctx context.Context, name, description, idemK
 // new version).
 func (c *RunsClient) UpdateContext(ctx context.Context, id string, p ContextPatch) (*Context, error) {
 	out := &Context{}
-	_, err := c.ctxJSON(ctx, http.MethodPatch, contextPath(id), p, out, "")
+	err := c.ctxJSON(ctx, http.MethodPatch, contextPath(id), p, out, "")
 	return out, err
 }
 
 // DeleteContext is DELETE /v1/contexts/{id}; 409 context_in_use names the
 // automations that use it.
 func (c *RunsClient) DeleteContext(ctx context.Context, id string) error {
-	_, err := c.ctxJSON(ctx, http.MethodDelete, contextPath(id), nil, nil, "")
+	err := c.ctxJSON(ctx, http.MethodDelete, contextPath(id), nil, nil, "")
 	return err
 }
 
@@ -311,7 +312,7 @@ func (c *RunsClient) CheckBlobs(ctx context.Context, shas []string) ([]string, e
 		var out struct {
 			Missing []string `json:"missing"`
 		}
-		if _, err := c.ctxJSON(ctx, http.MethodPost, "/v1/contexts/blobs/check", map[string][]string{"sha256": shas[start:end]}, &out, ""); err != nil {
+		if err := c.ctxJSON(ctx, http.MethodPost, "/v1/contexts/blobs/check", map[string][]string{"sha256": shas[start:end]}, &out, ""); err != nil {
 			return nil, err
 		}
 		missing = append(missing, out.Missing...)
@@ -361,7 +362,7 @@ func (c *RunsClient) StartUpload(ctx context.Context, sha string, size int64, fi
 // stands, to resume it.
 func (c *RunsClient) UploadStatus(ctx context.Context, sha, uploadID string) (*ContextUpload, error) {
 	out := &ContextUpload{}
-	_, err := c.ctxJSON(ctx, http.MethodGet, uploadPath(sha, uploadID), nil, out, "")
+	err := c.ctxJSON(ctx, http.MethodGet, uploadPath(sha, uploadID), nil, out, "")
 	return out, err
 }
 
@@ -392,7 +393,7 @@ func (c *RunsClient) CompleteUpload(ctx context.Context, sha, uploadID string) (
 
 // AbortUpload is DELETE …/uploads/{upload_id}.
 func (c *RunsClient) AbortUpload(ctx context.Context, sha, uploadID string) error {
-	_, err := c.ctxJSON(ctx, http.MethodDelete, uploadPath(sha, uploadID), nil, nil, "")
+	err := c.ctxJSON(ctx, http.MethodDelete, uploadPath(sha, uploadID), nil, nil, "")
 	return err
 }
 
@@ -434,7 +435,7 @@ func (c *RunsClient) OpenContextFile(ctx context.Context, id, path string, versi
 		return nil, fmt.Errorf("could not reach nan.builders: %w", err)
 	}
 	if resp.StatusCode >= 400 {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return nil, c.contextError(resp.StatusCode, resp.Header, body)
 	}

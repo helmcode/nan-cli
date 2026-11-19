@@ -221,6 +221,8 @@ type Workspace struct {
 
 // APIError is a refusal from the platform, in the OpenAI envelope /v1/runs
 // answers with. Code is what callers branch on; Message is for people.
+//
+//nolint:revive // the name the run commands have always matched on
 type APIError struct {
 	Status  int
 	Type    string
@@ -267,7 +269,7 @@ type RunsClient struct {
 
 	// OnRetry, when set, hears about each reconnect before its backoff, so
 	// a caller can say why nothing is arriving.
-	OnRetry func(attempt, max int, err error)
+	OnRetry func(attempt, limit int, err error)
 }
 
 // NewRunsClient builds a client for the session token or, when there is none,
@@ -275,7 +277,7 @@ type RunsClient struct {
 // command uses; the key is the fallback for a machine that only ran Setup.
 func NewRunsClient(token, apiKey string) *RunsClient {
 	return &RunsClient{
-		baseURL:       RunsBaseURL,
+		baseURL:       resolveBase(envAPIURL, RunsBaseURL),
 		token:         token,
 		apiKey:        apiKey,
 		http:          &http.Client{Timeout: requestTimeout, CheckRedirect: noRedirects},
@@ -334,7 +336,7 @@ func (c *RunsClient) newRequest(ctx context.Context, method, path string, body a
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "nan-cli")
+	req.Header.Set("User-Agent", userAgent())
 	c.authorize(req)
 	return req, nil
 }
@@ -350,7 +352,7 @@ func (c *RunsClient) do(req *http.Request, out any) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("could not reach nan.builders: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse))
 	if err != nil {
 		return resp.StatusCode, fmt.Errorf("could not read the answer from nan.builders: %w", err)
@@ -588,7 +590,9 @@ func (c *RunsClient) Follow(ctx context.Context, id string, after int64, onFrame
 			if lastErr == nil {
 				lastErr = errors.New("the platform closed the stream")
 			}
-			return nil, fmt.Errorf("%w: %v", ErrStreamLost, lastErr)
+			// %v, not %w: what lost the stream is said, never matched on -
+			// a refused session inside it must not read as this run's outcome.
+			return nil, fmt.Errorf("%w: %v", ErrStreamLost, lastErr) //nolint:errorlint // see above
 		}
 		if c.OnRetry != nil {
 			c.OnRetry(failures, c.StreamRetries, lastErr)
@@ -652,7 +656,7 @@ func (c *RunsClient) followOnce(ctx context.Context, id string, lastSeq *int64, 
 		}
 		return nil, false, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))

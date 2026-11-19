@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -176,15 +177,15 @@ func TestNotificationErrorsCarryCodeAndParam(t *testing.T) {
 		`{"error":{"message":"the URL is not valid","type":"invalid_request_error","param":"url","code":"invalid_url"}}`,
 		`{"error":"invalid_url","message":"the URL is not valid","param":"url"}`,
 	} {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(400)
 			_, _ = io.WriteString(w, body)
 		}))
 		c := NewRunsClient("", "nan_pat_x").WithBaseURL(srv.URL)
 		_, err := c.CreateNotificationChannel(context.Background(), CreateNotificationChannelRequest{Name: "a", Kind: "slack", URL: notifURL})
 		srv.Close()
-		apiErr, ok := err.(*APIError)
-		if !ok || apiErr.Code != "invalid_url" || apiErr.Param != "url" || apiErr.Status != 400 {
+		var apiErr *APIError
+		if !errors.As(err, &apiErr) || apiErr.Code != "invalid_url" || apiErr.Param != "url" || apiErr.Status != 400 {
 			t.Fatalf("%T %+v", err, err)
 		}
 		if strings.Contains(err.Error(), "secretpart") {

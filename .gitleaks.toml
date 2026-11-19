@@ -1,0 +1,13 @@
+# gitleaks, as CI runs it: every default rule, and one exception.
+#
+# Test files carry fake keys on purpose (sk-hke_2b8d0000aaaa441e and friends):
+# the tests are about how keys are matched, masked and written, and need
+# something shaped like one. None is real, and every real credential stays
+# out of the tree (session.json, .env). A secret in a non-test file still fails.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fake keys in tests"
+paths = ['''_test\.go$''']

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -75,7 +76,32 @@ func TestSaveAndLoad(t *testing.T) {
 
 func TestLoadWithoutASessionSaysSo(t *testing.T) {
 	tempHome(t)
-	if _, err := Load(); err != ErrNotLoggedIn {
+	if _, err := Load(); !errors.Is(err, ErrNotLoggedIn) {
 		t.Errorf("Load() on a clean machine = %v, want %v", err, ErrNotLoggedIn)
+	}
+}
+
+// A session the platform refused keeps the rest: the key pasted into Setup
+// and the ticked tools are still the member's, and the next sign-in should
+// not ask for them again.
+func TestASessionWithoutATokenKeepsItsKey(t *testing.T) {
+	tempHome(t)
+	if err := Save(&Session{APIKey: "a-key", EnabledTools: map[string]bool{"Pi": false}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SignedIn() || got.APIKey != "a-key" || got.EnabledTools["Pi"] {
+		t.Errorf("loaded %+v", got)
+	}
+}
+
+// The file stays where every earlier version put it, on every platform.
+func TestTheSessionLivesUnderDotConfigNan(t *testing.T) {
+	home := tempHome(t)
+	if want := filepath.Join(home, ".config", "nan", "session.json"); Path() != want {
+		t.Errorf("Path() = %s, want %s", Path(), want)
 	}
 }

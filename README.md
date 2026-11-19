@@ -1,6 +1,6 @@
 # nan
 
-CLI for [nan.builders](https://nan.builders) — manage your account, monitor usage, and auto-configure AI coding tools with the NaN API.
+CLI for [nan.builders](https://nan.builders): manage your account, follow your usage and credits, run agents, and configure AI coding tools to use the NaN API.
 
 ## Install
 
@@ -41,7 +41,7 @@ which is not something a release you did not build can carry. If you have the
 can ask about any archive yourself:
 
 ```bash
-gh attestation verify nan-cli_v0.1.19_linux_amd64.tar.gz --repo helmcode/nan-cli
+gh attestation verify nan-cli_v0.2.0_linux_amd64.tar.gz --repo helmcode/nan-cli
 ```
 
 It answers with the workflow, the repository and the commit the binary was
@@ -49,28 +49,52 @@ built from.
 
 ## Usage
 
-Run `nan` to open the TUI dashboard:
+Run `nan` to open the dashboard:
 
 ```
 nan
 ```
 
-Navigate with `←/→` between tabs, `↑/↓` to scroll, `r` to refresh, `?` for help, `q` to quit.
+On a machine nobody has signed in on, it opens on the sign-in: your email, then
+the link from it (and the code from your authenticator app, if your account
+has two-factor authentication), then your API key for this machine
+(skippable), then the offer of a short tour.
 
-### Tabs
+Seven areas sit in a row of tabs across the top, always on screen and
+numbered. `1`-`7` or `tab`
+move between them, `↑/↓` and `enter` pick a row and show what can be done with
+it, `/` finds anything by name, `e` opens the setup from anywhere, `s` signs in,
+`o` signs out (twice, to confirm), `r` reloads, `t` takes a short tour, `?`
+shows every key and `q` quits.
 
-| Tab | Description |
+| Area | What it shows |
 |---|---|
-| **Profile** | Your nan.builders account details |
-| **Usage** | Token usage across the last 24h, 30 days, and all time |
-| **Models** | Available models and your usage per model |
-| **Costs** | Estimated cost comparison against other providers |
-| **Setup** | API key management and tool auto-configuration |
-| **About** | Version and links |
+| **Home** | What needs you (sign in, a missing key, a tool not pointed at NaN, a newer release), new models, and shortcuts |
+| **Profile** | Your email (the part before the `@` shortened), your plan, your Discord name if the account is linked, and when the membership ends if it has |
+| **Usage** | Tokens over the last 24 hours, 30 days and all time; a chart of the last 30 days; your credits this period (used, left, when they reset, credits bought, what the prompt cache saved); and per model its tokens and, on credits, what it cost |
+| **Models** | What your key can call, and your usage of each |
+| **Costs** | Estimated cost of that usage on other providers |
+| **Harnesses** | Your API key and the coding tools on this machine |
+| **About** | Version, links and where the session is kept |
 
-### Setup tab
+When a newer release is out, the header says so and Home has the command that
+updates your copy; after any other command, one line on stderr says the same.
+To find out, nan asks GitHub's public releases API at most once a day; the
+request carries nothing but nan's version. `NAN_NO_UPDATE_CHECK=1` (or
+`DO_NOT_TRACK=1`) turns it off. Nothing else is sent anywhere but nan.builders.
 
-The Setup tab lets you configure AI coding tools to use the NaN API automatically. Supported tools:
+The dashboard needs a terminal of at least 72x20; everything in it is also a
+command, for a smaller one or a script:
+
+```bash
+nan me                  # your email, plan and membership end
+nan metrics usage       # tokens per period, per model and per day, as JSON
+```
+
+### Setting up your tools
+
+`e` in the dashboard, or `nan setup` on the command line, configures the AI
+coding tools on this machine to use the NaN API. Supported tools:
 
 - [OpenCode](https://opencode.ai)
 - [Factory AI](https://factory.ai) (`droid`)
@@ -78,13 +102,18 @@ The Setup tab lets you configure AI coding tools to use the NaN API automaticall
 - [Codex](https://github.com/openai/codex)
 - [Hermes](https://hermes-agent.nousresearch.com/)
 
-Press `e` to set your API key, `space` to toggle tools, and `c` to apply the configuration.
+Paste your key, tick the tools, and it writes them. Only installed tools are
+listed, and only the NaN part of each config is touched: everything else in
+those files is left as it was, and unticking a tool takes ours back out. The
+key is checked against the cluster before anything is written, so a mistyped
+one is caught here rather than as a 401 inside each tool later.
 
-Only installed tools are listed, and only the NaN part of each config is
-touched: everything else in those files is left as it was, and unticking a
-tool takes ours back out. The key you paste is checked against the cluster
-before you apply it, so a mistyped one is caught here rather than as a 401
-inside each tool later.
+```bash
+nan setup                                   # asks, and shows what is installed
+echo "$NAN_API_KEY" | nan setup --key - --all   # for a machine with nobody at it
+nan setup status                            # what is configured right now
+nan setup remove                            # take NaN back out of every tool
+```
 
 ## Agent runs
 
@@ -231,7 +260,8 @@ The text views show workspace and automation names, looked up once per
 command; detail views print `name (id)` so the id stays copyable. A token
 without `workspaces:read` (or `automations:read`, for automation names in
 `nan approvals ls` and `nan runs show`) gets the ids instead, never an error.
-`--json` prints the API's objects unchanged, with ids only.
+`--json` prints the API's objects with ids only, as this version reads them
+(a field the platform adds later appears once nan reads it).
 
 ### Notifications
 
@@ -300,11 +330,11 @@ branch on it without parsing text:
 | 0 | succeeded |
 | 1 | failed |
 | 2 | timed out |
-| 3 | cancelled (after a double Ctrl-C: cancel requested — `nan runs show` has the final state) |
+| 3 | cancelled (after a double Ctrl-C the cancel is requested; `nan runs show` has the final state) |
 | 4 | the workspace is not set up for it: agent not installed, no inference key, bad configuration |
 | 10 | awaiting approval: an automation run whose proposed actions wait for you (`nan runs proposal <id>`, approve in the portal) |
 | 64 | usage error (also: more than one workspace and no `--ws`) |
-| 65 | not signed in, session expired, or not allowed |
+| 65 | not signed in, session expired, or not allowed; for `nan context push`, files it refuses |
 | 69 | nan.builders unavailable, or the stream was lost after retries (the run goes on; the id is printed) |
 | 75 | `--detach`, or Ctrl-C: the run was accepted and is still going |
 
@@ -323,7 +353,7 @@ JSON object per line): <https://nan.builders/docs/runs>.
    refused.
 3. **A saved token**, from `nan auth login --api-token`.
 4. **Your session**, from `nan auth login` (the emailed sign-in link).
-5. **A saved API key**, from the Setup tab (or an `sk-...` key saved with
+5. **A saved API key**, from `nan setup` or the dashboard (or an `sk-...` key saved with
    `nan auth login --api-token`).
 
 Create platform tokens in **Settings > Tokens** at
@@ -379,16 +409,33 @@ without echo.
 Versions before 0.1.35 cannot ask for the code: the platform refuses the link
 with `mfa enabled update nan cli`. Update, then ask for a new link.
 
+## Settings
+
+Every command takes `--json` (the platform's answer instead of a rendering of
+it, where the command has one) and `--no-color`. `nan completion
+bash|zsh|fish|powershell` prints a completion script for your shell.
+
+| Variable | |
+|---|---|
+| `NAN_TOKEN` | A platform token or API key for `nan run`, `nan runs` and the automation commands. See [Authentication](#authentication). |
+| `NAN_NO_UPDATE_CHECK=1`, `DO_NOT_TRACK=1` | Do not ask GitHub whether a newer release is out. |
+| `NO_COLOR` | Print without styling, like `--no-color`. |
+| `NAN_API_URL`, `NAN_APP_URL`, `NAN_INFERENCE_URL` | Point nan at another nan.builders, for developing nan itself (https, or http on this machine only). Every call goes there, the sign-in and your session included, so set them only for a server you run. |
+
+Your session and API key are kept in `~/.config/nan/session.json` (mode
+`0600`) on every OS. `nan auth logout` ends the session on the platform,
+deletes that file and takes the key back out of the tools nan configured.
+
 ## Build from source
 
-Requires Go 1.26.10+ ([mise](https://mise.jdx.dev/) recommended) — the version
+Requires Go 1.26.11+ ([mise](https://mise.jdx.dev/) recommended), the version
 in `go.mod`, which is where the standard library carries the current security
 fixes:
 
 ```bash
 git clone https://github.com/helmcode/nan-cli
 cd nan-cli
-go build -o nan .
+go build -o nan ./cmd/nan   # or: just build
 ./nan
 ```
 
