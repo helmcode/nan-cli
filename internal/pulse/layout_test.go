@@ -138,8 +138,8 @@ func TestAnEndedMembershipIsOnHome(t *testing.T) {
 func TestProfileKeepsTheEmailDomain(t *testing.T) {
 	for in, want := range map[string]string{
 		"someone@example.com": "someon...@example.com",
-		"ab@example.com":       "...@example.com",
-		"no-at-sign":           "no-at-...",
+		"ab@example.com":      "...@example.com",
+		"no-at-sign":          "no-at-...",
 	} {
 		if got := shortenEmail(in); got != want {
 			t.Errorf("shortenEmail(%q) = %q, want %q", in, got, want)
