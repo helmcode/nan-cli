@@ -1,6 +1,9 @@
 package pulse
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // shorten keeps the first six characters of an identifier: enough to
 // recognise it, not enough to use it. A screen is shared, recorded and
@@ -20,4 +23,15 @@ func day(value string) string {
 		return t.Local().Format("2 Jan 2006")
 	}
 	return value
+}
+
+// shortenEmail shortens the part before the @ and keeps the domain: the
+// domain is what tells a work account from a personal one, which is the
+// question a member asks of this line, and it identifies nobody on its own.
+func shortenEmail(email string) string {
+	local, domain, ok := strings.Cut(email, "@")
+	if !ok || domain == "" {
+		return shorten(email)
+	}
+	return shorten(local) + "@" + domain
 }

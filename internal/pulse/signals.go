@@ -1,10 +1,13 @@
 package pulse
 
 import (
+	"errors"
 	"sort"
 	"strings"
 
+	"github.com/nxssie/nan-cli/internal/api"
 	"github.com/nxssie/nan-cli/internal/build"
+	"github.com/nxssie/nan-cli/internal/runs"
 	"github.com/nxssie/nan-cli/internal/tools"
 )
 
@@ -44,6 +47,15 @@ func (m model) signals() []signal {
 		out = append(out, signal{sev: sev, say: say, goTo: to})
 	}
 
+	// A load that failed is said first and as what to do, with enter to
+	// try again; the areas it left empty say the same.
+	switch {
+	case errors.Is(s.err, api.ErrUnreachable):
+		add(sevAlarm, "Cannot reach nan.builders: check the connection", target{kind: cardReload})
+	case s.err != nil:
+		add(sevWarn, "Part of this did not load: "+runs.SanitizeLine(s.err.Error()), target{kind: cardReload})
+	}
+
 	switch {
 	case m.expiredNotice:
 		add(sevAlarm, "Your session has expired: press s to sign in again", target{kind: cardSignIn})
@@ -66,6 +78,12 @@ func (m model) signals() []signal {
 		if len(waiting) > 0 {
 			add(sevInfo, strings.Join(waiting, ", ")+" "+plural(len(waiting), "is", "are")+" installed and not pointed at NaN", target{kind: cardHarness})
 		}
+	}
+
+	// A membership that ended keeps its apps and data until a date. Profile
+	// says when; Home is where it is noticed before the day comes.
+	if s.me != nil && s.me.GraceUntil != "" {
+		add(sevWarn, "Your membership has ended: apps and data are kept until "+day(s.me.GraceUntil), target{kind: cardProfile})
 	}
 
 	if v := m.upd.Available(); v != "" {

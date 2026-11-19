@@ -22,6 +22,8 @@ const (
 	cardProfile
 	cardSignIn
 	cardUpdate
+	// cardReload is not a card: a signal that points here loads again.
+	cardReload
 )
 
 // link is a way from one card to another.

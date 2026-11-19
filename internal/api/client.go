@@ -204,11 +204,16 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 // a misbehaving server, not data.
 const maxResponseBytes = 8 << 20
 
+// ErrUnreachable is the network failing, as opposed to nan.builders
+// answering with a refusal: a caller can tell "check the connection" from
+// "fix the request" without reading the text.
+var ErrUnreachable = errors.New("could not reach nan.builders")
+
 // unreachable says the network failed, and leaves a cancellation alone: a
 // ctrl-c is not a connectivity problem.
 func unreachable(err error) error {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
-	return fmt.Errorf("could not reach nan.builders: %w", err)
+	return fmt.Errorf("%w: %w", ErrUnreachable, err)
 }

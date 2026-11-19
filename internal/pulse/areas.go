@@ -105,7 +105,7 @@ func (m model) rows(a area) []row {
 			return nil
 		}
 		out := []row{
-			{id: "field:email", cells: []string{"Email", shorten(s.me.Email)}},
+			{id: "field:email", cells: []string{"Email", shortenEmail(s.me.Email)}},
 			{id: "field:plan", cells: []string{"Plan", s.me.Tier}},
 		}
 		if s.me.GraceUntil != "" {

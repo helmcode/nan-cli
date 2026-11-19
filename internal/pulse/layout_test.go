@@ -1,6 +1,7 @@
 package pulse
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -84,5 +85,64 @@ func TestUsageModelNamesLoseEscapeSequences(t *testing.T) {
 	u := cleanUsage(&api.Usage{Last30d: api.Period{ByModel: []api.ModelUsage{{Model: "glm\x1b[2J\x1b]0;owned\x07"}}}})
 	if got := u.Last30d.ByModel[0].Model; strings.ContainsRune(got, 0x1b) {
 		t.Errorf("a usage model name kept an escape: %q", got)
+	}
+}
+
+// With the network down, Home said `dial tcp: lookup nan.builders: no such
+// host` above "Nothing needs you right now". It says what is wrong and what
+// to do, enter tries again, and the areas the load left empty say the same.
+func TestANetworkThatDidNotAnswerIsSaidAsWhatToDo(t *testing.T) {
+	m, _ := demoModel(t, 100, 30)
+	m.snap.err = fmt.Errorf("%w: dial tcp: lookup nan.builders: no such host", api.ErrUnreachable)
+	m.snap.usage, m.snap.models = nil, nil
+	m.sigs = m.signals()
+
+	home := screen(m)
+	if !strings.Contains(home, "Cannot reach nan.builders") || !strings.Contains(home, "try again") {
+		t.Errorf("Home does not say the network is down and how to retry:\n%s", home)
+	}
+	if strings.Contains(home, "dial tcp") || strings.Contains(home, "Nothing needs you") {
+		t.Errorf("Home shows the Go error or says all is well:\n%s", home)
+	}
+	for _, area := range []string{"3", "4"} {
+		if out := screen(press(t, m, keyOf(area))); !strings.Contains(out, "cannot reach nan.builders") {
+			t.Errorf("area %s is empty with nothing said:\n%s", area, out)
+		}
+	}
+
+	// enter on the signal loads again.
+	if m.sigs[0].goTo.kind != cardReload {
+		t.Fatalf("the first signal goes to %v, not a reload", m.sigs[0].goTo)
+	}
+	if _, cmd := m.follow(m.sigs[0].goTo); cmd == nil {
+		t.Error("enter on the network signal did not try again")
+	}
+}
+
+// A membership that ended keeps its apps and data until a date; Profile says
+// when, and Home is where it is seen before the day comes.
+func TestAnEndedMembershipIsOnHome(t *testing.T) {
+	m, _ := demoModel(t, 100, 30)
+	if out := screen(m); !strings.Contains(out, "Your membership has ended") || !strings.Contains(out, "20 Nov 2026") {
+		t.Errorf("Home does not say the membership ended:\n%s", out)
+	}
+	m.snap.me.GraceUntil = ""
+	m.sigs = m.signals()
+	if out := screen(m); strings.Contains(out, "membership has ended") {
+		t.Errorf("a live membership is said to have ended:\n%s", out)
+	}
+}
+
+// The part before the @ is cut short, as before; the domain stays, because
+// it is what says which account this is.
+func TestProfileKeepsTheEmailDomain(t *testing.T) {
+	for in, want := range map[string]string{
+		"cristian@example.com": "cristi...@example.com",
+		"ab@example.com":       "...@example.com",
+		"no-at-sign":           "no-at-...",
+	} {
+		if got := shortenEmail(in); got != want {
+			t.Errorf("shortenEmail(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

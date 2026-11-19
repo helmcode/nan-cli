@@ -623,6 +623,10 @@ func (m model) follow(t target) (tea.Model, tea.Cmd) {
 		m.goTo(areaHarness)
 	case cardUpdate:
 		m.updateModal()
+	case cardReload:
+		if !m.loading {
+			return m, m.startLoad()
+		}
 	default:
 		m.land(t)
 	}

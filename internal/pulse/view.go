@@ -1,6 +1,7 @@
 package pulse
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -367,10 +368,6 @@ func (m model) renderHome(w, room int) string {
 			figure(ui.Tokens(float64(s.usage.AllTime.TotalTokens)*m.reveal), "tokens · all time"),
 		) + "\n")
 	}
-	if s.err != nil {
-		b.WriteString("\n" + ui.Error(s.err) + "\n")
-	}
-
 	rows := m.rows(areaHome)
 	cur := m.cursor[areaHome]
 	dot := map[severity]string{
@@ -398,6 +395,8 @@ func (m model) renderHome(w, room int) string {
 			where = ui.Faint("  → enter: how to update")
 		case cardSignIn:
 			where = ui.Faint("  → enter: sign in")
+		case cardReload:
+			where = ui.Faint("  → enter or r: try again")
 		}
 		say := arrive(i, sg.say)
 		if i == cur {
@@ -515,7 +514,7 @@ func table(cols []column, rows []row, cursor, width, lines int, mo motion) strin
 func (m model) renderProfile(w, room int) string {
 	h := m.heading("Profile", "Your nan.builders account. Identifiers are shortened; o signs out.")
 	if m.snap.err != nil && m.snap.me == nil {
-		return h + ui.Error(m.snap.err) + "\n"
+		return h + ui.Error(loadProblem(m.snap.err)) + "\n"
 	}
 	return h + table(areaProfile.columns(), m.rows(areaProfile), m.cursor[areaProfile], w, room-lipgloss.Height(h), m.motion())
 }
@@ -526,7 +525,7 @@ func (m model) renderUsage(w, room int) string {
 	b.WriteString("\n" + m.eyebrow("Usage") + "\n\n")
 	if s.usage == nil {
 		if s.err != nil {
-			b.WriteString(ui.Error(s.err) + "\n")
+			b.WriteString(ui.Error(loadProblem(s.err)) + "\n")
 		}
 		return b.String()
 	}
@@ -555,7 +554,7 @@ func (m model) renderModels(w, room int) string {
 	}
 	h := m.heading("Models", summary)
 	if len(s.models) == 0 && s.err != nil {
-		return h + ui.Error(s.err) + "\n"
+		return h + ui.Error(loadProblem(s.err)) + "\n"
 	}
 	return h + table(areaModels.columns(), m.rows(areaModels), m.cursor[areaModels], w, room-lipgloss.Height(h), m.motion())
 }
@@ -732,4 +731,15 @@ func (m model) renderPalette(w int) string {
 		b.WriteString("  " + ui.Faint(fmt.Sprintf("%d of %d", last-first, n)) + "\n")
 	}
 	return b.String()
+}
+
+// loadProblem is a failed load said as what to do about it. A network that
+// did not answer is not the member's mistake, and the Go error under it
+// (`dial tcp: lookup nan.builders: no such host`) says nothing they can act
+// on.
+func loadProblem(err error) error {
+	if errors.Is(err, api.ErrUnreachable) {
+		return errors.New("cannot reach nan.builders: check the connection, r to try again")
+	}
+	return fmt.Errorf("%w - r to try again", err)
 }
