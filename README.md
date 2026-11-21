@@ -8,7 +8,7 @@ CLI for [nan.builders](https://nan.builders): manage your account, follow your u
 curl -fsSL https://nan.builders/install | bash
 ```
 
-By default installs to `$HOME/.local/bin`, which is per-user and needs no root. Override with `INSTALL_DIR`:
+By default installs to `$HOME/.local/bin`, which is per-user and needs no root. Run as root without `INSTALL_DIR` (`curl ... | sudo bash`), it installs machine-wide to `/usr/local/bin` instead. Override with `INSTALL_DIR`:
 
 ```bash
 curl -fsSL https://nan.builders/install | INSTALL_DIR="$HOME/.nan/bin" bash
