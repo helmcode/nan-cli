@@ -115,3 +115,20 @@ func TestProfileAllowlistKeepsUnknownKeysHidden(t *testing.T) {
 		t.Errorf("rows %v", got)
 	}
 }
+
+// The name and the role are typed by the member on the web, and they reach
+// table cells, which keep escapes: they lose them on the way in, as every
+// other name from the platform does.
+func TestProfileTextLosesEscapes(t *testing.T) {
+	me := cleanMe(&api.Me{Profile: &api.MeProfile{
+		FullName: "Ada\x1b[2J", JobRole: "other", JobRoleOther: "dev\x1b]0;x\x07",
+	}})
+	for _, s := range []string{me.Profile.FullName, me.Profile.JobRole, me.Profile.JobRoleOther} {
+		if strings.ContainsRune(s, 0x1b) {
+			t.Errorf("%q kept an escape", s)
+		}
+	}
+	if cleanMe(nil) != nil || cleanMe(&api.Me{}).Profile != nil {
+		t.Error("cleanMe must pass nil and a missing profile through")
+	}
+}
