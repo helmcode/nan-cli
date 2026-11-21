@@ -26,15 +26,6 @@ const linkDomain = "nan.builders"
 // once." Worth saying, because an email that turns up late turns up dead.
 const LinkValidity = "15 minutes"
 
-// clientKind is what this CLI declares on the verify POST, so the platform
-// records the session it hands back as a CLI session. A CLI session can
-// read, start runs and reject proposals; approving a proposal, writing a
-// secret and editing an automation need a session signed in through the
-// browser. The session file this CLI keeps is readable by anything running
-// as the member, an agent in a workspace included, and must never be able to
-// do those. Declaring "cli" here only ever narrows what the session can do.
-const clientKind = "cli"
-
 // RequestMagicLink asks the platform to email a sign-in link.
 //
 // It answers 202 whether or not the address belongs to a member, so success
@@ -116,7 +107,7 @@ func (c *Client) Verify(ctx context.Context, token string) (string, error) {
 	// platform refuses an account that has a factor outright, with a reason
 	// that tells the member to update - which is what every build before this
 	// one gets, since none of them could ask for the code.
-	form := url.Values{"token": {token}, "client": {clientKind}, "mfa": {"1"}}
+	form := url.Values{"token": {token}, "client": {"cli"}, "mfa": {"1"}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/auth/login/verify", strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", err
