@@ -589,11 +589,11 @@ func codexSessionDefaultsCleared(content, codexHome string) (string, bool) {
 		return content, false
 	}
 	catalogPath := codexCatalogPath(codexHome)
-	if doc["model_provider"] != "nan" {
+	ownCatalog := doc["model_catalog_json"] == catalogPath
+	ours := ownCatalog || doc["model_provider"] == "nan"
+	if !ours {
 		return content, false
 	}
-	ownCatalog := doc["model_catalog_json"] == catalogPath
-	const ours = true
 	want, _ := codexTOML(content)
 	lines := strings.Split(content, "\n")
 	if ownCatalog {
@@ -667,7 +667,8 @@ func removeCodexConfig(cfgPath string) error {
 		// and a Codex that answers 401 is better than one that leaks it.
 		if doc, ok := codexTOML(root); ok && doc["model_provider"] == "nan" {
 			return errors.Join(
-				fmt.Errorf("%s %w; remove the root model and model_provider lines by hand", cfgPath, errCodexRootNotCleared),
+				fmt.Errorf("%s %w; remove the root model, model_provider, model_catalog_json and web_search lines and the "+
+					"[agents] enabled / [features] multi_agent switch by hand", cfgPath, errCodexRootNotCleared),
 				codexKeyBlanked(cfgPath, content))
 		}
 	}

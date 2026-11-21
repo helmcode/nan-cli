@@ -404,6 +404,78 @@ func TestCodexRemovalTakesTheMultiAgentSwitch(t *testing.T) {
 	}
 }
 
+// The root was switched to the member's own provider after we wrote the
+// starter config. The catalogue file goes with the disconnect, so the root
+// line pointing at it must go too; and since the catalogue line marks the
+// rest as ours, web search and the sub-agent switch go with it.
+func TestCodexRemovalAfterTheRootWasSwitchedToTheMembersProvider(t *testing.T) {
+	for _, version := range []string{"codex-cli 0.169.0", "codex-cli 0.159.0"} {
+		t.Run(version, func(t *testing.T) {
+			withCodexVersion(t, version)
+			path := tempConfig(t, "config.toml")
+			if err := writeCodexConfig(path, testKey); err != nil {
+				t.Fatal(err)
+			}
+			home := filepath.Dir(path)
+			content := strings.Replace(readFile(t, path), `model_provider = "nan"`, `model_provider = "openai"`, 1)
+			content = strings.Replace(content, fmt.Sprintf("model = %q", func() string { m, _ := catalog.Get(catalog.Coding); return m.ID }()), `model = "gpt-5"`, 1)
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := removeCodexConfig(path); err != nil {
+				t.Fatal(err)
+			}
+			got := readFile(t, path)
+			assertCodexTOML(t, got)
+			doc, _ := codexTOML(got)
+			for _, key := range []string{"model_catalog_json", "web_search", "agents", "features"} {
+				if _, has := doc[key]; has {
+					t.Errorf("%s survived the disconnect:\n%s", key, got)
+				}
+			}
+			if doc["model_provider"] != "openai" || doc["model"] != "gpt-5" {
+				t.Errorf("the member's provider and model were touched:\n%s", got)
+			}
+			if _, err := os.Stat(filepath.Join(home, codexCatalogFile)); err == nil {
+				t.Error("the catalogue file is still there")
+			}
+		})
+	}
+}
+
+// Without our catalogue line nothing marks web search or the sub-agent switch
+// as ours when the root is the member's: they are theirs.
+func TestCodexRemovalKeepsAMembersOwnWebSearchAndAgentsOnTheirProvider(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	in := "model_provider = \"openai\"\nweb_search = \"disabled\"\n\n[agents]\nenabled = false\n\n" +
+		"[model_providers.nan]\nbase_url = \"https://api.nan.builders/v1\"\n"
+	if err := os.WriteFile(path, []byte(in), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCodexConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	if want := "model_provider = \"openai\"\nweb_search = \"disabled\"\n\n[agents]\nenabled = false\n"; readFile(t, path) != want {
+		t.Errorf("got:\n%s", readFile(t, path))
+	}
+}
+
+// A catalogue path that is not ours is the member's, on any root.
+func TestCodexRemovalKeepsAMembersCatalogOnTheirProvider(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	in := "model_provider = \"openai\"\nmodel_catalog_json = \"/mine.json\"\n\n[model_providers.nan]\nbase_url = \"https://api.nan.builders/v1\"\n"
+	if err := os.WriteFile(path, []byte(in), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCodexConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	doc, _ := codexTOML(readFile(t, path))
+	if doc["model_catalog_json"] != "/mine.json" {
+		t.Errorf("the member's catalogue was taken:\n%s", readFile(t, path))
+	}
+}
+
 // An [agents] table the member wrote with more in it than ours keeps the rest.
 func TestCodexRemovalKeepsAMembersAgentsTable(t *testing.T) {
 	path := tempConfig(t, "config.toml")
@@ -447,5 +519,23 @@ func TestCodexRemovalKeepsAMembersOwnCatalogAndWebSearch(t *testing.T) {
 	}
 	if doc["model_catalog_json"] != "/mine.json" || doc["web_search"] != "live" {
 		t.Errorf("the member's own values were taken:\n%s", got)
+	}
+}
+
+// The refusal names every root key a hand edit has to take, not only the two
+// the disconnect used to add.
+func TestCodexRemovalRefusalListsEveryNaNRootKey(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	if err := os.WriteFile(path, []byte(codexMultiLineModel), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := removeCodexConfig(path)
+	if err == nil {
+		t.Fatal("no refusal")
+	}
+	for _, want := range []string{"model_provider", "model_catalog_json", "web_search", "[agents]", "[features]", "multi_agent"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q: %v", want, err)
+		}
 	}
 }
