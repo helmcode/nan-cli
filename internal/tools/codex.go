@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -343,13 +344,76 @@ func codexWireAPIRepaired(data []byte) ([]byte, bool) {
 	return []byte(strings.Join(lines, "\n")), true
 }
 
-// [model_providers.nan], and the quoted spelling of it that TOML also allows.
+// [model_providers.nan] however TOML spells the header: quoted, spaced, with
+// a trailing comment.
 func isCodexNaNProviderHeader(line string) bool {
-	name := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "["), "]"))
-	if !strings.HasPrefix(name, "model_providers.") {
+	path, ok := codexTablePath(line)
+	return ok && path == "model_providers.nan"
+}
+
+// The root keys that send Codex to NaN, taken back on a disconnect.
+//
+// model_provider = "nan" at the root is only ever there because this CLI
+// wrote the starter config into an empty file: on a file that already
+// existed it adds the provider section and leaves the member's model and
+// provider as they were. So there is no earlier choice of theirs to put back,
+// and Codex goes back to its own default. Left behind, the key names a
+// provider that no longer exists and Codex will not start at all ("Model
+// provider `nan` not found").
+//
+// The model beside it goes too: a model under the nan provider is a NaN
+// model, whatever its id. Nothing is touched when the root provider is
+// anything else, and nothing under a table header is touched at all - a
+// [profiles.*] of the member's naming nan is theirs to keep.
+//
+// The edit is found line by line and then checked: the result is parsed again
+// and has to be the original document minus those two root keys, or nothing
+// is changed and false comes back.
+func codexNaNRootCleared(content string) (string, bool) {
+	doc, ok := codexTOML(content)
+	if !ok || doc["model_provider"] != "nan" {
+		return content, false
+	}
+	want, _ := codexTOML(content)
+	drop := map[string]bool{"model_provider": true}
+	delete(want, "model_provider")
+	if _, isString := doc["model"].(string); isString {
+		drop["model"] = true
+		delete(want, "model")
+	}
+	lines := strings.Split(content, "\n")
+	rootEnd := codexRootEnd(lines)
+	out := make([]string, 0, len(lines))
+	for i, line := range lines {
+		if i < rootEnd {
+			if k, _, ok := codexLine(line); ok && drop[k] {
+				continue
+			}
+		}
+		out = append(out, line)
+	}
+	// What is left of the root may be nothing but the blank line that used
+	// to separate it from the first table.
+	edited := strings.TrimLeft(strings.Join(out, "\n"), "\n")
+	if !codexEditMeans(edited, want) {
+		return content, false
+	}
+	return edited, true
+}
+
+// codexConfigured is whether config.toml is NaN's: the provider section is
+// there, or a root provider naming nan with no section behind it - what an
+// older CLI left, still ours to take out or to give its section back.
+func codexConfigured(path string) bool {
+	if mentionsNaN(path) {
+		return true
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // G304: a config file at a path this program chose
+	if err != nil {
 		return false
 	}
-	return strings.Trim(strings.TrimPrefix(name, "model_providers."), `"'`) == "nan"
+	doc, ok := codexTOML(string(data))
+	return ok && doc["model_provider"] == "nan"
 }
 
 // ── Hermes ───────────────────────────────────────────────────────────────────
@@ -367,7 +431,31 @@ func isCodexNaNProviderHeader(line string) bool {
 // what it serves, so there is no model list to write here and none to keep in
 // step with the cluster - only which model to open with.
 
+var (
+	errCodexRootNotCleared = errors.New(`sets model_provider = "nan" in a form the NaN CLI ` +
+		`cannot take out safely`)
+	errCodexSectionNotRemoved = errors.New(`has a [model_providers.nan] section the NaN CLI ` +
+		`cannot take out safely`)
+)
+
 func removeCodexConfig(cfgPath string) error {
+	data, readErr := os.ReadFile(cfgPath) //nolint:gosec // G304: a config file at a path this program chose
+	content := string(data)
+	root, rootCleared := codexNaNRootCleared(content)
+	if readErr == nil {
+		// A root that still points at nan after the cleanup is one written in
+		// a form the line edit cannot take out safely - a multi-line model,
+		// say. Taking the provider section anyway would leave exactly the
+		// Codex that does not start, so the section, the profiles and the
+		// catalogue stay and the member is told what to remove by hand. The
+		// key does not stay: it is a live credential this CLI cannot revoke,
+		// and a Codex that answers 401 is better than one that leaks it.
+		if doc, ok := codexTOML(root); ok && doc["model_provider"] == "nan" {
+			return errors.Join(
+				fmt.Errorf("%s %w; remove the root model and model_provider lines by hand", cfgPath, errCodexRootNotCleared),
+				codexKeyBlanked(cfgPath, content))
+		}
+	}
 	// Before either way out below, because the profile files are ours whatever
 	// state config.toml is in. A member who edited our provider section out by
 	// hand, or deleted the file, used to keep all seven of them - each one
@@ -380,28 +468,34 @@ func removeCodexConfig(cfgPath string) error {
 	// returning it here would leave experimental_bearer_token sitting in
 	// config.toml after the member asked us to take it out.
 	profileErr := removeCodexProfiles(filepath.Dir(cfgPath))
-
-	data, err := os.ReadFile(cfgPath) //nolint:gosec // G304: a config file at a path this program chose
-	if err != nil {
+	if readErr != nil {
 		return profileErr
 	}
-	// Nothing of ours in it, so nothing to rewrite: this is called on every
-	// sign-out, against a config.toml that may never have been ours at all.
-	if !strings.Contains(string(data), "[model_providers.nan]") {
+	// Nothing of ours in it - no root provider, no provider section - so
+	// nothing to rewrite: this is called on every sign-out, against a
+	// config.toml that may never have been ours at all.
+	lines := strings.Split(root, "\n")
+	hasSection := false
+	for _, line := range lines {
+		if isCodexNaNProviderHeader(line) {
+			hasSection = true
+			break
+		}
+	}
+	if !rootCleared && !hasSection {
 		return profileErr
 	}
-	lines := strings.Split(string(data), "\n")
 	var out []string
 	inNanSection := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "[model_providers.nan]" {
+		if isCodexNaNProviderHeader(trimmed) {
 			inNanSection = true
 			continue
 		}
 		if inNanSection {
 			// End of the nan section when a new section header appears.
-			if strings.HasPrefix(trimmed, "[") {
+			if codexIsHeader(trimmed) {
 				inNanSection = false
 			} else {
 				continue
@@ -410,14 +504,31 @@ func removeCodexConfig(cfgPath string) error {
 		out = append(out, line)
 	}
 	result := strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n"
+	// A file Codex can read is checked: what is left has to be the document
+	// minus the provider table. One it cannot read (invalid TOML, which Codex
+	// refuses already) is edited as before, because there is nothing to
+	// check it against and the key still has to leave.
+	if _, parses := codexTOML(root); parses && !codexProviderRemovalMeans(root, result) {
+		return errors.Join(profileErr,
+			fmt.Errorf("%s %w; remove it by hand", cfgPath, errCodexSectionNotRemoved),
+			codexKeyBlanked(cfgPath, root))
+	}
 	// The section is gone, and so is the reason for the model_context_window
 	// that went in beside it. Left behind it is a key the member never wrote,
 	// naming a window no model of theirs has - and if there are two of them
 	// it is a file their Codex does not open, now with nothing left in it to
-	// say who did that or which tool to disconnect to undo it.
+	// say who did that or which tool to disconnect to undo it. Kept only
+	// when a re-parse shows it changed nothing but window keys.
 	codexModel, _ := catalog.Get(catalog.Coding)
 	if cleared, changed := codexContextWindowsCleared([]byte(result), codexModel.Context); changed {
-		result = string(cleared)
+		if _, parses := codexTOML(result); !parses || codexOnlyWindowsDiffer(result, string(cleared)) {
+			result = string(cleared)
+		}
+	}
+	// Whatever went from the top - the root keys, the window - may have left
+	// the blank line that separated them from the first table.
+	if rootCleared {
+		result = strings.TrimLeft(result, "\n")
 	}
 	if strings.TrimSpace(result) == "" {
 		if err := os.Remove(cfgPath); err != nil {
@@ -430,3 +541,28 @@ func removeCodexConfig(cfgPath string) error {
 	}
 	return profileErr
 }
+
+// Empties experimental_bearer_token in [model_providers.nan] when the file is
+// left otherwise as it is, verified by re-parse. Nothing happens when there is
+// no such key, or the edit would change anything else.
+func codexKeyBlanked(cfgPath, content string) error {
+	doc, ok := codexTOML(content)
+	if !ok {
+		return nil
+	}
+	providers, _ := doc["model_providers"].(map[string]any)
+	nan, _ := providers["nan"].(map[string]any)
+	token, _ := nan[codexTokenKey].(string)
+	if token == "" {
+		return nil
+	}
+	edited := strings.Join(codexTableKeyBlanked(strings.Split(content, "\n"), "model_providers.nan", codexTokenKey, token), "\n")
+	want, _ := codexTOML(content)
+	want["model_providers"].(map[string]any)["nan"].(map[string]any)[codexTokenKey] = ""
+	if !codexEditMeans(edited, want) {
+		return fmt.Errorf("%s: the API key could not be taken out of config.toml; remove %s by hand", cfgPath, codexTokenKey)
+	}
+	return writeConfigFile(cfgPath, []byte(edited))
+}
+
+const codexTokenKey = "experimental_bearer_token"
