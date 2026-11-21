@@ -220,7 +220,7 @@ func TestEachAreaShowsItsThings(t *testing.T) {
 	m, _ := demoModel(t, 140, 44)
 	cases := map[string][]string{
 		"1": {"welcome to", "nan.builders", "Your membership has ended", "Set up your tools", "240.0M"},
-		"2": {"Email", "someon...@example.com", "Plan", "inference", "Membership ends", "20 Nov 2026"},
+		"2": {"Email", "someon...@example.com", "Plan", "Inference", "Data kept until", "20 Nov 2026"},
 		"3": {"glm5.3-flash", "deepseek-v4-flash", "240.0M", "67%"},
 		"4": {"glm5.3-flash", "chat", "chat · premium", "embedding"},
 		"5": {"Claude Opus 5.5", "Anthropic", "GPT-6 Luna", "No per-token charges"},
