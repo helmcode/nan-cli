@@ -176,3 +176,25 @@ func TestLoginRefusesAPlatformThatIsNotACLIOne(t *testing.T) {
 		t.Error("polled a request that is not a CLI one")
 	}
 }
+
+// The flags of the retired sign-in are hidden stubs: a script that still
+// passes one is told what to do, and nothing is asked of the platform.
+func TestRetiredLoginFlagsSayWhatToDoInstead(t *testing.T) {
+	fakeHome(t, "")
+	for _, flag := range []string{"--email", "--link", "--totp"} {
+		code, msg := execute(t, "auth", "login", flag, "x")
+		if code == 0 || strings.Contains(msg, "unknown flag") ||
+			!strings.Contains(msg, flag+" was removed") || !strings.Contains(msg, "nan auth login") {
+			t.Errorf("%s: exit %d: %s", flag, code, msg)
+		}
+	}
+	_, help := execute(t, "auth", "login", "--help")
+	for _, flag := range []string{"--email", "--link", "--totp"} {
+		if strings.Contains(help, flag) {
+			t.Errorf("the help still lists %s", flag)
+		}
+	}
+	if !strings.Contains(help, "--no-browser") {
+		t.Error("the help does not list --no-browser")
+	}
+}

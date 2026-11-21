@@ -24,7 +24,13 @@ var (
 	tokenFlag     string
 	keepToolsFlag bool
 	apiTokenFlag  bool
+	noBrowserFlag bool
 )
+
+// retiredLoginFlags are the flags of the sign-in this release replaced. They
+// stay as hidden stubs so a script that still passes one gets a sentence on
+// what to do instead of cobra's "unknown flag", and never a half-run login.
+var retiredLoginFlags = []string{"email", "link", "totp"}
 
 var authCmd = &cobra.Command{
 	Use:   "auth",
@@ -40,8 +46,9 @@ This prints a short code and a page on nan.builders, and opens the page in
 your browser. Sign in there if asked, type the code, and approve: this
 command finishes by itself. Two-factor authentication, if you have it on, is
 answered in the browser, never here. The code expires after a few minutes;
-ctrl-c cancels. Set NAN_NO_BROWSER=1 to not open the page (it is always
-printed), for a server or an SSH session: open the address on any device.
+ctrl-c cancels. Pass --no-browser (or set NAN_NO_BROWSER=1) to not open the
+page (it is always printed): open the address on any device. Over SSH, or
+on Linux without a display, it is not opened either.
 
 With --api-token, save a platform token instead, for a machine with nobody
 at the keyboard (a server, a CI runner). Create the token in Settings >
@@ -68,6 +75,11 @@ func init() {
 	authCmd.AddCommand(loginCmd)
 	authCmd.AddCommand(logoutCmd)
 	loginCmd.Flags().StringVar(&tokenFlag, "token", "", `Save a nan_session token directly, skipping the browser ("-" reads it from stdin, keeping it out of your shell history)`)
+	loginCmd.Flags().BoolVar(&noBrowserFlag, "no-browser", false, "Print the sign-in address without opening it (same as NAN_NO_BROWSER=1)")
+	for _, name := range retiredLoginFlags {
+		loginCmd.Flags().String(name, "", "")
+		_ = loginCmd.Flags().MarkHidden(name)
+	}
 	loginCmd.Flags().BoolVar(&apiTokenFlag, "api-token", false, "Save a platform token (nan_pat_...) or API key (sk-...) for nan run and nan runs, read from stdin")
 	logoutCmd.Flags().BoolVar(&keepToolsFlag, "keep-tools", false, "Leave the API key in the tools this CLI configured")
 }
@@ -77,6 +89,14 @@ func init() {
 // Discord OAuth, and then an emailed link pasted into the terminal; opening
 // that link anywhere but the terminal spent it.
 func runLogin(cmd *cobra.Command, _ []string) error {
+	for _, name := range retiredLoginFlags {
+		if cmd.Flags().Changed(name) {
+			return fmt.Errorf("--%s was removed in this release: run `nan auth login` and approve the code in your browser", name)
+		}
+	}
+	if noBrowserFlag {
+		_ = os.Setenv("NAN_NO_BROWSER", "1")
+	}
 	if apiTokenFlag {
 		if tokenFlag != "" {
 			return fmt.Errorf("--api-token cannot be combined with --token")
