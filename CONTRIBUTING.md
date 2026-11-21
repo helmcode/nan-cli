@@ -47,7 +47,8 @@ internal/
                           keys, models) and the /v1/runs client with its SSE stream
   session/                Session persistence (~/.config/nan/session.json)
   tools/                  The coding tools: detection, writers and removers
-  models/                 The model catalogue every writer reads
+  models/                 The member's model list (from the platform) and the
+                          metadata this CLI knows about each model
   flow/                   The sign-in and the setup, as Bubble Tea models
   pulse/                  The dashboard (Bubble Tea v2)
   cli/                    The cobra commands, run through fang
@@ -65,21 +66,21 @@ is.
 
 1. **Add an entry to `Registry()`** in `internal/tools/tools.go` with the tool's binary, config path, `Open` and `NextStep`, and its `configured` check (most live in `detect.go`).
 
-2. **Implement the writer** in a file of its own: write the NaN provider block into the tool's config format, through `writeConfigFile` so the file ends up 0600. Always check if NaN is already present before writing, and build the model list by ranging over `catalog.ChatModels()` from `internal/models`. Never write the ids by hand: three writers used to keep a list each, and all three had drifted to the same stale set of three models.
+2. **Implement the writer** in a file of its own: write the NaN provider block into the tool's config format, through `writeConfigFile` so the file ends up 0600. Always check if NaN is already present before writing, and take the model list as a parameter (`cat []catalog.Model`, built by `catalog.Load` from the platform's `/api/agents/models` for this member) and write exactly those models, never ids of your own: the platform already leaves out what the member cannot call, so a model missing from the list is removed from the config, not kept. Leave a window or output limit out when it is unknown (`Context == 0`), and never lower one the config already has because a catalogue carried no figure.
 
 3. **Implement the remover**: take out NaN's entries cleanly without touching the rest of the file.
 
-4. **Test it** in `internal/tools/tools_test.go`, which writes each config into a temporary home and checks it against the catalogue.
+4. **Test it** in `internal/tools/tools_test.go`, which writes each config into a temporary home and checks it against a catalogue.
 
 ## Adding a new NaN model
 
-Add it to `All` in `internal/models/models.go` and every writer picks it up.
+Nothing to do for the list: Setup configures whatever `/api/agents/models` returns for the member (falling back to the key's own `/v1/models` when the platform cannot answer), so a new model reaches every tool on the next `nan setup`.
 
-The window and the output budget are the ones the setup guides publish on nan.builders (/docs/opencode, /docs/pi). Those are measured against the proxy, so copy them as they are rather than rounding: a window written short makes the tool compact a session that had room left, and one written long makes it fill the conversation until the model starts refusing requests.
+The platform also reports `context_window`, `max_output_tokens`, `supports_vision` and `supports_reasoning`. Those win. `All` in `internal/models/models.go` is only metadata for older platforms that report none of them: add a model there to give it a name, a window and its input kinds when the platform does not. The windows are the ones the setup guides publish on nan.builders (/docs/opencode, /docs/pi), measured against the proxy, so copy them as they are rather than rounding: a window written short makes the tool compact a session that had room left, and one written long makes it fill the conversation until the model starts refusing requests.
 
-The Codex config (`writeCodexConfig`) does not enumerate models; it points at `catalog.Coding`.
+The Codex config (`writeCodexConfig`) starts on `catalog.Pick(cat, catalog.Coding)`: the coding model when the member can call it, otherwise a model they can.
 
-Then run `just test`. `internal/tools/tools_test.go` writes each config into a temp directory and checks it against the catalogue, which is what stops the lists from drifting again.
+Then run `just test`. The tests write each config into a temp directory and check it against a catalogue, including a catalogue with no figures at all.
 
 ## Code style
 
