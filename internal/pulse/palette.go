@@ -64,7 +64,7 @@ func (m model) entries() []entry {
 	if m.session.SignedIn() {
 		add(entry{kind: "do", name: "Sign out", hint: "also takes the key out of the tools", do: actSignOut})
 	} else {
-		add(entry{kind: "do", name: "Sign in", hint: "a link goes to your email", do: actSignIn})
+		add(entry{kind: "do", name: "Sign in", hint: "your browser approves it", do: actSignIn})
 	}
 	add(entry{kind: "do", name: "Reload everything", do: actReload})
 	add(entry{kind: "do", name: "Quit", do: actQuit})

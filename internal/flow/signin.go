@@ -3,7 +3,7 @@
 //
 // They live apart from the dashboard because they are flows of their own,
 // and a second copy is how two screens that are supposed to be the same
-// program start disagreeing about what an expired link says. Each is a small
+// program start disagreeing about what an expired code says. Each is a small
 // Bubble Tea model - Init, Update, View - so a parent embeds it, forwards
 // messages while it is active, and reads the result.
 package flow
@@ -13,11 +13,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/huh/v2"
 
 	"github.com/helmcode/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/browser"
 	"github.com/helmcode/nan-cli/internal/ui"
 )
 
@@ -25,55 +26,61 @@ type signInStage int
 
 const (
 	signInOff signInStage = iota
-	signInEmail
-	signInSending
-	signInLink
-	signInVerifying
-	// signInCode is the third question, for an account with two-factor
-	// authentication: the code from its authenticator app.
-	signInCode
-	signInChecking
+	// signInReady: nothing has been asked of the platform yet. The member
+	// presses enter to start, so opening the dashboard without a session does
+	// not create a device request, spend the start rate limit or steal focus
+	// with a browser tab.
+	signInReady
+	// signInStarting: the platform has been asked for a code.
+	signInStarting
+	// signInWaiting: the code is on screen and the platform is being polled.
+	signInWaiting
+	// signInFailed: the start, the wait or the approval ended in an error.
+	signInFailed
 	signInDone
 )
 
-// SignIn is the magic-link flow: ask for an address, send a link, take it
-// back, and for an account with two-factor authentication ask for the code
-// its authenticator app shows. nan.builders has no password, so this is the
-// first thing anybody meets and the only thing that works before it is done.
+// SignIn is the browser-approved device flow: start a request, show a code
+// and a page, and poll until the member approves it there. The browser that
+// approves satisfies the password-less sign-in and any two-factor code, so
+// this flow never asks for either. nan.builders has no password, so this is
+// the first thing anybody meets and the only thing that works before it is
+// done.
 type SignIn struct {
 	stage signInStage
-	form  *huh.Form
-	email string
 	err   error
-	// notice is said above the address, for a machine that already holds a
-	// credential the dashboard cannot use.
+	// notice is said above everything, as its own line, for a machine that
+	// already holds a credential the dashboard cannot use.
 	notice string
 
-	// challenge is the two-factor sign-in the link opened, while the code is
-	// asked for. In memory only, like everything else about it: the flow is
-	// never serialised, and its error prints without it.
-	challenge *api.MFARequiredError
+	// device is the request in flight. Its DeviceCode is a bearer credential:
+	// never rendered, logged or put in an error.
+	device *api.Device
+	// opened is whether the page was tried in a browser for this request.
+	opened bool
+	// attempt goes up on every start and every cancel, so a late answer from
+	// an attempt that was left is dropped. cancel stops the polling.
+	attempt int
+	cancel  context.CancelFunc
 
 	// Token is the session the platform issued, once the flow is done.
 	Token string
-	// Notice is something to read once it worked: a recovery code was spent
-	// and how many are left. Empty otherwise.
-	Notice string
 }
 
-// linkSent and signedIn are this flow's own messages. A parent forwards
-// everything while the flow is active, so they never need to be exported.
-type linkSentMsg struct{ err error }
-
-type signedInMsg struct {
-	token  string
-	notice string
-	err    error
+// deviceStartedMsg and deviceDoneMsg are this flow's own messages. A parent
+// forwards everything while the flow is active, so they never need to be
+// exported.
+type deviceStartedMsg struct {
+	attempt int
+	device  *api.Device
+	err     error
 }
 
-// challengeMsg is a link that worked for an account with two-factor
-// authentication: the session comes once the challenge is answered.
-type challengeMsg struct{ challenge *api.MFARequiredError }
+type deviceDoneMsg struct {
+	attempt int
+	token   string
+	err     error
+}
 
 // NewSignIn returns a flow that is not running yet.
 func NewSignIn() SignIn { return SignIn{} }
@@ -88,275 +95,176 @@ func (s SignIn) Done() bool { return s.stage == signInDone }
 // token and no session: the token is real and working, and still not
 // something the dashboard can use, which is otherwise a mystery.
 const TokenOnlyNotice = "the platform token on this machine works for nan run and nan runs only; " +
-	"the dashboard needs the email sign-in"
+	"the dashboard needs the browser sign-in"
 
-// Start opens the flow on the email step. notice, when there is one, is said
-// above the address.
+// Start opens the flow on its first screen and asks nothing of the platform:
+// the member presses enter to sign in. notice, when there is one, is said
+// above. It is for the places the dashboard opens it on its own.
 func (s *SignIn) Start(notice string) tea.Cmd {
-	*s = SignIn{stage: signInEmail, notice: notice}
-	s.form = emailForm(s.email)
-	return s.form.Init()
+	s.stop()
+	*s = SignIn{stage: signInReady, notice: notice, attempt: s.attempt}
+	return nil
 }
 
-// The keys the fields are read back by.
-//
-// By KEY, never by binding a pointer with huh's Value(&x). Bubble Tea hands
-// Update a copy of the model and keeps what it returns, so a pointer into one
-// of the model's fields points into a copy that has already been discarded:
-// the form writes the address there and the model that is actually running
-// reads its own field and finds it empty. The form itself is a pointer and
-// survives the copying, so asking IT is the only reading that stays true.
-const (
-	fieldEmail = "email"
-	fieldLink  = "link"
-	fieldCode  = "code"
-)
-
-func emailForm(previous string) *huh.Form {
-	// Seeded, not bound: the value is read back by key (see fieldEmail), and
-	// this local only fills the field when somebody comes back to fix a
-	// typo in the address they already typed.
-	value := previous
-	return ui.NewForm(huh.NewGroup(
-		huh.NewInput().
-			Key(fieldEmail).
-			Value(&value).
-			Title("Sign in to nan.builders").
-			Description("Your email address - a link goes there. nan.builders has no password.").
-			Placeholder("you@example.com").
-			// Validated in the field, so a typo is caught before an email is
-			// spent on it rather than after.
-			Validate(api.ValidateEmail),
-	))
+// Begin opens the flow and starts the request at once. It is for a member who
+// asked to sign in (the s key, the card, the menu): that is consent to the
+// request and to the browser tab.
+func (s *SignIn) Begin(ctx context.Context, client *api.Client, notice string) tea.Cmd {
+	s.Start(notice)
+	return s.begin(ctx, client)
 }
 
-func linkForm(client *api.Client) *huh.Form {
-	return ui.NewForm(huh.NewGroup(
-		huh.NewInput().
-			Key(fieldLink).
-			Title("Paste the link").
-			Description("It works once - do not open it in your browser first, the browser would spend it.").
-			Placeholder("https://nan.builders/...?token=...").
-			// Dots, not the link: it carries a credential, and a screen is
-			// shared, recorded and screenshotted more often than not.
-			EchoMode(huh.EchoModePassword).
-			// The host check runs here, so a link that is not ours is refused
-			// in the field rather than after its token has been posted.
-			Validate(func(v string) error {
-				_, err := client.TokenFromLink(v)
-				return err
-			}),
-	))
+// begin starts (or restarts) the device request.
+func (s *SignIn) begin(ctx context.Context, client *api.Client) tea.Cmd {
+	s.stop()
+	s.attempt++
+	s.stage = signInStarting
+	s.err = nil
+	s.device = nil
+	s.opened = false
+	attempt := s.attempt
+	return func() tea.Msg {
+		d, err := client.StartDevice(ctx)
+		return deviceStartedMsg{attempt: attempt, device: d, err: err}
+	}
 }
 
-func codeForm() *huh.Form {
-	return ui.NewForm(huh.NewGroup(
-		huh.NewInput().
-			Key(fieldCode).
-			Title("Authenticator code").
-			Description("This account uses two-factor authentication. Enter the 6-digit code from your authenticator app, or one of your recovery codes.").
-			Placeholder("123456").
-			// Dots, always: a recovery code works until it is used, so it is
-			// no more fit for a shared screen than the link was.
-			EchoMode(huh.EchoModePassword).
-			// An empty enter is a slip, not an answer: said here, in a line,
-			// rather than by the long refusal of something that is not a code.
-			Validate(func(v string) error {
-				if strings.TrimSpace(v) == "" {
-					return errors.New("type the code first")
-				}
-				return nil
-			}),
-	))
+// stop ends the polling of the request in flight, if there is one.
+func (s *SignIn) stop() {
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
 }
 
-// Resize rewraps the open form, if there is one, for a terminal of w by h.
-func (s *SignIn) Resize(w, h int) { ui.FitForm(s.form, w, h) }
+// Resize is kept for the parent's resize pass: this flow has no form to fit.
+func (s *SignIn) Resize(int, int) {}
+
+// Keys is what the footer offers on the screen the flow is on.
+func (s SignIn) Keys() [][2]string {
+	switch s.stage {
+	case signInReady:
+		return [][2]string{{"enter", "sign in with your browser"}, {"esc", "not now"}}
+	case signInWaiting:
+		keys := [][2]string{}
+		if !browser.Disabled() {
+			keys = append(keys, [2]string{"enter", "open the page again"})
+		}
+		return append(keys, [2]string{"esc", "cancel"})
+	case signInFailed:
+		return [][2]string{{"enter", "try again"}, {"esc", "close"}}
+	}
+	return [][2]string{{"esc", "cancel"}}
+}
 
 // Update drives the flow. The parent forwards every message while Active.
 func (s SignIn) Update(ctx context.Context, msg tea.Msg, client *api.Client) (SignIn, tea.Cmd) {
 	switch msg := msg.(type) {
-	case linkSentMsg:
-		if msg.err != nil {
-			s.err = msg.err
-			s.stage = signInEmail
-			s.form = emailForm(s.email)
-			return s, s.form.Init()
+	case deviceStartedMsg:
+		// A late answer from an attempt that was cancelled or restarted.
+		if msg.attempt != s.attempt || s.stage != signInStarting {
+			return s, nil
 		}
-		s.err = nil
-		s.stage = signInLink
-		s.form = linkForm(client)
-		return s, s.form.Init()
+		if msg.err != nil {
+			s.stage = signInFailed
+			s.err = startError(msg.err)
+			return s, nil
+		}
+		s.stage = signInWaiting
+		s.device = msg.device
+		waitCtx, cancel := context.WithCancel(ctx)
+		s.cancel = cancel
+		cmds := []tea.Cmd{waitForApproval(waitCtx, client, msg.attempt, msg.device)}
+		if browser.ShouldOpen() {
+			s.opened = true
+			cmds = append(cmds, openPage(msg.device.VerificationURL))
+		}
+		return s, tea.Batch(cmds...)
 
-	case challengeMsg:
-		// Left with esc while the link was being exchanged: nothing to ask.
-		if s.stage != signInVerifying {
+	case deviceDoneMsg:
+		if msg.attempt != s.attempt || s.stage != signInWaiting {
+			return s, nil
+		}
+		s.stop()
+		if msg.err != nil {
+			s.stage = signInFailed
+			s.err = waitError(msg.err)
 			return s, nil
 		}
 		s.err = nil
-		s.challenge = msg.challenge
-		s.stage = signInCode
-		s.form = codeForm()
-		return s, s.form.Init()
-
-	case signedInMsg:
-		if s.challenge != nil && msg.err != nil {
-			s.err = msg.err
-			if api.Retryable(msg.err) {
-				// The same question again, empty, with what went wrong and
-				// how many tries are left.
-				s.stage = signInCode
-				s.form = codeForm()
-				return s, s.form.Init()
-			}
-			// The challenge is over, and the link that opened it was spent
-			// opening it: back to the address, filled in, so enter asks for
-			// a new one.
-			s.challenge = nil
-			s.stage = signInEmail
-			s.form = emailForm(s.email)
-			return s, s.form.Init()
-		}
-		if msg.err != nil {
-			// Back to the link, not to the start: the email has been spent
-			// and asking for another to fix a bad paste is a worse flow.
-			s.err = msg.err
-			s.stage = signInLink
-			s.form = linkForm(client)
-			return s, s.form.Init()
-		}
-		s.err = nil
-		s.challenge = nil
 		s.Token = msg.token
-		s.Notice = msg.notice
+		s.device = nil
 		s.stage = signInDone
 		return s, nil
 
 	case tea.KeyPressMsg:
-		if msg.String() == "esc" {
-			// From the link step, esc goes back to the address rather than
-			// out of the sign-in altogether. The one thing this flow cannot
-			// tell you is whether the address was right - the platform says
-			// "sent" for every address, on purpose, so that it cannot be
-			// used to find out who has an account - and a mistyped one is
-			// the likeliest reason a link never arrives.
-			if s.stage == signInLink {
-				s.stage = signInEmail
-				s.err = nil
-				s.form = emailForm(s.email)
-				return s, s.form.Init()
+		switch msg.String() {
+		case "esc":
+			s.stop()
+			s.attempt++
+			return SignIn{attempt: s.attempt}, nil
+		case "enter":
+			switch s.stage {
+			case signInReady, signInFailed:
+				cmd := s.begin(ctx, client)
+				return s, cmd
+			case signInWaiting:
+				if !browser.Disabled() && s.device != nil {
+					s.opened = true
+					return s, openPage(s.device.VerificationURL)
+				}
 			}
-			// From the code, back one step is the link, and the link was
-			// spent opening the challenge: the step before that is the
-			// address, filled in, so enter sends a new one. The footer says
-			// "esc back", and closing the whole sign-in was not back.
-			if s.stage == signInCode {
-				s.challenge = nil
-				s.stage = signInEmail
-				s.err = errors.New("that link is spent - press enter for a new one")
-				s.form = emailForm(s.email)
-				return s, s.form.Init()
-			}
-			return SignIn{}, nil
 		}
 	}
-
-	if s.form == nil || s.stage == signInSending || s.stage == signInVerifying || s.stage == signInChecking {
-		return s, nil
-	}
-
-	form, cmd := s.form.Update(msg)
-	if f, ok := form.(*huh.Form); ok {
-		s.form = f
-	}
-
-	switch s.form.State {
-	case huh.StateAborted:
-		return SignIn{}, nil
-	case huh.StateCompleted:
-		switch s.stage {
-		case signInEmail:
-			value := strings.TrimSpace(s.form.GetString(fieldEmail))
-			s.email = value
-			s.stage = signInSending
-			return s, requestLink(ctx, client, value)
-		case signInLink:
-			token, err := client.TokenFromLink(strings.TrimSpace(s.form.GetString(fieldLink)))
-			if err != nil {
-				s.err = err
-				s.form = linkForm(client)
-				return s, s.form.Init()
-			}
-			s.stage = signInVerifying
-			return s, verify(ctx, client, token)
-		case signInCode:
-			s.stage = signInChecking
-			return s, answer(ctx, client, s.challenge, s.form.GetString(fieldCode))
-		}
-	}
-	return s, cmd
+	return s, nil
 }
 
-func requestLink(ctx context.Context, client *api.Client, email string) tea.Cmd {
+// waitForApproval polls until the platform has an answer. The session token
+// comes back in the message and nowhere else.
+func waitForApproval(ctx context.Context, client *api.Client, attempt int, d *api.Device) tea.Cmd {
 	return func() tea.Msg {
-		return linkSentMsg{err: client.RequestMagicLink(ctx, email)}
+		token, err := client.WaitForApproval(ctx, d)
+		return deviceDoneMsg{attempt: attempt, token: token, err: err}
 	}
 }
 
-func verify(ctx context.Context, client *api.Client, token string) tea.Cmd {
+// openPage tries the browser. Best effort: the address is on screen anyway.
+func openPage(url string) tea.Cmd {
 	return func() tea.Msg {
-		session, err := client.Verify(ctx, token)
-		var challenge *api.MFARequiredError
-		if errors.As(err, &challenge) {
-			return challengeMsg{challenge}
-		}
-		return signedInMsg{token: session, err: err}
+		_ = browser.Open(url)
+		return nil
 	}
 }
 
-// answer posts the code the member typed against the challenge the link
-// opened.
-func answer(ctx context.Context, client *api.Client, challenge *api.MFARequiredError, code string) tea.Cmd {
-	return func() tea.Msg {
-		signIn, err := client.CompleteMFA(ctx, challenge, code)
-		if err != nil {
-			return signedInMsg{err: err}
-		}
-		msg := signedInMsg{token: signIn.Session}
-		if signIn.UsedRecoveryCode {
-			msg.notice = RecoveryCodesNotice(signIn.RecoveryCodesLeft)
-		}
-		return msg
+// startError and waitError say the sign-in's end in the dashboard's own
+// words; the sentinels carry none.
+func startError(err error) error {
+	if errors.Is(err, api.ErrDeviceUnsupported) {
+		return fmt.Errorf("%w - try again later", err)
 	}
+	return err
 }
 
-// RecoveryCodesNotice is what the dashboard says after a recovery code got
-// the member in: each works once, and running out is the way to be locked
-// out.
-func RecoveryCodesNotice(left int) string {
-	// Short enough for the flash line at the dashboard's narrowest (68
-	// columns inside its margins), which cut the longer one before the place
-	// to go; and no ">"
-	// in the path, which wrapped inside a form reads as the input prompt.
-	const where = "New: cloud.nan.builders, Settings"
-	if left == 0 {
-		return "That was your last recovery code. " + where
+func waitError(err error) error {
+	switch {
+	case errors.Is(err, api.ErrDeviceExpired):
+		return fmt.Errorf("%w - press enter for a new code", err)
+	case errors.Is(err, api.ErrDeviceDenied):
+		return fmt.Errorf("%w - press enter if you want a new code", err)
 	}
-	return fmt.Sprintf("Recovery code used, %d left. %s", left, where)
+	return err
 }
 
 // Label is what the loader should say for the step the flow is on. The
-// parent owns the animation — one loader for the whole program, so it does
-// not restart every time a screen changes — and asks the flow what it is
+// parent owns the animation - one loader for the whole program, so it does
+// not restart every time a screen changes - and asks the flow what it is
 // waiting for.
 func (s SignIn) Label() string {
 	switch s.stage {
-	case signInSending:
-		return "Sending the link"
-	case signInVerifying:
-		return "Checking the link"
-	case signInChecking:
-		return "Checking the code"
+	case signInStarting:
+		return "Asking for a code"
+	case signInWaiting:
+		return "Waiting for approval"
 	default:
 		return "Loading"
 	}
@@ -366,51 +274,56 @@ func (s SignIn) Label() string {
 // whole program animates as one thing.
 func (s SignIn) View(indent, spinner string, apiHost string) string {
 	var b strings.Builder
+	if s.notice != "" {
+		// Its own line, on every screen: the machine that holds a token the
+		// dashboard cannot use needs to read why, whichever step it is on.
+		b.WriteString(indent + ui.Warn(s.notice) + "\n\n")
+	}
 
 	switch s.stage {
-	case signInEmail:
-		if s.notice != "" {
-			b.WriteString(indent + ui.Warn(s.notice) + "\n\n")
-		}
-		b.WriteString(ui.Indent(s.form.View(), indent) + "\n")
+	case signInReady:
+		b.WriteString(indent + ui.Value("Sign in to nan.builders") + "\n")
+		b.WriteString(indent + ui.Faint("Your browser approves the sign-in: no password and no link to paste.") + "\n\n")
+		b.WriteString(indent + "Press enter to sign in with your browser.\n")
 
-	case signInSending:
+	case signInStarting:
 		b.WriteString(indent + spinner + "\n")
 
-	case signInLink:
-		s.linkSent(&b, indent, apiHost)
-
-		b.WriteString("\n" + ui.Indent(s.form.View(), indent) + "\n")
-
-	case signInCode:
-		b.WriteString(ui.Indent(s.form.View(), indent) + "\n")
-
-	case signInVerifying, signInChecking:
-		b.WriteString(indent + spinner + "\n")
+	case signInWaiting:
+		s.waiting(&b, indent, spinner)
 	}
 
 	if s.err != nil {
 		b.WriteString("\n" + indent + ui.Error(s.err) + "\n")
 	}
+	if apiHost != "" && s.stage != signInOff {
+		b.WriteString("\n" + indent + ui.Faint("Platform: "+apiHost+" - not the real nan.builders.") + "\n")
+	}
 	return b.String()
 }
 
-// linkSent is what the link step says once a real email is on its way.
-func (s SignIn) linkSent(b *strings.Builder, indent, apiHost string) {
-	b.WriteString(indent + ui.Success("A link is on its way to "+s.email) + "\n")
-	// Said plainly, because nothing downstream can: the platform answers
-	// the same for an address with no account behind it.
-	// Two short lines, not one long one: this screen is drawn outside the
-	// panes, so nothing clips it, and a line the terminal has to wrap is
-	// a row the inline renderer never counted.
-	b.WriteString(indent + ui.Faint("Copy it out of the email without opening it: it works once, and expires") + "\n")
-	b.WriteString(indent + ui.Faint(api.LinkValidity+" after it is sent. It only arrives if that address has an account.") + "\n")
-	b.WriteString(indent + ui.Faint("Nothing after a minute? Check spam, or esc to fix the address.") + "\n")
-	// Which platform, when it is not the real one. "A link is on its
-	// way" with no host on it is unfalsifiable: production answers 202
-	// to any address, so a shell that has lost NAN_API_URL gives the
-	// identical line and no email.
-	if apiHost != "" {
-		b.WriteString(indent + ui.Faint("Sent to "+apiHost+" - not the real nan.builders.") + "\n")
+// waiting is the code, the page it is typed on, and how long it lasts.
+func (s SignIn) waiting(b *strings.Builder, indent, spinner string) {
+	d := s.device
+	if d == nil {
+		return
 	}
+	b.WriteString(indent + "Your sign-in code:  " + ui.Value(d.UserCode) + "\n\n")
+	b.WriteString(indent + "Open " + d.VerificationURL + ", sign in if asked,\n")
+	b.WriteString(indent + "and type the code there.\n")
+	if s.opened {
+		// An attempt, not a fact: a browser that starts and fails to show
+		// the page cannot be told from one that worked.
+		b.WriteString(indent + ui.Faint("(Tried to open it in your browser.)") + "\n")
+	}
+	b.WriteString("\n" + indent + spinner + ui.Faint(expiresIn(d.ExpiresAt)) + "\n")
+}
+
+// expiresIn is the countdown shown next to the wait.
+func expiresIn(at time.Time) string {
+	left := time.Until(at)
+	if left <= 0 {
+		return "  expiring"
+	}
+	return fmt.Sprintf("  expires in %d min", int((left+time.Minute-1)/time.Minute))
 }

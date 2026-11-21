@@ -1,331 +1,141 @@
-// Package authtest is a fake nan.builders sign-in for tests: the link
-// exchange and the two-factor challenge, answering the way the platform's API
-// contract says they answer (nan-cloud-api openspec/changes/mfa/api-contract.md,
-// "POST /api/auth/login/verify", "POST /api/auth/mfa/challenge" and "CLI
-// contract").
+// Package authtest is a fake nan.builders device sign-in for tests, answering
+// the way the platform's contract does (nan-cloud-api, internal/handlers/
+// auth_device.go): start with client=cli echoes client_kind, poll answers
+// pending / denied / expired / approved, and approval carries the session
+// token and region only.
 //
 // It is imported by tests only, so it never reaches the binary.
 package authtest
 
 import (
 	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
 const (
-	// FrontendURL is the UI the platform redirects to, and the only origin
-	// the challenge route accepts.
-	FrontendURL = "https://cloud.nan.builders"
-
-	// PendingCookie is the challenge cookie's name.
-	PendingCookie = "__Host-nan_mfa_pending"
-
-	// LinkToken is the one link the platform accepts. It and the three below
-	// are values a test can look for: in what was sent, and in what must
-	// never be written anywhere.
-	LinkToken = "link-token-for-a-test"
-	// Pending is the challenge cookie's value: 43 base64url characters, like
-	// the real one.
-	Pending = "fake-pending-challenge-0123456789abcdefghij"
-	// Session is the session cookie a sign-in ends with.
+	// UserCode is what the member would type on the approval page.
+	UserCode = "ABCD-EFGH"
+	// DeviceCode is the bearer credential of the request: a value a test can
+	// look for in everything that must never contain it.
+	DeviceCode = "device-code-secret-for-a-test"
+	// Session is the session token an approval ends with.
 	Session = "fake-session-from-the-platform"
-	// Code is the authenticator code the account accepts.
-	Code = "246810"
 )
 
-// Platform is the fake. Set the exported fields before the first request.
+// Platform is the fake.
 type Platform struct {
 	*httptest.Server
 
-	// Factor: the account has a confirmed authenticator. Without it the link
-	// alone signs in, exactly as before two-factor sign-in existed.
-	Factor bool
-	// Onboarding: the member is invited or registered and has not finished
-	// signing up, so a link gets them the onboarding token, never a session.
-	Onboarding bool
-	// RecoveryCodes the account has not used yet, in canonical form
-	// (xxxx-xxxx-xxxx-xxxx).
-	RecoveryCodes []string
-	// Next, when set, answers the next challenge POST instead of checking
-	// it, and is then cleared: a refusal the test wants to see handled.
-	Next *Refusal
+	// Legacy makes start answer like a platform from before the CLI variant:
+	// the body is ignored and no client_kind is echoed. Set before use.
+	Legacy bool
 
-	mu sync.Mutex
-	// What came in, for the test to look at.
-	verifies   []url.Values
-	challenges []Request
-
-	spent       bool
-	open        bool   // a challenge is waiting for its code
-	ended       string // why the last challenge ended: used, exhausted, expired
-	attempts    int    // left on the open challenge
-	codeUsed    bool   // Code's step has been spent (anti-replay)
-	lockedUntil time.Time
+	mu      sync.Mutex
+	state   string // pending, approved, denied, expired
+	fail    int    // HTTP status the next failures answer with
+	failFor int
+	starts  []map[string]string
+	polls   int
 }
 
-// Refusal is an answer the test forces on the challenge route.
-type Refusal struct {
-	Status int
-	Body   string
-	Header map[string]string
-}
-
-// Request is a challenge POST as it arrived.
-type Request struct {
-	Header http.Header
-	Body   string
-	// Cookie is the challenge cookie it carried, "" without one.
-	Cookie string
-}
-
-// New starts the fake. It stops when the test ends.
+// New starts the fake, pending. It stops when the test ends.
 func New(t testing.TB) *Platform {
 	t.Helper()
-	p := &Platform{}
+	p := &Platform{state: "pending"}
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/auth/login/request", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusAccepted)
-	})
-	mux.HandleFunc("POST /api/auth/login/verify", p.verify)
-	mux.HandleFunc("POST /api/auth/mfa/challenge", p.challenge)
+	mux.HandleFunc("POST /api/auth/device/start", p.start)
+	mux.HandleFunc("POST /api/auth/device/poll", p.poll)
 	p.Server = httptest.NewServer(mux)
 	t.Cleanup(p.Close)
 	return p
 }
 
-// Verifies are the forms the verify route received.
-func (p *Platform) Verifies() []url.Values {
+// Approve, Deny and Expire set what the next poll answers.
+func (p *Platform) Approve() { p.set("approved") }
+func (p *Platform) Deny()    { p.set("denied") }
+func (p *Platform) Expire()  { p.set("expired") }
+
+func (p *Platform) set(state string) {
+	p.mu.Lock()
+	p.state = state
+	p.mu.Unlock()
+}
+
+// FailNext makes the next n polls answer with status.
+func (p *Platform) FailNext(status, n int) {
+	p.mu.Lock()
+	p.fail, p.failFor = status, n
+	p.mu.Unlock()
+}
+
+// Starts are the bodies the start route received.
+func (p *Platform) Starts() []map[string]string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return append([]url.Values(nil), p.verifies...)
+	return append([]map[string]string(nil), p.starts...)
 }
 
-// Challenges are the challenge POSTs the platform received.
-func (p *Platform) Challenges() []Request {
+// Polls is how many polls arrived.
+func (p *Platform) Polls() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return append([]Request(nil), p.challenges...)
+	return p.polls
 }
 
-// NewLink lets one more link through, as a new email would.
-func (p *Platform) NewLink() {
+func (p *Platform) start(w http.ResponseWriter, r *http.Request) {
+	var body map[string]string
+	_ = json.NewDecoder(r.Body).Decode(&body)
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.spent = false
+	p.starts = append(p.starts, body)
+	p.mu.Unlock()
+	kind := "desktop"
+	if body["client"] == "cli" {
+		kind = "cli"
+	}
+	if p.Legacy {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"device_code": DeviceCode, "user_code": UserCode, "verification_url": p.URL + "/device",
+			"expires_in": 900, "interval": 1,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"device_code":      DeviceCode,
+		"user_code":        UserCode,
+		"verification_url": p.URL + "/device",
+		"expires_in":       int((15 * time.Minute).Seconds()),
+		"interval":         1,
+		"client_kind":      kind,
+	})
 }
 
-// Expire ends the open challenge the way ten minutes would.
-func (p *Platform) Expire() {
+func (p *Platform) poll(w http.ResponseWriter, r *http.Request) {
+	var body map[string]string
+	_ = json.NewDecoder(r.Body).Decode(&body)
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.open {
-		p.open, p.ended = false, "expired"
-	}
-}
-
-// Lock pauses the account's two-factor sign-in until the given time.
-func (p *Platform) Lock(until time.Time) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.lockedUntil = until
-}
-
-func (p *Platform) verify(w http.ResponseWriter, r *http.Request) {
-	_ = r.ParseForm()
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.verifies = append(p.verifies, r.PostForm)
-
-	// The link is consumed in every row of the contract's table.
-	if r.PostForm.Get("token") != LinkToken || p.spent {
-		http.Redirect(w, r, FrontendURL+"/access-denied?reason=invalid_link", http.StatusFound)
+	p.polls++
+	if p.failFor > 0 {
+		p.failFor--
+		status := p.fail
+		p.mu.Unlock()
+		writeJSON(w, status, map[string]string{"error": "internal error"})
 		return
 	}
-	p.spent = true
-
-	cli := r.PostForm.Get("client") == "cli"
-	switch {
-	case p.Onboarding && !p.Factor:
-		// Unchanged by two-factor sign-in: the onboarding token, which is not
-		// a session, and the page that uses it.
-		http.SetCookie(w, &http.Cookie{Name: "nan_onboarding", Value: "fake-onboarding-token", Path: "/", Secure: true, HttpOnly: true}) //nolint:gosec // G124: a fake's cookie; the client under test never reads its attributes
-		http.Redirect(w, r, FrontendURL+"/onboarding", http.StatusFound)
-	case p.Onboarding && cli:
-		// "CLI contract" step 8: with a factor, onboarding is finished in the
-		// browser, whatever mfa says. No cookie of any kind.
-		http.Redirect(w, r, FrontendURL+"/access-denied?reason=finish_onboarding_in_the_browser", http.StatusFound)
-	case !p.Factor:
-		http.SetCookie(w, &http.Cookie{Name: "nan_session", Value: Session, Path: "/", Domain: ".nan.builders", Secure: true, HttpOnly: true}) //nolint:gosec // G124: a fake's cookie; the client under test never reads its attributes
-		http.Redirect(w, r, FrontendURL+"/", http.StatusFound)
-	case cli && r.PostForm.Get("mfa") != "1":
-		http.Redirect(w, r, FrontendURL+"/access-denied?reason=mfa_enabled_update_nan_cli", http.StatusFound)
-	default:
-		// A new challenge replaces any earlier one (D8).
-		p.open, p.ended, p.attempts = true, "", 5
-		http.SetCookie(w, &http.Cookie{Name: PendingCookie, Value: Pending, Path: "/", MaxAge: 600, Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode})
-		http.Redirect(w, r, FrontendURL+"/mfa?reason=mfa_required", http.StatusFound)
-	}
-}
-
-func (p *Platform) challenge(w http.ResponseWriter, r *http.Request) {
-	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<16))
-	cookie := ""
-	if c, err := r.Cookie(PendingCookie); err == nil {
-		cookie = c.Value
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.challenges = append(p.challenges, Request{Header: r.Header.Clone(), Body: string(body), Cookie: cookie})
-	w.Header().Set("Cache-Control", "no-store")
-
-	// The FRONTEND_URL origin only; without an Origin, refused when the
-	// browser says it came from another site, through otherwise (the CLI).
-	if o := r.Header.Get("Origin"); o != "" && o != FrontendURL {
-		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden_origin"})
+	state := p.state
+	p.mu.Unlock()
+	if body["device_code"] != DeviceCode {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid device_code"})
 		return
 	}
-	if s := r.Header.Get("Sec-Fetch-Site"); r.Header.Get("Origin") == "" && (s == "cross-site" || s == "same-site") {
-		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden_origin"})
+	if state == "approved" {
+		writeJSON(w, http.StatusOK, map[string]any{"status": "approved", "session_token": Session, "region": "eu"})
 		return
 	}
-	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
-		writeJSON(w, http.StatusBadRequest, refusal("invalid_request"))
-		return
-	}
-
-	if p.Next != nil {
-		next := p.Next
-		p.Next = nil
-		for k, v := range next.Header {
-			w.Header().Set(k, v)
-		}
-		w.WriteHeader(next.Status)
-		_, _ = io.WriteString(w, next.Body)
-		return
-	}
-
-	if cookie != Pending {
-		expire(w)
-		writeJSON(w, http.StatusForbidden, refusal("mfa_challenge_missing"))
-		return
-	}
-	if !p.open {
-		expire(w)
-		code := "mfa_challenge_" + p.ended
-		if p.ended == "" {
-			code = "mfa_challenge_missing"
-		}
-		writeJSON(w, http.StatusForbidden, refusal(code))
-		return
-	}
-	if time.Now().Before(p.lockedUntil) {
-		p.locked(w)
-		return
-	}
-
-	var answer map[string]string
-	dec := json.NewDecoder(strings.NewReader(string(body)))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&answer); err != nil || len(answer) != 1 {
-		writeJSON(w, http.StatusBadRequest, refusal("invalid_request"))
-		return
-	}
-
-	if code, ok := answer["code"]; ok {
-		code = strings.ReplaceAll(code, " ", "")
-		if len(code) != 6 {
-			writeJSON(w, http.StatusBadRequest, refusal("invalid_request"))
-			return
-		}
-		switch {
-		case code == Code && !p.codeUsed:
-			p.codeUsed = true
-			p.pass(w, nil)
-		case code == Code:
-			p.fail(w, "mfa_code_already_used")
-		default:
-			p.fail(w, "mfa_code_invalid")
-		}
-		return
-	}
-	if rc, ok := answer["recovery_code"]; ok {
-		canonical, ok := canonicalRecovery(rc)
-		if !ok {
-			writeJSON(w, http.StatusBadRequest, refusal("invalid_request"))
-			return
-		}
-		for i, have := range p.RecoveryCodes {
-			if have == canonical {
-				p.RecoveryCodes = append(p.RecoveryCodes[:i:i], p.RecoveryCodes[i+1:]...)
-				left := len(p.RecoveryCodes)
-				p.pass(w, &left)
-				return
-			}
-		}
-		p.fail(w, "mfa_recovery_code_invalid")
-		return
-	}
-	writeJSON(w, http.StatusBadRequest, refusal("invalid_request"))
-}
-
-func (p *Platform) pass(w http.ResponseWriter, recoveryLeft *int) {
-	p.open, p.ended = false, "used"
-	expire(w)
-	http.SetCookie(w, &http.Cookie{Name: "nan_session", Value: Session, Path: "/", Domain: ".nan.builders", Secure: true, HttpOnly: true}) //nolint:gosec // G124: a fake's cookie; the client under test never reads its attributes
-	writeJSON(w, http.StatusOK, map[string]any{"redirect": "/", "recovery_codes_remaining": recoveryLeft})
-}
-
-func (p *Platform) fail(w http.ResponseWriter, code string) {
-	p.attempts--
-	if p.attempts <= 0 {
-		p.open, p.ended = false, "exhausted"
-		expire(w)
-		writeJSON(w, http.StatusForbidden, refusal("mfa_challenge_exhausted"))
-		return
-	}
-	body := refusal(code)
-	body["attempts_remaining"] = p.attempts
-	writeJSON(w, http.StatusBadRequest, body)
-}
-
-func (p *Platform) locked(w http.ResponseWriter) {
-	secs := int(time.Until(p.lockedUntil).Seconds()) + 1
-	w.Header().Set("Retry-After", fmt.Sprint(secs))
-	body := refusal("mfa_locked")
-	body["locked_until"] = p.lockedUntil.UTC().Format(time.RFC3339)
-	body["retry_after"] = secs
-	writeJSON(w, http.StatusTooManyRequests, body)
-}
-
-// canonicalRecovery is the platform's reading of a recovery code: sixteen
-// base32 characters in any case, with or without hyphens and spaces.
-func canonicalRecovery(s string) (string, bool) {
-	s = strings.ToLower(strings.NewReplacer("-", "", " ", "").Replace(s))
-	if len(s) != 16 {
-		return "", false
-	}
-	for _, r := range s {
-		if (r < 'a' || r > 'z') && (r < '2' || r > '7') {
-			return "", false
-		}
-	}
-	return s[0:4] + "-" + s[4:8] + "-" + s[8:12] + "-" + s[12:16], true
-}
-
-func refusal(code string) map[string]any {
-	return map[string]any{"error": code, "message": "A sentence the client must not branch on."}
-}
-
-func expire(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{Name: PendingCookie, Value: "", Path: "/", MaxAge: -1, Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+	writeJSON(w, http.StatusOK, map[string]string{"status": state})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

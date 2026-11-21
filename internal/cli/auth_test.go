@@ -15,7 +15,7 @@ import (
 	"testing"
 )
 
-// `--token` and `--link` both take a secret, and a secret spelled out on a
+// `--token` takes a secret, and a secret spelled out on a
 // command line is in ~/.bash_history and in `ps` for as long as the command
 // runs. "-" is the way out for a script or a CI step, so it has to actually
 // read stdin - and has to say so rather than saving an empty token when
@@ -222,8 +222,8 @@ func TestAPITokenLoginOnATerminalReadsHidden(t *testing.T) {
 
 func TestAPITokenCannotBeCombined(t *testing.T) {
 	fakeHome(t, "")
-	defer func() { apiTokenFlag, emailFlag = false, "" }()
-	rootCmd.SetArgs([]string{"auth", "login", "--api-token", "--email", "a@b.c"})
+	defer func() { apiTokenFlag, tokenFlag = false, "" }()
+	rootCmd.SetArgs([]string{"auth", "login", "--api-token", "--token", "x"})
 	rootCmd.SetOut(io.Discard)
 	rootCmd.SetErr(io.Discard)
 	if err := rootCmd.Execute(); err == nil || !strings.Contains(err.Error(), "cannot be combined") {

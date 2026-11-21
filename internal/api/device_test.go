@@ -20,14 +20,19 @@ type clock struct {
 	mu    sync.Mutex
 	t     time.Time
 	waits []time.Duration
+	now   func() time.Time
+	after func(time.Duration) <-chan time.Time
 }
+
+// current is the clock of the test running, which every client the platform
+// builds then waits by.
+var current *clock
 
 func fakeClock(t *testing.T) *clock {
 	t.Helper()
 	c := &clock{t: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)}
-	oldNow, oldAfter := deviceNow, deviceAfter
-	deviceNow = func() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
-	deviceAfter = func(d time.Duration) <-chan time.Time {
+	c.now = func() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
+	c.after = func(d time.Duration) <-chan time.Time {
 		c.mu.Lock()
 		c.t = c.t.Add(d)
 		c.waits = append(c.waits, d)
@@ -37,7 +42,8 @@ func fakeClock(t *testing.T) *clock {
 		ch <- now
 		return ch
 	}
-	t.Cleanup(func() { deviceNow, deviceAfter = oldNow, oldAfter })
+	current = c
+	t.Cleanup(func() { current = nil })
 	return c
 }
 
@@ -95,7 +101,13 @@ func newPlatform(t *testing.T, replies ...reply) *platform {
 	return p
 }
 
-func (p *platform) client() *Client { return New("", WithBaseURL(p.URL)) }
+func (p *platform) client() *Client {
+	opts := []Option{WithBaseURL(p.URL)}
+	if current != nil {
+		opts = append(opts, WithClock(current.now, current.after))
+	}
+	return New("", opts...)
+}
 
 func (p *platform) pollCount() int {
 	p.mu.Lock()
@@ -128,7 +140,7 @@ func TestStartDeclaresTheCLIAndReadsTheRequest(t *testing.T) {
 	if d.UserCode != "ABCD-EFGH" || d.DeviceCode != "dev-secret" || d.Interval != 5*time.Second {
 		t.Errorf("device = %+v", d)
 	}
-	if want := deviceNow().Add(15 * time.Minute); !d.ExpiresAt.Equal(want) {
+	if want := current.now().Add(15 * time.Minute); !d.ExpiresAt.Equal(want) {
 		t.Errorf("expires at %v, want %v", d.ExpiresAt, want)
 	}
 }
@@ -154,7 +166,7 @@ func TestStartDefaultsAMissingLifetimeAndInterval(t *testing.T) {
 	p := newPlatform(t, pending())
 	p.start = fmt.Sprintf(`{"device_code":"d","user_code":"U","verification_url":"%s/device","client_kind":"cli"}`, p.URL)
 	d := startDevice(t, p)
-	if d.Interval != 5*time.Second || !d.ExpiresAt.After(deviceNow()) {
+	if d.Interval != 5*time.Second || !d.ExpiresAt.After(current.now()) {
 		t.Errorf("device = %+v: a zero lifetime must not expire on the first tick", d)
 	}
 }
@@ -261,7 +273,7 @@ func TestSentinelErrorsCarryNoAdvice(t *testing.T) {
 func TestSlowDownAddsFiveSeconds(t *testing.T) {
 	c := fakeClock(t)
 	p := newPlatform(t,
-		reply{429, `{"error":"slow_down — poll at the advertised interval"}`},
+		reply{429, `{"error":"slow_down - poll at the advertised interval"}`},
 		reply{200, `{"status":"slow_down"}`},
 		approved())
 	if _, err := p.client().WaitForApproval(context.Background(), startDevice(t, p)); err != nil {
@@ -339,7 +351,7 @@ func TestANetworkErrorIsWaitedOut(t *testing.T) {
 		_, _ = io.WriteString(w, `{"status":"approved","session_token":"s"}`)
 	}))
 	defer srv.Close()
-	c := New("", WithBaseURL(srv.URL))
+	c := New("", WithBaseURL(srv.URL), WithClock(current.now, current.after))
 	d, err := c.StartDevice(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -446,7 +458,7 @@ func TestPollRefusesARedirect(t *testing.T) {
 		http.Redirect(w, r, other.URL, http.StatusTemporaryRedirect)
 	}))
 	defer srv.Close()
-	if _, err := New("", WithBaseURL(srv.URL)).WaitForApproval(context.Background(), d); !errors.Is(err, errDeviceRedirect) {
+	if _, err := New("", WithBaseURL(srv.URL), WithClock(current.now, current.after)).WaitForApproval(context.Background(), d); !errors.Is(err, errDeviceRedirect) {
 		t.Fatalf("err = %v", err)
 	}
 	mu.Lock()

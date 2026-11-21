@@ -129,7 +129,7 @@ const tokenShapeHint = "expected a platform token (nan_pat_...) from Settings > 
 // A saved platform token goes before the session because it was saved for
 // exactly these commands, and because a session expires on the server with
 // nothing on this side knowing: ranked after it, the token would never be
-// reached on a machine that once signed in by email.
+// reached on a machine that once signed in through the browser.
 func resolveCredential(getenv func(string) string, tokenFile string) (credential, error) {
 	if v := getenv(tokenEnvVar); v != "" {
 		tok := strings.TrimSpace(v)

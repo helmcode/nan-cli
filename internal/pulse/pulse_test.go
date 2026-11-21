@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/helmcode/nan-cli/internal/api"
+	"github.com/helmcode/nan-cli/internal/api/authtest"
 	"github.com/helmcode/nan-cli/internal/session"
 	"github.com/helmcode/nan-cli/internal/ui"
 )
@@ -558,5 +559,30 @@ func TestTheFaceFollowsWhatTheDashboardIsDoing(t *testing.T) {
 	m.session.Token = ""
 	if m.mood() != ui.MoodAsleep {
 		t.Errorf("signed out: %v", m.mood())
+	}
+}
+
+// Opening the dashboard without a session shows the sign-in and waits for
+// enter: no device request, no browser tab. The s key is a request.
+func TestOpeningWithoutASessionAsksNothingUntilTheMemberDoes(t *testing.T) {
+	sandbox(t)
+	t.Setenv("NAN_NO_BROWSER", "1")
+	fake := authtest.New(t)
+	m := newModel(context.Background(), api.New("", api.WithBaseURL(fake.URL)), &session.Session{})
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 130, Height: 40})
+	m = next.(model)
+	m.reveal, m.animating = 1, false
+	m = settle(t, m, m.opening())
+
+	if out := screen(m); !strings.Contains(out, "Press enter to sign in with your browser") {
+		t.Errorf("the sign-in does not say what enter does:\n%s", out)
+	}
+	if n := len(fake.Starts()); n != 0 {
+		t.Fatalf("opening asked the platform for %d device codes on its own", n)
+	}
+
+	m = press(t, m, keyOf("enter"))
+	if n := len(fake.Starts()); n != 1 {
+		t.Errorf("enter made %d device requests, want 1", n)
 	}
 }

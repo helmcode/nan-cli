@@ -9,7 +9,7 @@ import (
 // Forms and prompts, in the brand's colours.
 //
 // Everything a person types at this CLI goes through huh rather than through
-// bufio.Scanner: the email at sign-in, the link pasted back, the key in
+// bufio.Scanner: the key in
 // Setup, the tools it applies to, and every confirmation before something
 // irreversible. A hand-rolled prompt has no validation, no cursor, no way
 // back, and reimplements badly what a form library already does — and it

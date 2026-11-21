@@ -42,13 +42,6 @@ const (
 	maxBackoff = time.Minute
 )
 
-// deviceNow and deviceAfter are variables so the tests advance time without
-// sleeping.
-var (
-	deviceNow   = time.Now
-	deviceAfter = time.After
-)
-
 // The ends of a device sign-in that is not an approval. They carry no advice
 // on what to do next: each surface (the command, the dashboard) adds its own.
 var (
@@ -123,7 +116,7 @@ func (c *Client) StartDevice(ctx context.Context) (*Device, error) {
 		DeviceCode:      out.DeviceCode,
 		UserCode:        out.UserCode,
 		VerificationURL: out.VerificationURL,
-		ExpiresAt:       deviceNow().Add(ttl),
+		ExpiresAt:       c.now().Add(ttl),
 		Interval:        interval,
 	}, nil
 }
@@ -173,7 +166,7 @@ func (c *Client) WaitForApproval(ctx context.Context, d *Device) (string, error)
 	}
 	deadline := d.ExpiresAt
 	if deadline.IsZero() {
-		deadline = deviceNow().Add(defaultDeviceTTL)
+		deadline = c.now().Add(defaultDeviceTTL)
 	}
 	// The platform decides when a request expires; the local clock is only a
 	// backstop, one interval late, so an approval in the last interval is
@@ -193,7 +186,7 @@ func (c *Client) WaitForApproval(ctx context.Context, d *Device) (string, error)
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
-		case <-deviceAfter(wait):
+		case <-c.after(wait):
 		}
 
 		state, token, err := c.pollDevice(ctx, d.DeviceCode)
@@ -227,7 +220,7 @@ func (c *Client) WaitForApproval(ctx context.Context, d *Device) (string, error)
 			}
 			// pending (or a status this version does not know): keep waiting.
 		}
-		if deviceNow().After(backstop) {
+		if c.now().After(backstop) {
 			if lastErr != nil {
 				return "", fmt.Errorf("could not check the sign-in before it expired: %w", lastErr)
 			}
