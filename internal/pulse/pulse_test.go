@@ -223,7 +223,7 @@ func TestEachAreaShowsItsThings(t *testing.T) {
 		"2": {"Email", "someon...@example.com", "Plan", "inference", "Membership ends", "20 Nov 2026"},
 		"3": {"glm5.3-flash", "deepseek-v4-flash", "240.0M", "67%"},
 		"4": {"glm5.3-flash", "chat", "chat · premium", "embedding"},
-		"5": {"Claude Opus 5.5", "Anthropic", "GPT-6 Luna", "No per-token charges"},
+		"5": {"Claude Opus 5.5", "Anthropic", "GPT-6 Luna", "https://cloud.nan.builders/tokens"},
 		"6": {"Set up the tools", "saved on this machine", "Checks the key against the cluster"},
 		"7": {"https://cloud.nan.builders", "@Nxssie", ".config/nan/session.json"},
 	}
