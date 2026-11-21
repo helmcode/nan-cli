@@ -55,9 +55,8 @@ Run `nan` to open the dashboard:
 nan
 ```
 
-On a machine nobody has signed in on, it opens on the sign-in: your email, then
-the link from it (and the code from your authenticator app, if your account
-has two-factor authentication), then your API key for this machine
+On a machine nobody has signed in on, it opens on the sign-in: press enter and your
+browser approves it (see below), then your API key for this machine
 (skippable), then the offer of a short tour.
 
 Seven areas sit in a row of tabs across the top, always on screen and
@@ -352,7 +351,7 @@ JSON object per line): <https://nan.builders/docs/runs>.
    must be private (`chmod 600`); one that other users can read or write is
    refused.
 3. **A saved token**, from `nan auth login --api-token`.
-4. **Your session**, from `nan auth login` (the emailed sign-in link).
+4. **Your session**, from `nan auth login` (approved in your browser).
 5. **A saved API key**, from `nan setup` or the dashboard (or an `sk-...` key saved with
    `nan auth login --api-token`).
 
@@ -386,28 +385,21 @@ nan auth login --api-token < token.txt  # or pipe it in
 Never put a token on the command line itself: it would end up in your shell
 history and in `ps`.
 
-**Two-factor authentication.** With it turned on for your account (Settings >
-Account > Two-factor authentication at <https://cloud.nan.builders>),
-`nan auth login` and the dashboard's sign-in ask for the code from your
-authenticator app after the link, without echo. One of your recovery codes
-works in its place. When nan cannot ask, pipe the code in. Never type the code
-into the command itself, where it would stay in your shell history: read it
-into a variable without echo, or redirect it from a file or a password
-manager's command line.
+**Signing in.** `nan auth login` and the dashboard sign in through your
+browser: nan prints a short code and a page on nan.builders, opens the page,
+and finishes when you type the code there and approve. Two-factor
+authentication, if your account has it on, is answered in the browser, so
+nothing is pasted into the terminal. The code expires after a few minutes, and
+ctrl-c cancels. Over SSH, or on Linux without a display, nothing is opened:
+open the printed address on any device. Pass `--no-browser` (or set
+`NAN_NO_BROWSER=1`) to never open it.
 
-```bash
-read -rs code   # type or paste it; it is not shown
-printf '%s\n' "$code" | nan auth login --link "<the link>" --totp -
-nan auth login --link "<the link>" --totp - < code.txt
-```
+The session this gives the CLI is narrower than a browser session: it can read,
+start runs and reject proposals; approving a proposal, writing a secret and
+editing an automation need the web portal.
 
-`--totp` never takes the code as an argument: its only value is `-`, which
-reads one line of stdin. With `--totp -` the code gets one try, where the
-prompt lets you try again; if stdin is a terminal it is still asked for there,
-without echo.
-
-Versions before 0.1.35 cannot ask for the code: the platform refuses the link
-with `mfa enabled update nan cli`. Update, then ask for a new link.
+The `--email`, `--link` and `--totp` flags of earlier versions were removed;
+`nan auth login` with no flags replaces them.
 
 ## Settings
 
