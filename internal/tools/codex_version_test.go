@@ -146,3 +146,306 @@ func TestCodexProfilesFollowAnUpgradeAndADowngrade(t *testing.T) {
 		}
 	}
 }
+
+// Golden for the file this CLI creates when Codex had no config: the default
+// `codex` run is a NaN session, so it gets what a --profile run gets - the
+// catalogue (no "Model metadata ... not found" warning) and neither web
+// search nor sub-agents.
+func TestCodexStarterConfigGolden(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	codexModel, _ := catalog.Get(catalog.Coding)
+	want := fmt.Sprintf(`model = %q
+model_provider = "nan"
+model_context_window = %d
+model_catalog_json = %q
+web_search = "disabled"
+
+[agents]
+enabled = false
+
+[model_providers.nan]
+name = "NaN"
+base_url = "https://api.nan.builders/v1"
+experimental_bearer_token = %q
+wire_api = "responses"
+`, codexModel.ID, codexModel.Context, codexCatalogPath(filepath.Dir(path)), testKey)
+	got := readFile(t, path)
+	if got != want {
+		t.Errorf("config.toml:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+	assertCodexTOML(t, got)
+
+	// A second configure changes nothing, byte for byte.
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	if again := readFile(t, path); again != got {
+		t.Errorf("a second configure changed the file:\nfirst:\n%s\nsecond:\n%s", got, again)
+	}
+}
+
+// A member whose Codex has its own provider keeps it, and keeps OpenAI's
+// model list, web search and sub-agents: none of the NaN-only keys go into
+// their root.
+func TestCodexMemberRootGetsNoNaNOnlyKeys(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	if err := os.WriteFile(path, []byte("model = \"gpt-5\"\nmodel_provider = \"openai\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	doc, ok := codexTOML(readFile(t, path))
+	if !ok {
+		t.Fatal("not valid TOML")
+	}
+	for _, key := range []string{"model_catalog_json", "web_search", "agents", "features"} {
+		if _, has := doc[key]; has {
+			t.Errorf("%s went into a member's root", key)
+		}
+	}
+}
+
+// A member configured by an earlier version has the starter config without
+// these keys; their next configure adds them, and the one after adds nothing.
+func TestCodexStarterConfigOfAnEarlierVersionIsBroughtUpToDate(t *testing.T) {
+	codexModel, _ := catalog.Get(catalog.Coding)
+	path := tempConfig(t, "config.toml")
+	old := fmt.Sprintf("model = %q\nmodel_provider = \"nan\"\nmodel_context_window = %d\n\n"+
+		"[model_providers.nan]\nname = \"NaN\"\nbase_url = \"https://api.nan.builders/v1\"\n"+
+		"experimental_bearer_token = %q\nwire_api = \"responses\"\n", codexModel.ID, codexModel.Context, testKey)
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	first := readFile(t, path)
+	fresh := tempConfig(t, "config.toml")
+	if err := writeCodexConfig(fresh, testKey); err != nil {
+		t.Fatal(err)
+	}
+	// Same as a file created today, apart from the catalogue path's home.
+	if want := strings.ReplaceAll(readFile(t, fresh), filepath.ToSlash(filepath.Dir(fresh)), filepath.ToSlash(filepath.Dir(path))); first != want {
+		t.Errorf("an earlier starter config was not brought up to date:\ngot:\n%s\nwant:\n%s", first, want)
+	}
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	if second := readFile(t, path); second != first {
+		t.Errorf("a second configure changed the file:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+}
+
+// The value at "table.key" (or "key") in a parsed config.toml, nil if absent.
+func codexTOMLGet(doc map[string]any, dotted string) any {
+	var cur any = doc
+	for _, part := range strings.Split(dotted, ".") {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil
+		}
+		cur = m[part]
+	}
+	return cur
+}
+
+// Codex moved between 0.167 and 0.169 on the same machine: each configure
+// leaves exactly the switch that Codex reads in config.toml, and never both.
+func TestCodexSubAgentSwitchFollowsAnUpgradeAndADowngrade(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	steps := []struct {
+		version     string
+		has, hasNot string // table.key
+	}{
+		{"codex-cli 0.167.0", "features.multi_agent", "agents.enabled"},
+		{"codex-cli 0.169.0", "agents.enabled", "features.multi_agent"},
+		{"codex-cli 0.167.0", "features.multi_agent", "agents.enabled"},
+	}
+	for _, s := range steps {
+		withCodexVersion(t, s.version)
+		if err := writeCodexConfig(path, testKey); err != nil {
+			t.Fatal(err)
+		}
+		content := readFile(t, path)
+		doc, ok := codexTOML(content)
+		if !ok {
+			t.Fatalf("%s: not valid TOML:\n%s", s.version, content)
+		}
+		if codexTOMLGet(doc, s.has) != false {
+			t.Errorf("%s: %s is not false:\n%s", s.version, s.has, content)
+		}
+		if codexTOMLGet(doc, s.hasNot) != nil {
+			t.Errorf("%s: %s is still there:\n%s", s.version, s.hasNot, content)
+		}
+	}
+}
+
+// Tables the member already has, with keys of their own: the switch goes in
+// beside them, nothing of theirs is lost, and no table is defined twice.
+func TestCodexSubAgentSwitchJoinsTheMembersTables(t *testing.T) {
+	base := "model = \"m\"\nmodel_provider = \"nan\"\n\n"
+	cases := []struct{ name, tables, check string }{
+		{"features with another flag", "[features]\nother_flag = true\n", "features.other_flag"},
+		{"agents with a comment on the header", "[agents] # mine\nmax_threads = 4\n", "agents.max_threads"},
+		{"quoted agents header", "[\"agents\"]\nmax_threads = 4\n", "agents.max_threads"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			path := tempConfig(t, "config.toml")
+			if err := os.WriteFile(path, []byte(base+c.tables), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := writeCodexConfig(path, testKey); err != nil {
+				t.Fatal(err)
+			}
+			content := readFile(t, path)
+			doc, ok := codexTOML(content)
+			if !ok {
+				t.Fatalf("not valid TOML:\n%s", content)
+			}
+			if codexTOMLGet(doc, "agents.enabled") != false {
+				t.Errorf("sub-agents not switched off:\n%s", content)
+			}
+			if codexTOMLGet(doc, c.check) == nil {
+				t.Errorf("the member's %s was lost:\n%s", c.check, content)
+			}
+		})
+	}
+}
+
+// Defined some other way - an inline table - the switch is not added, and
+// the file stays valid rather than defining agents twice.
+func TestCodexSubAgentSwitchLeavesAnInlineTableAlone(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	in := "model = \"m\"\nmodel_provider = \"nan\"\nagents = { max_threads = 4 }\n"
+	if err := os.WriteFile(path, []byte(in), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	content := readFile(t, path)
+	doc, ok := codexTOML(content)
+	if !ok {
+		t.Fatalf("not valid TOML:\n%s", content)
+	}
+	if codexTOMLGet(doc, "agents.max_threads") != int64(4) {
+		t.Errorf("the member's inline table changed:\n%s", content)
+	}
+}
+
+// A root key the member already has, quoted or not, is not added again.
+func TestCodexNaNSessionDefaultsKeepTheMembersValues(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	in := "model = \"m\"\nmodel_provider = \"nan\"\n\"web_search\" = \"live\"\n\"model_catalog_json\" = \"/mine.json\"\n"
+	if err := os.WriteFile(path, []byte(in), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	doc, ok := codexTOML(readFile(t, path))
+	if !ok {
+		t.Fatal("not valid TOML")
+	}
+	if doc["web_search"] != "live" || doc["model_catalog_json"] != "/mine.json" {
+		t.Errorf("the member's values were replaced: %v %v", doc["web_search"], doc["model_catalog_json"])
+	}
+}
+
+// ── disconnecting takes back what the NaN root was given ─────────────────────
+
+func appendToFile(t *testing.T, path, text string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(text); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A disconnect takes all of it back, and the member's own content stays.
+func TestCodexRemovalTakesTheNaNOnlyRootKeys(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	appendToFile(t, path, "\n[projects.\"/home/member/repo\"]\ntrust_level = \"trusted\"\n")
+	if err := removeCodexConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	content := readFile(t, path)
+	if want := "[projects.\"/home/member/repo\"]\ntrust_level = \"trusted\"\n"; content != want {
+		t.Errorf("after the disconnect:\ngot:\n%q\nwant:\n%q", content, want)
+	}
+}
+
+// The older-Codex variant comes back out the same way.
+func TestCodexRemovalTakesTheMultiAgentSwitch(t *testing.T) {
+	withCodexVersion(t, "codex-cli 0.159.0")
+	path := tempConfig(t, "config.toml")
+	if err := writeCodexConfig(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCodexConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(path); err == nil {
+		t.Errorf("config.toml outlived the disconnect:\n%s", data)
+	}
+}
+
+// An [agents] table the member wrote with more in it than ours keeps the rest.
+func TestCodexRemovalKeepsAMembersAgentsTable(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	in := "model = \"m\"\nmodel_provider = \"nan\"\n\n[agents]\nenabled = false\nmax_threads = 4\n\n" +
+		"[model_providers.nan]\nbase_url = \"https://api.nan.builders/v1\"\n"
+	if err := os.WriteFile(path, []byte(in), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCodexConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	got := readFile(t, path)
+	doc, ok := codexTOML(got)
+	if !ok || doc["model_provider"] != nil {
+		t.Errorf("the root provider was not taken:\n%s", got)
+	}
+	if codexTOMLGet(doc, "agents.max_threads") != int64(4) {
+		t.Errorf("the member's [agents] table was taken:\n%s", got)
+	}
+	if codexTOMLGet(doc, "agents.enabled") != nil {
+		t.Errorf("agents.enabled, ours, stayed:\n%s", got)
+	}
+}
+
+// The catalogue this CLI wrote at the root goes on a disconnect, a path the
+// member chose does not - and neither does the web search they chose.
+func TestCodexRemovalKeepsAMembersOwnCatalogAndWebSearch(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	in := "model_provider = \"nan\"\nmodel_catalog_json = \"/mine.json\"\nweb_search = \"live\"\n\n" +
+		"[model_providers.nan]\nbase_url = \"https://api.nan.builders/v1\"\n"
+	if err := os.WriteFile(path, []byte(in), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCodexConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	got := readFile(t, path)
+	doc, ok := codexTOML(got)
+	if !ok || doc["model_provider"] != nil {
+		t.Errorf("the root provider was not taken:\n%s", got)
+	}
+	if doc["model_catalog_json"] != "/mine.json" || doc["web_search"] != "live" {
+		t.Errorf("the member's own values were taken:\n%s", got)
+	}
+}

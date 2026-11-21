@@ -15,8 +15,9 @@ import (
 // model was to quit and relaunch with another --profile.
 //
 // model_catalog_json replaces that catalogue. Pointed at this file from the
-// nan-* profiles - and only from them, so the member's OpenAI sessions keep
-// OpenAI's list - /model lists the cluster's chat models, each with the
+// nan-* profiles, and from the root of a config.toml whose default provider
+// is nan (one this CLI created), so the member's OpenAI sessions keep
+// OpenAI's list, /model lists the cluster's chat models, each with the
 // window it is served at, and the "Model metadata ... not found" warning goes
 // away because now there is metadata.
 //

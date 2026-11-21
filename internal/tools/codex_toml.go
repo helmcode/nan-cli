@@ -109,6 +109,72 @@ func codexTableHeader(lines []string, table string) int {
 	return -1
 }
 
+// Takes `key = value` out of the [table] block, and the block's header too
+// when nothing but blank lines is left under it. want is updated to match,
+// so the caller can verify the whole edit at the end. Lines are returned
+// unchanged when the table has no such line of its own (an inline table, a
+// dotted key at the root, or a different value).
+func codexTableKeyDropped(lines []string, want map[string]any, table, key string, value any) []string {
+	start := codexTableHeader(lines, table)
+	if start < 0 {
+		return lines
+	}
+	end := len(lines)
+	for i := start + 1; i < len(lines); i++ {
+		if codexIsHeader(lines[i]) {
+			end = i
+			break
+		}
+	}
+	at := -1
+	for i := start + 1; i < end; i++ {
+		if k, v, ok := codexLine(lines[i]); ok && k == key && reflect.DeepEqual(v, value) {
+			at = i
+			break
+		}
+	}
+	if at < 0 {
+		return lines
+	}
+	tbl, _ := want[table].(map[string]any)
+	delete(tbl, key)
+	empty := true
+	for i := start + 1; i < end; i++ {
+		if i != at && strings.TrimSpace(lines[i]) != "" {
+			empty = false
+		}
+	}
+	out := append([]string{}, lines[:start]...)
+	if empty && len(tbl) == 0 {
+		delete(want, table)
+		// The blank line that separated the block from what came before goes
+		// with it, so no double gap is left.
+		for len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" {
+			out = out[:len(out)-1]
+		}
+		if end < len(lines) && len(out) > 0 {
+			out = append(out, "")
+		}
+	} else {
+		out = append(out, lines[start:at]...)
+		out = append(out, lines[at+1:end]...)
+	}
+	return append(out, lines[end:]...)
+}
+
+// Takes `key = value` out of the root table (above the first header), and
+// deletes it from want. Unchanged when the root has no such line of its own.
+func codexRootKeyDropped(lines []string, want map[string]any, key string, value any) []string {
+	rootEnd := codexRootEnd(lines)
+	for i := 0; i < rootEnd; i++ {
+		if k, v, ok := codexLine(lines[i]); ok && k == key && reflect.DeepEqual(v, value) {
+			delete(want, key)
+			return append(append([]string{}, lines[:i]...), lines[i+1:]...)
+		}
+	}
+	return lines
+}
+
 // Replaces the string value of `key` in the [table] block with "", keeping
 // the line's indentation and every other line as it is. Lines are returned
 // unchanged when the table has no such line of its own (an inline table, a

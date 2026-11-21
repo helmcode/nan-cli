@@ -1698,10 +1698,12 @@ func TestCodexProfilesPointAtACatalogOfTheClustersModels(t *testing.T) {
 			t.Errorf("%s: a backslash in a TOML basic string is an escape: %s", m.ID, want)
 		}
 	}
-	// Only the profiles point at it. In config.toml it would take OpenAI's
-	// models out of the member's own sessions.
-	if strings.Contains(readFile(t, path), "model_catalog_json") {
-		t.Error("config.toml points at the catalogue, so OpenAI sessions lose their models")
+	// The starter config is a NaN session, so its root points at it too. A
+	// root with the member's own provider never does
+	// (TestCodexMemberRootGetsNoNaNOnlyKeys): it would take OpenAI's models
+	// out of their sessions.
+	if !strings.Contains(readFile(t, path), "model_catalog_json = "+fmt.Sprintf("%q", codexCatalogPath(home))) {
+		t.Error("the starter config does not point at the catalogue")
 	}
 }
 
