@@ -150,30 +150,11 @@ func ChatModels() []Model {
 	return out
 }
 
-// Retired are ids the cluster served once and no longer does. Asking for one
-// gets `401 This API key does not have access to the requested model`, which
-// reads like a problem with the key and is not. The writers that merge into a
-// config rather than rewrite it - opencode, droid, the Codex profiles - would
-// otherwise keep offering them forever, so they take these out on the next
-// setup run.
-var Retired = []string{
-	"mimo-v2.5", // replaced by mimo-v2.6-flash on 2026-10
-}
-
 // StaleContexts are windows this CLI once wrote for a model and has since
 // corrected. opencode keeps a `limit` that is already there, since it may be
 // the member's own, but one that matches a figure we wrote is ours to fix.
 var StaleContexts = map[string][]int{
 	"qwen3.8-flash": {262_144},
-}
-
-func IsRetired(id string) bool {
-	for _, r := range Retired {
-		if r == id {
-			return true
-		}
-	}
-	return false
 }
 
 // Default is what a tool is left pointing at when it has no preference of its
