@@ -39,7 +39,7 @@ func TestCodexSubAgentSwitchFollowsTheVersion(t *testing.T) {
 
 func TestCodexProfileGolden(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
@@ -65,7 +65,7 @@ enabled = false
 func TestCodexProfilesOnAnOlderCodexKeepMultiAgent(t *testing.T) {
 	withCodexVersion(t, "codex-cli 0.159.0")
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	m := catalog.ChatModels()[0]
@@ -137,7 +137,7 @@ func TestCodexProfilesFollowAnUpgradeAndADowngrade(t *testing.T) {
 		{"codex-cli 0.167.0", "multi_agent", "[agents]"},
 	} {
 		withCodexVersion(t, s.version)
-		if err := writeCodexConfig(path, testKey); err != nil {
+		if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 			t.Fatal(err)
 		}
 		body := readFile(t, profile)
@@ -153,13 +153,13 @@ func TestCodexProfilesFollowAnUpgradeAndADowngrade(t *testing.T) {
 // search nor sub-agents.
 func TestCodexStarterConfigGolden(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	codexModel, _ := catalog.Get(catalog.Coding)
 	want := fmt.Sprintf(`model = %q
 model_provider = "nan"
-model_context_window = %d
+%s
 model_catalog_json = %q
 web_search = "disabled"
 
@@ -171,7 +171,7 @@ name = "NaN"
 base_url = "https://api.nan.builders/v1"
 experimental_bearer_token = %q
 wire_api = "responses"
-`, codexModel.ID, codexModel.Context, codexCatalogPath(filepath.Dir(path)), testKey)
+`, codexModel.ID, codexWindowLine(codexModel.Context), codexCatalogPath(filepath.Dir(path)), testKey)
 	got := readFile(t, path)
 	if got != want {
 		t.Errorf("config.toml:\ngot:\n%s\nwant:\n%s", got, want)
@@ -179,7 +179,7 @@ wire_api = "responses"
 	assertCodexTOML(t, got)
 
 	// A second configure changes nothing, byte for byte.
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	if again := readFile(t, path); again != got {
@@ -195,7 +195,7 @@ func TestCodexMemberRootGetsNoNaNOnlyKeys(t *testing.T) {
 	if err := os.WriteFile(path, []byte("model = \"gpt-5\"\nmodel_provider = \"openai\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	doc, ok := codexTOML(readFile(t, path))
@@ -220,19 +220,23 @@ func TestCodexStarterConfigOfAnEarlierVersionIsBroughtUpToDate(t *testing.T) {
 	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	first := readFile(t, path)
 	fresh := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(fresh, testKey); err != nil {
+	if err := writeCodexConfig(fresh, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
-	// Same as a file created today, apart from the catalogue path's home.
-	if want := strings.ReplaceAll(readFile(t, fresh), filepath.ToSlash(filepath.Dir(fresh)), filepath.ToSlash(filepath.Dir(path))); first != want {
+	// Same as a file created today, apart from the catalogue path's home and
+	// the mark on the window: the line an earlier version wrote has none, and
+	// is still recognised by its value when NaN is taken out.
+	want := strings.ReplaceAll(readFile(t, fresh), filepath.ToSlash(filepath.Dir(fresh)), filepath.ToSlash(filepath.Dir(path)))
+	want = strings.ReplaceAll(want, " "+codexWindowMark, "")
+	if first != want {
 		t.Errorf("an earlier starter config was not brought up to date:\ngot:\n%s\nwant:\n%s", first, want)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	if second := readFile(t, path); second != first {
@@ -267,7 +271,7 @@ func TestCodexSubAgentSwitchFollowsAnUpgradeAndADowngrade(t *testing.T) {
 	}
 	for _, s := range steps {
 		withCodexVersion(t, s.version)
-		if err := writeCodexConfig(path, testKey); err != nil {
+		if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 			t.Fatal(err)
 		}
 		content := readFile(t, path)
@@ -299,7 +303,7 @@ func TestCodexSubAgentSwitchJoinsTheMembersTables(t *testing.T) {
 			if err := os.WriteFile(path, []byte(base+c.tables), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if err := writeCodexConfig(path, testKey); err != nil {
+			if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 				t.Fatal(err)
 			}
 			content := readFile(t, path)
@@ -325,7 +329,7 @@ func TestCodexSubAgentSwitchLeavesAnInlineTableAlone(t *testing.T) {
 	if err := os.WriteFile(path, []byte(in), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	content := readFile(t, path)
@@ -345,7 +349,7 @@ func TestCodexNaNSessionDefaultsKeepTheMembersValues(t *testing.T) {
 	if err := os.WriteFile(path, []byte(in), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	doc, ok := codexTOML(readFile(t, path))
@@ -376,7 +380,7 @@ func appendToFile(t *testing.T, path, text string) {
 // A disconnect takes all of it back, and the member's own content stays.
 func TestCodexRemovalTakesTheNaNOnlyRootKeys(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	appendToFile(t, path, "\n[projects.\"/home/member/repo\"]\ntrust_level = \"trusted\"\n")
@@ -393,7 +397,7 @@ func TestCodexRemovalTakesTheNaNOnlyRootKeys(t *testing.T) {
 func TestCodexRemovalTakesTheMultiAgentSwitch(t *testing.T) {
 	withCodexVersion(t, "codex-cli 0.159.0")
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	if err := removeCodexConfig(path); err != nil {
@@ -413,7 +417,7 @@ func TestCodexRemovalAfterTheRootWasSwitchedToTheMembersProvider(t *testing.T) {
 		t.Run(version, func(t *testing.T) {
 			withCodexVersion(t, version)
 			path := tempConfig(t, "config.toml")
-			if err := writeCodexConfig(path, testKey); err != nil {
+			if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 				t.Fatal(err)
 			}
 			home := filepath.Dir(path)

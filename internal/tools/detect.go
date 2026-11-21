@@ -2,12 +2,20 @@ package tools
 
 import (
 	"encoding/json"
+	"net/url"
 	"os"
 	"strings"
 )
 
 // nanHost is how a config is recognised as pointing at NaN.
 const nanHost = "api.nan.builders"
+
+// isNaNBase is whether a configured base URL is ours: its host is ours, not
+// merely a string that contains it (api.nan.builders.example.com is not).
+func isNaNBase(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && strings.EqualFold(u.Hostname(), nanHost)
+}
 
 func factoryConfigured(path string) bool {
 	data, err := os.ReadFile(path) //nolint:gosec // G304: a config file at a path this program chose

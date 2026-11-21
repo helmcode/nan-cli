@@ -40,7 +40,7 @@ func checked(t *testing.T, s Setup, key string) Setup {
 		t.Fatal("checkKey did not return a keyCheckedMsg")
 	}
 	s.key = key
-	s, _ = s.Update(context.Background(), msg, nil)
+	s, _ = s.Update(context.Background(), msg, nil, nil)
 	return s
 }
 
@@ -140,7 +140,7 @@ func TestOnboardingExplainsItselfAndCanBeSkipped(t *testing.T) {
 
 	// esc skips the key but still ends on how to get around: somebody who
 	// skipped is exactly who is about to be left alone with the dashboard.
-	s, _ = s.Update(context.Background(), tea.KeyPressMsg{Code: tea.KeyEscape}, nil)
+	s, _ = s.Update(context.Background(), tea.KeyPressMsg{Code: tea.KeyEscape}, nil, nil)
 	if !s.Active() {
 		t.Fatal("esc on the first run closed it before showing the tour")
 	}
@@ -154,7 +154,7 @@ func TestOnboardingExplainsItselfAndCanBeSkipped(t *testing.T) {
 		t.Error("skipping left a key to save")
 	}
 
-	s, _ = s.Update(context.Background(), tea.KeyPressMsg{Code: 'x', Text: "x"}, nil)
+	s, _ = s.Update(context.Background(), tea.KeyPressMsg{Code: 'x', Text: "x"}, nil, nil)
 	if s.Active() {
 		t.Error("a key on the tour did not close it")
 	}
@@ -165,7 +165,7 @@ func TestOnboardingExplainsItselfAndCanBeSkipped(t *testing.T) {
 func TestEscFromARerunLeavesStraightAway(t *testing.T) {
 	var s Setup
 	s.Start("", "")
-	s, _ = s.Update(context.Background(), tea.KeyPressMsg{Code: tea.KeyEscape}, nil)
+	s, _ = s.Update(context.Background(), tea.KeyPressMsg{Code: tea.KeyEscape}, nil, nil)
 	if s.Active() {
 		t.Error("esc from a re-run of Setup did not leave")
 	}
@@ -182,7 +182,7 @@ func prose(view string) string {
 // keypress. Dismissing used to hand back an empty flow and the key was lost.
 func TestDismissingTheSummaryHandsBackTheKey(t *testing.T) {
 	s := Setup{stage: setupDone, Key: "sk-2b8d0000aaaa441e", Tools: map[string]bool{"Pi": true}}
-	s, _ = s.Update(context.Background(), tea.KeyPressMsg{Code: 'x', Text: "x"}, nil)
+	s, _ = s.Update(context.Background(), tea.KeyPressMsg{Code: 'x', Text: "x"}, nil, nil)
 	if s.Active() {
 		t.Fatal("a key on the summary did not close it")
 	}
@@ -197,7 +197,7 @@ func TestTheTourOfferTakesOnlyItsTwoAnswers(t *testing.T) {
 	offer := func() Setup {
 		var s Setup
 		s.Onboard("", Guide{Keys: [][2]string{{"tab", "next area"}}, Tour: true})
-		s, _ = s.Update(context.Background(), tea.KeyPressMsg{Code: tea.KeyEscape}, nil)
+		s, _ = s.Update(context.Background(), tea.KeyPressMsg{Code: tea.KeyEscape}, nil, nil)
 		return s
 	}
 	s := offer()
@@ -207,14 +207,14 @@ func TestTheTourOfferTakesOnlyItsTwoAnswers(t *testing.T) {
 			t.Errorf("the offer does not say %q:\n%s", want, view)
 		}
 	}
-	if s, _ = s.Update(context.Background(), tea.KeyPressMsg{Code: 'x', Text: "x"}, nil); !s.Active() {
+	if s, _ = s.Update(context.Background(), tea.KeyPressMsg{Code: 'x', Text: "x"}, nil, nil); !s.Active() {
 		t.Error("a stray key answered the offer")
 	}
-	if s, _ = s.Update(context.Background(), tea.KeyPressMsg{Code: tea.KeyEnter}, nil); s.Active() || !s.TourRequested {
+	if s, _ = s.Update(context.Background(), tea.KeyPressMsg{Code: tea.KeyEnter}, nil, nil); s.Active() || !s.TourRequested {
 		t.Errorf("enter did not take the tour: active=%v requested=%v", s.Active(), s.TourRequested)
 	}
 	s = offer()
-	if s, _ = s.Update(context.Background(), tea.KeyPressMsg{Code: 's', Text: "s"}, nil); s.Active() || s.TourRequested {
+	if s, _ = s.Update(context.Background(), tea.KeyPressMsg{Code: 's', Text: "s"}, nil, nil); s.Active() || s.TourRequested {
 		t.Errorf("s did not skip the tour: active=%v requested=%v", s.Active(), s.TourRequested)
 	}
 }

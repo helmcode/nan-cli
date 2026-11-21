@@ -65,7 +65,7 @@ func assertNotWorldReadable(t *testing.T, path string) {
 
 func TestOpencodeConfigPublishesEveryModelWithItsWindow(t *testing.T) {
 	path := tempConfig(t, "opencode.json")
-	if err := writeOpencodeConfig(path, testKey); err != nil {
+	if err := writeOpencodeConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -122,7 +122,7 @@ func TestOpencodeConfigRepairsAnEntryWrittenByAnOlderVersion(t *testing.T) {
 	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeOpencodeConfig(path, testKey); err != nil {
+	if err := writeOpencodeConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -165,11 +165,11 @@ func TestOpencodeConfigTakesOutARetiredModel(t *testing.T) {
 	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeOpencodeConfig(path, testKey); err != nil {
+	if err := writeOpencodeConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	models := readJSON(t, path)["provider"].(map[string]any)["nan"].(map[string]any)["models"].(map[string]any)
-	for _, id := range catalog.Retired {
+	for _, id := range []string{"mimo-v2.5"} {
 		if _, ok := models[id]; ok {
 			t.Errorf("%s is still offered, and the cluster no longer serves it", id)
 		}
@@ -187,7 +187,7 @@ func TestOpencodeConfigKeepsWhatItDoesNotOwn(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"theme":"tokyonight","provider":{}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeOpencodeConfig(path, testKey); err != nil {
+	if err := writeOpencodeConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	if theme := readJSON(t, path)["theme"]; theme != "tokyonight" {
@@ -216,7 +216,7 @@ func piModels(t *testing.T, path string) map[string]map[string]any {
 
 func TestPiConfigIsAModelsJsonWithTheRealWindows(t *testing.T) {
 	path := tempConfig(t, "models.json")
-	if err := writePiConfig(path, testKey); err != nil {
+	if err := writePiConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -240,7 +240,7 @@ func TestPiConfigIsAModelsJsonWithTheRealWindows(t *testing.T) {
 
 func TestPiConfigWritesOnlyTheModalitiesPiAccepts(t *testing.T) {
 	path := tempConfig(t, "models.json")
-	if err := writePiConfig(path, testKey); err != nil {
+	if err := writePiConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	// Pi's schema is `("text" | "image")[]`. A third value fails validation and
@@ -261,7 +261,7 @@ func TestPiConfigLeavesOtherProvidersAlone(t *testing.T) {
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writePiConfig(path, testKey); err != nil {
+	if err := writePiConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	providers := readJSON(t, path)["providers"].(map[string]any)
@@ -288,7 +288,7 @@ func TestPiConfigIsRecognisedAsConfigured(t *testing.T) {
 	if isNaNConfigured("Pi", path) {
 		t.Error("an absent file reads as configured")
 	}
-	if err := writePiConfig(path, testKey); err != nil {
+	if err := writePiConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	if !isNaNConfigured("Pi", path) {
@@ -298,7 +298,7 @@ func TestPiConfigIsRecognisedAsConfigured(t *testing.T) {
 
 func TestCodexConfigSpeaksAWireProtocolCodexStillLoads(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
@@ -343,7 +343,7 @@ wire_api = "chat"
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
@@ -376,7 +376,7 @@ wire_api = "responses"
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
@@ -397,7 +397,7 @@ trust_level = "trusted"
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
@@ -421,7 +421,7 @@ func TestCodexConfigDoesNotTouchAnExistingChoice(t *testing.T) {
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
@@ -460,7 +460,7 @@ wire_api = "chat"
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
@@ -496,7 +496,7 @@ wire_api = "responses"
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
@@ -548,7 +548,7 @@ wire_api = "responses"
 // travel with the model it belongs to.
 func TestCodexProfilesGiveEveryModelItsOwnWindow(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
@@ -583,7 +583,7 @@ func TestCodexProfilesOfARetiredModelGoAway(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
@@ -601,7 +601,7 @@ func TestCodexProfilesOfARetiredModelGoAway(t *testing.T) {
 // ends the turn empty. The profiles are what keeps those tools out.
 func TestCodexProfilesLeaveOutTheToolsTheClusterCannotStream(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
@@ -643,7 +643,7 @@ func TestCodexProfileNamesAreNamesCodexAccepts(t *testing.T) {
 // eight more files to rotate, and eight more to leak.
 func TestCodexProfilesCarryNoKey(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
@@ -660,7 +660,7 @@ func TestCodexProfilesCarryNoKey(t *testing.T) {
 
 func TestCodexRemovalTakesTheProfilesAndNothingElse(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
@@ -691,7 +691,7 @@ func TestCodexRemovalTakesTheProfilesAndNothingElse(t *testing.T) {
 // for a model they no longer have.
 func TestCodexRemovalTakesTheWindowFromTheRootTable(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	if err := removeCodexConfig(path); err != nil {
@@ -737,7 +737,7 @@ wire_api = "responses"
 // provider that no longer resolves.
 func TestCodexRemovalTakesTheProfilesWithNoSectionLeft(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
@@ -759,7 +759,7 @@ func TestCodexRemovalTakesTheProfilesWithNoSectionLeft(t *testing.T) {
 // Same, with no config.toml at all.
 func TestCodexRemovalTakesTheProfilesWithNoConfigLeft(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
@@ -800,7 +800,7 @@ model_context_window = %d
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
@@ -823,7 +823,7 @@ model_context_window = %d
 
 func TestFactoryConfigMarksWhatCannotSeeImages(t *testing.T) {
 	path := tempConfig(t, "settings.json")
-	if err := writeFactoryConfig(path, testKey); err != nil {
+	if err := writeFactoryConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	cfg := readJSON(t, path)
@@ -872,7 +872,7 @@ func TestFactoryConfigTakesOutARetiredModel(t *testing.T) {
 	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeFactoryConfig(path, testKey); err != nil {
+	if err := writeFactoryConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	seen := map[string]bool{}
@@ -905,9 +905,9 @@ func TestEveryModelIsWrittenTheSameEverywhere(t *testing.T) {
 	factoryPath := filepath.Join(dir, "settings.json")
 	piPath := filepath.Join(dir, "models.json")
 	for _, err := range []error{
-		writeOpencodeConfig(opencodePath, testKey),
-		writeFactoryConfig(factoryPath, testKey),
-		writePiConfig(piPath, testKey),
+		writeOpencodeConfig(opencodePath, testKey, testCatalogue()),
+		writeFactoryConfig(factoryPath, testKey, testCatalogue()),
+		writePiConfig(piPath, testKey, testCatalogue()),
 	} {
 		if err != nil {
 			t.Fatal(err)
@@ -1033,7 +1033,7 @@ func TestConfigureToolsWritesEveryEnabledTool(t *testing.T) {
 // squarely in the failure the docs call the most common one.
 func TestPiConfigWritesTheDefaultsOrPiStillAnswers401(t *testing.T) {
 	path := tempConfig(t, "models.json")
-	if err := writePiConfig(path, testKey); err != nil {
+	if err := writePiConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1056,7 +1056,7 @@ func TestPiConfigKeepsTheSettingsItDoesNotOwn(t *testing.T) {
 	if err := os.WriteFile(settingsPath, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writePiConfig(path, testKey); err != nil {
+	if err := writePiConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1077,7 +1077,7 @@ func TestPiRemovalTakesTheDefaultItWrote(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "models.json")
 	settingsPath := filepath.Join(dir, "settings.json")
-	if err := writePiConfig(path, testKey); err != nil {
+	if err := writePiConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	if err := removePiConfig(path); err != nil {
@@ -1140,7 +1140,7 @@ func TestHermesIsRefusedWhenItDoesNotResolveTheReference(t *testing.T) {
 	}
 	t.Cleanup(func() { readHermesConfig = original })
 
-	err := writeHermesConfig(t.TempDir(), testKey)
+	err := writeHermesConfig(t.TempDir(), testKey, testCatalogue())
 	if err == nil {
 		t.Fatal("a Hermes that never resolved the key was reported as configured")
 	}
@@ -1161,14 +1161,14 @@ func TestHermesThatCannotAnswerIsNotTreatedAsBroken(t *testing.T) {
 	}
 	t.Cleanup(func() { readHermesConfig = original })
 
-	if err := writeHermesConfig(t.TempDir(), testKey); err != nil {
+	if err := writeHermesConfig(t.TempDir(), testKey, testCatalogue()); err != nil {
 		t.Errorf("an unanswerable check failed the whole step: %v", err)
 	}
 }
 
 func TestHermesIsConfiguredThroughItsOwnConfigCommand(t *testing.T) {
 	calls := recordHermes(t)
-	if err := writeHermesConfig(t.TempDir(), testKey); err != nil {
+	if err := writeHermesConfig(t.TempDir(), testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1207,7 +1207,7 @@ func TestHermesIsConfiguredThroughItsOwnConfigCommand(t *testing.T) {
 func TestHermesNeverReceivesTheKeyAsAnArgument(t *testing.T) {
 	calls := recordHermes(t)
 	home := t.TempDir()
-	if err := writeHermesConfig(home, testKey); err != nil {
+	if err := writeHermesConfig(home, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1237,7 +1237,7 @@ func TestHermesEnvKeepsEverythingElseInTheFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := writeHermesConfig(home, testKey); err != nil {
+	if err := writeHermesConfig(home, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	after := readFile(t, envPath)
@@ -1268,7 +1268,7 @@ func TestHermesEnvKeepsEverythingElseInTheFile(t *testing.T) {
 // open with.
 func TestHermesIsNotSentAModelCatalogue(t *testing.T) {
 	calls := recordHermes(t)
-	if err := writeHermesConfig(t.TempDir(), testKey); err != nil {
+	if err := writeHermesConfig(t.TempDir(), testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range *calls {
@@ -1345,7 +1345,7 @@ func TestHermesConfigAgainstTheRealBinary(t *testing.T) {
 	// Never the member's own Hermes: HERMES_HOME is what the writer passes to
 	// every call, so the whole exchange lands in a directory of this test's.
 	home := t.TempDir()
-	if err := writeHermesConfig(home, testKey); err != nil {
+	if err := writeHermesConfig(home, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1512,7 +1512,7 @@ func TestAConfigThatDoesNotParseIsLeftExactlyAsItIs(t *testing.T) {
 	for _, c := range []struct {
 		name  string
 		file  string
-		write func(path, key string) error
+		write func(path, key string, cat []catalog.Model) error
 	}{
 		{"Factory AI", "settings.json", writeFactoryConfig},
 		{"OpenCode", "opencode.json", writeOpencodeConfig},
@@ -1524,7 +1524,7 @@ func TestAConfigThatDoesNotParseIsLeftExactlyAsItIs(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			err := c.write(path, testKey)
+			err := c.write(path, testKey, testCatalogue())
 			if err == nil {
 				t.Fatal("a config that does not parse was written over without a word")
 			}
@@ -1629,7 +1629,7 @@ func isNaNConfigured(name, path string) bool {
 }
 
 func configureTools(apiKey string, ticked map[string]bool) (string, []string, []Failure) {
-	r := Apply(apiKey, ticked)
+	r := Apply(apiKey, ticked, testCatalogue())
 	return r.Summary(), r.Written, r.Failed
 }
 
@@ -1643,7 +1643,7 @@ func RemoveNanFromTools() (removed []string, failed []string) {
 
 func TestCodexProfilesPointAtACatalogOfTheClustersModels(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
@@ -1728,7 +1728,7 @@ func TestCodexCatalogPromptIsTheOneCodexAlreadySent(t *testing.T) {
 
 func TestCodexRemovalTakesTheCatalog(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	if err := removeCodexConfig(path); err != nil {
@@ -1758,7 +1758,7 @@ func TestOpencodeConfigCorrectsAWindowWeGotWrong(t *testing.T) {
 	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeOpencodeConfig(path, testKey); err != nil {
+	if err := writeOpencodeConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	models := readJSON(t, path)["provider"].(map[string]any)["nan"].(map[string]any)["models"].(map[string]any)
@@ -1781,7 +1781,7 @@ func TestOpencodeConfigCorrectsAWindowWeGotWrong(t *testing.T) {
 // leaves nothing of NaN behind - and no file, since there is nothing else in it.
 func TestCodexRemovalOnAFileItCreatedLeavesNothing(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	if err := removeCodexConfig(path); err != nil {
@@ -1801,7 +1801,7 @@ func TestCodexRemovalOnAFileItCreatedLeavesNothing(t *testing.T) {
 // NaN go.
 func TestCodexRemovalKeepsWhatTheMemberAddedAfterUs(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	theirs := "\n[model_providers.mine]\nname = \"Mine\"\nbase_url = \"https://example.invalid/v1\"\n\n" +
@@ -1836,7 +1836,7 @@ func TestCodexRemovalKeepsTheMembersOwnProvider(t *testing.T) {
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	if err := removeCodexConfig(path); err != nil {
@@ -1936,7 +1936,7 @@ func TestSigningOutBlanksTheKeyWhenCodexRefuses(t *testing.T) {
 // while config.toml still names them.
 func TestCodexRemovalRefusalKeepsProfilesAndCatalog(t *testing.T) {
 	path := tempConfig(t, "config.toml")
-	if err := writeCodexConfig(path, testKey); err != nil {
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Dir(path)
@@ -2058,7 +2058,7 @@ func TestUntickingCodexRepairsAnOrphanedRootProvider(t *testing.T) {
 	if err := os.WriteFile(path, []byte(codexOrphanRoot), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	r := Apply(testKey, map[string]bool{"Codex": false})
+	r := Apply(testKey, map[string]bool{"Codex": false}, testCatalogue())
 	if len(r.Failed) != 0 || r.Removed != 1 {
 		t.Fatalf("removed %d, failed %v", r.Removed, r.Failed)
 	}

@@ -85,10 +85,22 @@ func codexBefore168(version string) bool {
 	return major == 0 && minor < 168
 }
 
-func writeCodexConfig(cfgPath, apiKey string) error {
+func writeCodexConfig(cfgPath, apiKey string, cat []catalog.Model) error {
 	data, _ := os.ReadFile(cfgPath) //nolint:gosec // G304: a config file at a path this program chose
 	use, other := codexSubAgentSwitches(codexVersion())
-	codexModel, _ := catalog.Get(catalog.Coding)
+	// The model a starter config opens with: the coding model, or - when the
+	// member cannot call it - one they can. Its window is the platform's, and
+	// is left out when nobody reported one.
+	startID := catalog.Pick(cat, catalog.Coding)
+	window := 0
+	for _, m := range cat {
+		if m.ID == startID {
+			window = m.Context
+		}
+	}
+	// The window older versions of this CLI wrote, unmarked, for the coding
+	// model: still ours to take out.
+	legacy, _ := catalog.Get(catalog.Coding)
 
 	if strings.Contains(string(data), "api.nan.builders") {
 		// Already pointing at the cluster, so there is nothing to add - but
@@ -105,9 +117,9 @@ func writeCodexConfig(cfgPath, apiKey string) error {
 		// an error dialog and nothing else. Repairing the wire_api alone left
 		// that member exactly as stuck as before, so the pruning runs first
 		// and puts the key back where it is read from.
-		repaired, pruned := codexContextWindowsPruned(data, codexModel.Context)
+		repaired, pruned := codexContextWindowsPruned(data, legacy.Context)
 		if pruned {
-			repaired = []byte(withCodexContextWindow(string(repaired), codexModel.Context))
+			repaired = []byte(withCodexContextWindow(string(repaired), window))
 		}
 		rewired, changed := codexWireAPIRepaired(repaired)
 		defaulted := withCodexNaNSessionDefaults(string(rewired), filepath.Dir(cfgPath), use, other)
@@ -116,26 +128,29 @@ func writeCodexConfig(cfgPath, apiKey string) error {
 				return err
 			}
 		}
-		return writeCodexProfiles(filepath.Dir(cfgPath), use)
+		return writeCodexProfiles(filepath.Dir(cfgPath), use, cat)
 	}
 
 	// If no existing config, write a complete starter config.
 	if len(data) == 0 {
+		windowLine := ""
+		if window > 0 {
+			windowLine = codexWindowLine(window) + "\n"
+		}
 		content := fmt.Sprintf(`model = %q
 model_provider = "nan"
-model_context_window = %d
-
+%s
 [model_providers.nan]
 name = "NaN"
 base_url = "https://api.nan.builders/v1"
 experimental_bearer_token = %q
 wire_api = "responses"
-`, codexModel.ID, codexModel.Context, apiKey)
+`, startID, windowLine, apiKey)
 		content = withCodexNaNSessionDefaults(content, filepath.Dir(cfgPath), use, other)
 		if err := writeConfigFile(cfgPath, []byte(content)); err != nil {
 			return err
 		}
-		return writeCodexProfiles(filepath.Dir(cfgPath), use)
+		return writeCodexProfiles(filepath.Dir(cfgPath), use, cat)
 	}
 
 	// Existing config: only append the provider section; preserve user's model/provider choices.
@@ -147,13 +162,13 @@ experimental_bearer_token = %q
 wire_api = "responses"
 `, apiKey)
 	content := strings.TrimRight(string(data), "\n") + "\n" + section
-	content = withCodexContextWindow(content, codexModel.Context)
+	content = withCodexContextWindow(content, window)
 	// A root that already says model_provider = "nan" is a NaN session too.
 	content = withCodexNaNSessionDefaults(content, filepath.Dir(cfgPath), use, other)
 	if err := writeConfigFile(cfgPath, []byte(content)); err != nil {
 		return err
 	}
-	return writeCodexProfiles(filepath.Dir(cfgPath), use)
+	return writeCodexProfiles(filepath.Dir(cfgPath), use, cat)
 }
 
 // What a --profile run already gets, given to the default run when the
@@ -262,28 +277,31 @@ func withCodexNaNSessionDefaults(content, codexHome string, use, other codexSwit
 // the disconnect as well; a root whose provider is the member's own never
 // does, since they would take search and the model list from their OpenAI
 // sessions.
-func writeCodexProfiles(codexHome string, subAgents codexSwitch) error {
+func writeCodexProfiles(codexHome string, subAgents codexSwitch, cat []catalog.Model) error {
 	// Starting from none, so a model the cluster retired does not leave its
 	// profile behind to answer 401 on `--profile`.
 	if err := removeCodexProfiles(codexHome); err != nil {
 		return err
 	}
-	models, err := codexCatalog()
+	models, err := codexCatalog(cat)
 	if err != nil {
 		return err
 	}
 	if err := writeConfigFile(filepath.Join(codexHome, codexCatalogFile), models); err != nil {
 		return err
 	}
-	for _, m := range catalog.ChatModels() {
+	for _, m := range cat {
+		windowLine := ""
+		if m.Context > 0 {
+			windowLine = fmt.Sprintf("model_context_window = %d\n", m.Context)
+		}
 		body := fmt.Sprintf(`# Written by the NaN CLI. Disconnecting Codex removes it.
 model = %q
 model_provider = "nan"
-model_context_window = %d
-model_catalog_json = %q
+%smodel_catalog_json = %q
 web_search = "disabled"
 
-%s`, m.ID, m.Context, codexCatalogPath(codexHome), subAgents.off())
+%s`, m.ID, windowLine, codexCatalogPath(codexHome), subAgents.off())
 		path := filepath.Join(codexHome, codexProfileName(m.ID)+".config.toml")
 		if err := writeConfigFile(path, []byte(body)); err != nil {
 			return err
@@ -320,6 +338,21 @@ func removeCodexProfiles(codexHome string) error {
 	return nil
 }
 
+// The root window carries a mark, so taking NaN out later knows the line is
+// ours whatever number the platform reported - a figure that moves with the
+// catalogue cannot be recognised by its value. Keys written before the mark
+// existed are matched by the value they had.
+const codexWindowMark = "# nan-cli"
+
+func codexWindowLine(window int) string {
+	return fmt.Sprintf("model_context_window = %d %s", window, codexWindowMark)
+}
+
+func codexWindowIsOurs(value, legacy string) bool {
+	v := strings.TrimSpace(value)
+	return strings.HasSuffix(v, codexWindowMark) || v == legacy
+}
+
 // Codex has no metadata for a model on this cluster, so without
 // model_context_window it compacts against a window it guessed. (It prints
 // the "metadata not found" warning either way - that fires before it reads
@@ -331,7 +364,10 @@ func removeCodexProfiles(codexHome string) error {
 // became a key of the last project they trusted, and Codex never looked
 // there.
 func withCodexContextWindow(content string, window int) string {
-	declared := fmt.Sprintf("model_context_window = %d", window)
+	if window <= 0 {
+		return content // nobody reported one: Codex keeps its own
+	}
+	declared := codexWindowLine(window)
 	lines := strings.Split(content, "\n")
 	for i, raw := range lines {
 		trimmed := strings.TrimSpace(raw)
@@ -428,7 +464,7 @@ func codexContextWindowsSwept(data []byte, window int, keepRoot bool) ([]byte, b
 			out = append(out, line)
 			continue
 		}
-		mine := strings.TrimSpace(value) == ours
+		mine := codexWindowIsOurs(value, ours)
 		drop := false
 		switch {
 		case inProjects:

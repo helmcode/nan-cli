@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	catalog "github.com/helmcode/nan-cli/internal/models"
 )
 
 // Tool is one coding tool this CLI knows how to configure.
@@ -30,7 +32,7 @@ type Tool struct {
 	Open     string
 	NextStep string
 
-	apply      func(t Tool, apiKey string) error
+	apply      func(t Tool, apiKey string, cat []catalog.Model) error
 	remove     func(t Tool) error
 	configured func(path string) bool
 	// keyFiles are the files that hold the key once it is written. For
@@ -56,7 +58,7 @@ func Registry() []Tool {
 			ConfigPath: filepath.Join(home, ".factory", "settings.json"),
 			Open:       "droid",
 			NextStep:   "pick a model with (NaN) in its name",
-			apply:      func(t Tool, key string) error { return writeFactoryConfig(t.ConfigPath, key) },
+			apply:      func(t Tool, key string, cat []catalog.Model) error { return writeFactoryConfig(t.ConfigPath, key, cat) },
 			remove:     func(t Tool) error { return removeFactoryConfig(t.ConfigPath) },
 			configured: factoryConfigured,
 		},
@@ -66,7 +68,9 @@ func Registry() []Tool {
 			ConfigPath: filepath.Join(home, ".config", "opencode", "opencode.json"),
 			Open:       "opencode",
 			NextStep:   "then /models inside it, and pick a NaN one",
-			apply:      func(t Tool, key string) error { return writeOpencodeConfig(t.ConfigPath, key) },
+			apply: func(t Tool, key string, cat []catalog.Model) error {
+				return writeOpencodeConfig(t.ConfigPath, key, cat)
+			},
 			remove:     func(t Tool) error { return removeOpencodeConfig(t.ConfigPath) },
 			configured: opencodeConfigured,
 		},
@@ -77,7 +81,7 @@ func Registry() []Tool {
 			InstallPath: filepath.Join(home, ".pi"),
 			Open:        "pi",
 			NextStep:    "NaN is already its default provider",
-			apply:       func(t Tool, key string) error { return writePiConfig(t.ConfigPath, key) },
+			apply:       func(t Tool, key string, cat []catalog.Model) error { return writePiConfig(t.ConfigPath, key, cat) },
 			remove:      func(t Tool) error { return removePiConfig(t.ConfigPath) },
 			configured:  piConfigured,
 		},
@@ -87,7 +91,7 @@ func Registry() []Tool {
 			ConfigPath: filepath.Join(home, ".codex", "config.toml"),
 			Open:       "codex",
 			NextStep:   "already aimed at the cluster; codex --model <id> to switch",
-			apply:      func(t Tool, key string) error { return writeCodexConfig(t.ConfigPath, key) },
+			apply:      func(t Tool, key string, cat []catalog.Model) error { return writeCodexConfig(t.ConfigPath, key, cat) },
 			remove:     func(t Tool) error { return removeCodexConfig(t.ConfigPath) },
 			configured: codexConfigured,
 		},
@@ -102,9 +106,11 @@ func Registry() []Tool {
 			InstallPath: hermes,
 			Open:        "hermes doctor",
 			NextStep:    "says whether the provider answers, then talk to it",
-			apply:       func(t Tool, key string) error { return writeHermesConfig(filepath.Dir(t.ConfigPath), key) },
-			remove:      func(t Tool) error { return removeHermesConfig(filepath.Dir(t.ConfigPath)) },
-			configured:  mentionsNaN,
+			apply: func(t Tool, key string, cat []catalog.Model) error {
+				return writeHermesConfig(filepath.Dir(t.ConfigPath), key, cat)
+			},
+			remove:     func(t Tool) error { return removeHermesConfig(filepath.Dir(t.ConfigPath)) },
+			configured: mentionsNaN,
 			// Its config.yaml carries a reference; the secret is in its .env.
 			keyFiles: func(t Tool) []string { return []string{hermesEnvPath(filepath.Dir(t.ConfigPath))} },
 		},
@@ -166,13 +172,17 @@ func Enabled(ticked map[string]bool, name string) bool {
 	return true
 }
 
-// Apply writes NaN into the tool, then makes sure every file holding the key
-// is private to the member.
-func (t Tool) Apply(apiKey string) error {
+// Apply writes NaN into the tool, with the models in cat, then makes sure
+// every file holding the key is private to the member. An empty catalogue is
+// refused here, once, so no writer is ever asked to configure nothing.
+func (t Tool) Apply(apiKey string, cat []catalog.Model) error {
 	if t.apply == nil {
 		return fmt.Errorf("%s cannot be configured by this version", t.Name)
 	}
-	if err := t.apply(t, apiKey); err != nil {
+	if len(cat) == 0 {
+		return catalog.ErrNoModels
+	}
+	if err := t.apply(t, apiKey, cat); err != nil {
 		return err
 	}
 	// Every writer can decide it has nothing to change - a tool already
@@ -275,13 +285,14 @@ func (r Result) Summary() string {
 	return strings.Join(parts, "  ·  ")
 }
 
-// Apply configures every installed tool that is ticked and takes NaN out of
-// every installed one that is not, which is how unticking a tool undoes it.
-func Apply(apiKey string, ticked map[string]bool) Result {
+// Apply configures every installed tool that is ticked, with the models in
+// cat, and takes NaN out of every installed one that is not, which is how
+// unticking a tool undoes it.
+func Apply(apiKey string, ticked map[string]bool, cat []catalog.Model) Result {
 	var r Result
 	for _, st := range Installed(Detect()) {
 		if Enabled(ticked, st.Name) {
-			if err := st.Apply(apiKey); err != nil {
+			if err := st.Apply(apiKey, cat); err != nil {
 				r.Failed = append(r.Failed, Failure{Tool: st.Name, Err: err})
 				continue
 			}
