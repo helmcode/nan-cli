@@ -1,4 +1,10 @@
-// Package models is the CLI's one list of what the cluster serves.
+// Package models is what the CLI knows about the cluster's models, and how a
+// platform model list becomes what the tool writers take (catalogue.go).
+//
+// The table below is NOT the list of what to configure: Setup configures what
+// the platform says the member can call, and uses this table only for the
+// display name and, where the platform reports no figures, the numbers. It
+// was a hand-written list three times before, which is how it drifted.
 //
 // It existed three times before, written by hand inside each tool writer in
 // internal/tui, and all three had drifted to the same stale set: qwen3.6,
