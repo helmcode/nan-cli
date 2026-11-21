@@ -84,6 +84,30 @@ out="$(run "$h" /usr/bin/fish Linux 'check_path "$HOME/elsewhere"')" || fail "cu
 [ -z "$(ls -A "$h")" ] || fail "custom fish: a file was written in HOME"
 expect_has "$out" "    fish_add_path '$h/elsewhere'" "custom fish: prints fish syntax"
 
+# macOS bash: the profile a Terminal.app login shell reads.
+h="$tmp/macbash"
+run "$h" /bin/bash Darwin 'check_path "$HOME/.local/bin"' >/dev/null || fail "macOS bash: check_path failed"
+expect_eq "$(grep -cxF "$sh_line" "$h/.bash_profile")" 1 "macOS bash: written to .bash_profile"
+[ ! -e "$h/.bashrc" ] || fail "macOS bash: .bashrc written"
+
+# A shell that does not read ~/.profile: the file is still written, but no
+# success is claimed and the line is handed over.
+h="$tmp/tcsh"
+out="$(run "$h" /bin/tcsh Linux 'check_path "$HOME/.local/bin"')" || fail "tcsh: check_path failed"
+expect_eq "$(grep -cxF "$sh_line" "$h/.profile")" 1 "tcsh: ~/.profile is still written"
+expect_has "$out" "if your shell doesn't read ~/.profile, add this line yourself: $sh_line" "tcsh: hands over the line"
+case "$out" in *"added "*) fail "tcsh: claimed success" ;; esac
+
+# Root with no INSTALL_DIR: machine-wide default. Fake id on PATH.
+fakebin="$tmp/fakebin"; mkdir -p "$fakebin"
+printf '#!/bin/sh\n[ "$1" = -u ] && echo "${FAKE_UID:-1000}" || echo tester\n' > "$fakebin/id"
+printf '#!/bin/sh\nexit 1\n' > "$fakebin/sudo"
+chmod +x "$fakebin/id" "$fakebin/sudo"
+dir_for() { env -i HOME="$tmp/roothome" FAKE_UID="$1" PATH="$fakebin:/usr/bin:/bin" $2 bash -c 'source "$1"; printf %s "$INSTALL_DIR"' _ "$installer"; }
+expect_eq "$(dir_for 0 '')" /usr/local/bin "root: defaults to /usr/local/bin"
+expect_eq "$(dir_for 0 INSTALL_DIR=/opt/x)" /opt/x "root: an explicit INSTALL_DIR wins"
+expect_eq "$(dir_for 1000 '')" "$tmp/roothome/.local/bin" "user: defaults to ~/.local/bin"
+
 # --- warn_if_shadowed --------------------------------------------------------
 h="$tmp/shadow"; mkdir -p "$h/old" "$h/.local/bin"
 expect_eq "$(run "$h" /bin/zsh Linux 'warn_if_shadowed "" "$HOME/.local/bin"')" "" "shadow: nothing found, nothing said"
@@ -99,6 +123,11 @@ if [ "$(id -u)" != 0 ]; then
   h="$tmp/ro"; mkdir -p "$h/old"; chmod 555 "$h/old"
   out="$(run "$h" /bin/zsh Linux 'warn_if_shadowed "$HOME/old/nan" "$HOME/.local/bin"')"
   expect_has "$out" "remove it: sudo rm '$h/old/nan'" "shadow: sudo rm for a root-owned dir"
+
+  # A root-owned ~/.local gets a chown hint before the sudo fallback.
+  h="$tmp/rootowned"; mkdir -p "$h/.local"; chmod 555 "$h/.local"
+  out="$(env -i HOME="$h" SHELL=/bin/zsh PATH="$fakebin:/usr/bin:/bin" bash -c 'source "$1"; install_bin /bin/ls "$HOME/.local/bin"' _ "$installer" 2>&1)" || true
+  expect_has "$out" "sudo chown -R \"\$(id -un)\" '$h/.local'" "unwritable ~/.local: chown hint"
 
   h="$tmp/locked"; mkdir -p "$h"; touch "$h/.zshrc"; chmod 444 "$h/.zshrc"
   out="$(run "$h" /bin/zsh Linux 'check_path "$HOME/.local/bin"')" || fail "unwritable profile: the installer aborted"

@@ -8,6 +8,14 @@ REPO="${REPO:-helmcode/nan-cli}"
 # check_path only edits a shell profile for this default: a custom INSTALL_DIR
 # is a deliberate choice and must not come with a silent profile edit.
 DEFAULT_INSTALL_DIR="$HOME/.local/bin"
+# As root with no INSTALL_DIR (`curl ... | sudo bash`), $HOME is root's home on
+# most systems: installing there, and editing root's profile, would leave the
+# person who ran sudo with "command not found". Keep the machine-wide default.
+ROOT_DEFAULT=""
+if [ -z "${INSTALL_DIR:-}" ] && [ "$(id -u)" = 0 ]; then
+  INSTALL_DIR="/usr/local/bin"
+  ROOT_DEFAULT=1
+fi
 INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
 VERSION="${VERSION:-}"
 
@@ -180,6 +188,14 @@ install_bin() {
   if install -d "$dest_dir" && install -m 755 "$src" "$dest_dir/nan" 2>/dev/null; then
     return 0
   fi
+  # A directory root made under the user's home (an old `sudo pip install
+  # --user`, say) is fixed once with chown; sudo-installing into it every time
+  # only keeps it root-owned.
+  local anc="$dest_dir"
+  while [ ! -e "$anc" ]; do anc="$(dirname "$anc")"; done
+  case "$anc" in
+    "$HOME"/*) [ -w "$anc" ] || warn "$anc is not writable by you; to fix it for good: sudo chown -R \"\$(id -un)\" $(quote_for_shell "$anc")" ;;
+  esac
   warn "no write access to $dest_dir, retrying with sudo..."
   sudo install -d "$dest_dir" && sudo install -m 755 "$src" "$dest_dir/nan"
 }
@@ -257,6 +273,14 @@ check_path() {
     printf "    %s\n" "$line"
     return
   fi
+  case "$(login_shell)" in
+    zsh|bash|fish) ;;
+    *)
+      warn "wrote $profile, but your shell ($(login_shell)) may not read it;"
+      warn "if your shell doesn't read ~/.profile, add this line yourself: $line"
+      return
+      ;;
+  esac
   log "added $dir to PATH in $profile"
   warn "open a new terminal to use nan, or run: source $(quote_for_shell "$profile")"
 }
@@ -267,8 +291,8 @@ check_path() {
 warn_if_shadowed() {
   local found="$1" install_dir="$2" found_dir
   [ -n "$found" ] || return 0
-  found_dir="$(cd "$(dirname "$found")" 2>/dev/null && pwd -P)" || return 0
-  [ "$found_dir" != "$(cd "$install_dir" 2>/dev/null && pwd -P)" ] || return 0
+  found_dir="$(CDPATH= cd "$(dirname "$found")" 2>/dev/null && pwd -P)" || return 0
+  [ "$found_dir" != "$(CDPATH= cd "$install_dir" 2>/dev/null && pwd -P)" ] || return 0
   warn "an older nan at $found may run instead of $install_dir/nan"
   if [ -w "$found_dir" ]; then
     warn "remove it: rm $(quote_for_shell "$found")"
@@ -314,6 +338,7 @@ main() {
 
   existing_nan="$(type -P nan 2>/dev/null || true)"
 
+  [ -z "$ROOT_DEFAULT" ] || info "running as root: installing machine-wide to $INSTALL_DIR (set INSTALL_DIR to change)"
   info "installing to ${INSTALL_DIR}/nan..."
   install_bin "$tmpdir/nan" "$INSTALL_DIR"
 
