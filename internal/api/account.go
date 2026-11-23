@@ -18,6 +18,17 @@ type Me struct {
 	// GraceUntil is set only while a membership that ended keeps its apps
 	// and data, RFC 3339.
 	GraceUntil string `json:"graceUntil,omitempty"`
+	// State is where the membership stands: subscribed, free, grace, churned...
+	State string `json:"state,omitempty"`
+	// Profile is what the member told the community about themselves.
+	Profile *MeProfile `json:"profile,omitempty"`
+}
+
+// MeProfile is the member's own description of themselves.
+type MeProfile struct {
+	FullName     string `json:"fullName,omitempty"`
+	JobRole      string `json:"jobRole,omitempty"`
+	JobRoleOther string `json:"jobRoleOther,omitempty"`
 }
 
 // Me fetches the signed-in member.

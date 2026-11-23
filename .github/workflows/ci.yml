@@ -282,8 +282,10 @@ jobs:
       - uses: actions/checkout@v7
 
       # INSTALL_DIR inside the runner's temp, so there is no sudo prompt and
-      # nothing to clean up. The default path is /usr/local/bin and that is
-      # what the sudo fallback is for; this checks the installer, not sudo.
+      # nothing to clean up. The default path is now the writable per-user
+      # $HOME/.local/bin (no sudo required); this checks the installer, not
+      # sudo. The sudo fallback is for a custom INSTALL_DIR that is not
+      # writable, as the /opt test below exercises.
       # /bin/bash explicitly, and the versions on the log, so which shell this
       # ran under is a fact and not an assumption. macOS ships bash 3.2.57 -
       # frozen in 2007 by its licence - where several things that work
@@ -305,14 +307,32 @@ jobs:
           # one rather than panic, which is the state a fresh machine is in.
           "$RUNNER_TEMP/bin/nan" me || true
 
-      # The default path, with no INSTALL_DIR. This is what the one-liner on
-      # nan.builders actually does, and it is the line printed in the README.
-      - name: Install where the one-liner puts it
+      # The PATH handling, with no download: scripts/install_test.sh sources the
+      # installer and calls each function under a throwaway HOME. The same
+      # script runs on a laptop.
+      - name: The PATH logic
+        run: /bin/bash scripts/install_test.sh
+
+      # The default path, no INSTALL_DIR: what the one-liner on nan.builders
+      # does. Under a throwaway HOME and a PATH without ~/.local/bin, so the
+      # installer has to write the profile line itself. Then a new terminal's
+      # shell - login bash on macOS, interactive bash on Linux - has to find
+      # nan through that line and nothing else.
+      - name: A new terminal finds the default install
         run: |
           set -euo pipefail
-          /bin/bash scripts/install.sh
-          command -v nan
-          nan --version
+          home="$RUNNER_TEMP/member"
+          mkdir -p "$home"
+          env -i HOME="$home" SHELL=/bin/bash PATH=/usr/bin:/bin GITHUB_TOKEN="$GITHUB_TOKEN" \
+            /bin/bash scripts/install.sh
+          test -x "$home/.local/bin/nan"
+          if [ "$RUNNER_OS" = "macOS" ]; then mode=-l; else mode=-i; fi
+          found="$(env -i HOME="$home" PATH=/usr/bin:/bin /bin/bash "$mode" -c 'command -v nan' 2>/dev/null || true)"
+          if [ "$found" != "$home/.local/bin/nan" ]; then
+            echo "::error::a new terminal resolved nan to '$found', want $home/.local/bin/nan" >&2
+            exit 1
+          fi
+          env -i HOME="$home" PATH=/usr/bin:/bin /bin/bash "$mode" -c 'nan --version' 2>/dev/null
 
       # The version lookup failing has to SAY so. It did not: the pipeline runs
       # under `set -euo pipefail`, so a grep finding no tag_name - which is the
@@ -343,7 +363,7 @@ jobs:
 
       # And the branch nobody had ever taken: a destination the user cannot
       # write to, where install_bin falls back to sudo. On a runner both
-      # /usr/local/bin and the temp dir are writable, so the fallback would
+      # $HOME/.local/bin and the temp dir are writable, so the fallback would
       # never fire on its own and "it installs fine" would say nothing about
       # it. A root-owned directory forces it.
       - name: Force the sudo fallback
