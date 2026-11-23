@@ -586,3 +586,27 @@ func TestOpeningWithoutASessionAsksNothingUntilTheMemberDoes(t *testing.T) {
 		t.Errorf("enter made %d device requests, want 1", n)
 	}
 }
+
+// Setup never asks for a sign-in (#81): signed out with a key already saved,
+// e opens Setup straight on the key step, and confirming the saved key moves
+// on without a detour through the device sign-in.
+func TestSetupWhileSignedOutNeverDetoursThroughSignIn(t *testing.T) {
+	m, p := demoModel(t, 120, 40)
+	m.session.Token = ""
+	m.client = api.New("")
+
+	m = press(t, m, keyOf("e"))
+	if !m.setup.Active() || m.signIn.Active() {
+		t.Fatalf("e signed out: setup=%v signIn=%v", m.setup.Active(), m.signIn.Active())
+	}
+	m = press(t, m, keyOf("enter")) // submit the saved key
+	if m.signIn.Active() {
+		t.Fatal("confirming the saved key started a sign-in")
+	}
+	if !p.saw("GET /v1/models") {
+		t.Error("the saved key was not checked against the cluster")
+	}
+	if p.saw("/api/auth") {
+		t.Error("Setup signed out reached for the platform's auth")
+	}
+}
