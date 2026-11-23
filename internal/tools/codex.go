@@ -119,8 +119,12 @@ func writeCodexConfig(cfgPath, apiKey string, cat []catalog.Model) error {
 		// and puts the key back where it is read from.
 		repaired, pruned := codexContextWindowsPruned(data, legacy.Context)
 		if codexRootProviderIsNaN(string(repaired)) {
-			if pruned {
-				repaired = []byte(withCodexContextWindow(string(repaired), window))
+			// Always: it is idempotent and steps aside for a window the
+			// member declared, and a root the member pointed at NaN by hand
+			// after setup left it on their own provider has none yet.
+			withWindow := withCodexContextWindow(string(repaired), window)
+			if withWindow != string(repaired) {
+				repaired, pruned = []byte(withWindow), true
 			}
 		} else if swept, ok := codexRootWindowMarkDropped(repaired); ok {
 			// An earlier version put its marked window at the root of a
@@ -397,9 +401,6 @@ func codexRootProviderIsNaN(content string) bool {
 // a double gap. Not ok when there was none to take or the file is not valid
 // TOML.
 func codexRootWindowMarkDropped(data []byte) ([]byte, bool) {
-	if _, ok := codexTOML(string(data)); !ok {
-		return data, false
-	}
 	lines := strings.Split(string(data), "\n")
 	rootEnd := codexRootEnd(lines)
 	out := make([]string, 0, len(lines))
@@ -420,7 +421,13 @@ func codexRootWindowMarkDropped(data []byte) ([]byte, bool) {
 	if !dropped {
 		return data, false
 	}
-	return []byte(strings.Join(out, "\n")), true
+	// Lines are read one at a time, which a multi-line string can fool: the
+	// edit stands only when a re-parse shows it changed nothing but windows.
+	after := strings.Join(out, "\n")
+	if !codexOnlyWindowsDiffer(string(data), after) {
+		return data, false
+	}
+	return []byte(after), true
 }
 
 // Codex has no metadata for a model on this cluster, so without

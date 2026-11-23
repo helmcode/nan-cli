@@ -2368,3 +2368,91 @@ func TestEveryOtherToolKeepsItsStaticNextStep(t *testing.T) {
 		}
 	}
 }
+
+const ownProviderNaNSection = `
+[model_providers.nan]
+base_url = "https://api.nan.builders/v1"
+wire_api = "responses"
+`
+
+func rerunCodex(t *testing.T, existing string) string {
+	t.Helper()
+	path := tempConfig(t, "config.toml")
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
+		t.Fatal(err)
+	}
+	return readFile(t, path)
+}
+
+// Lines are found one at a time, which a multi-line string can fool: a line
+// inside the member's own text that happens to read as our marked window is
+// theirs, and the edit that would take it is dropped.
+func TestCodexRerunLeavesAMarkedLookalikeInsideAStringAlone(t *testing.T) {
+	existing := "model_provider = \"openai\"\ninstructions = \"\"\"\nmodel_context_window = 1 # nan-cli\n\"\"\"\n" + ownProviderNaNSection
+	if got := rerunCodex(t, existing); got != existing {
+		t.Errorf("the member's string was edited:\n%s", got)
+	}
+}
+
+func TestCodexRerunDropsOnlyTheMarkedRootWindow(t *testing.T) {
+	existing := "model_provider = \"openai\"\nmodel_context_window = 1048576 # nan-cli\n\n[x]\nmodel_context_window = 5 # nan-cli\n" + ownProviderNaNSection
+	want := "model_provider = \"openai\"\n\n[x]\nmodel_context_window = 5 # nan-cli\n" + ownProviderNaNSection
+	if got := rerunCodex(t, existing); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestCodexRerunDropsTheMarkedWindowOnTheLastRootLine(t *testing.T) {
+	existing := "model_provider = \"openai\"\nmodel_context_window = 1048576 # nan-cli" + ownProviderNaNSection
+	got := rerunCodex(t, existing)
+	if strings.Contains(got, "model_context_window") {
+		t.Errorf("the marked window survived:\n%s", got)
+	}
+}
+
+func TestCodexRerunKeepsAMemberWindowBesideAStaleMarkedOne(t *testing.T) {
+	existing := "model_provider = \"openai\"\nmodel_context_window = 200000\nmodel_context_window = 1048576 # nan-cli\n" + ownProviderNaNSection
+	got := rerunCodex(t, existing)
+	if !strings.Contains(got, "model_context_window = 200000") || strings.Contains(got, codexWindowMark) {
+		t.Errorf("got:\n%s", got)
+	}
+}
+
+// A member who keeps their own provider and later points the root at NaN by
+// hand is a NaN session from then on: the next run gives it the window.
+func TestCodexRootSwitchedToNaNByHandGetsTheWindowOnTheNextRun(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	original := "model = \"gpt-5\"\nmodel_provider = \"openai\"\n\n[projects.\"/r\"]\ntrust_level = \"trusted\"\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
+		t.Fatal(err)
+	}
+	switched := strings.Replace(readFile(t, path), `model_provider = "openai"`, `model_provider = "nan"`, 1)
+	if err := os.WriteFile(path, []byte(switched), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
+		t.Fatal(err)
+	}
+	got := readFile(t, path)
+	if !strings.Contains(got, codexWindowMark) {
+		t.Fatalf("no marked window after the switch:\n%s", got)
+	}
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
+		t.Fatal(err)
+	}
+	if again := readFile(t, path); again != got {
+		t.Errorf("a further run changed the file:\n%s", again)
+	}
+	if err := removeCodexConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(readFile(t, path), "model_context_window") || strings.Contains(readFile(t, path), "api.nan.builders") {
+		t.Errorf("removal left something of ours:\n%s", readFile(t, path))
+	}
+}
