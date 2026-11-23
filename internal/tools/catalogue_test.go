@@ -147,8 +147,7 @@ func TestFactoryMovesItsDefaultWhenThatModelIsGone(t *testing.T) {
 	_, cfg := factoryModels(t, path)
 	first := modelsOf(t, cfg, "sessionDefaultSettings")["model"]
 
-	// glm5.3 (the default's model, being the only non-premium one is gemma4)
-	// stops being listed: the default has to follow.
+	// glm5.3 (the default's model, being the first listed) stops being listed: the default has to follow.
 	if err := writeFactoryConfig(path, testKey, catalogueOf(api.AgentModel{Name: "gemma4"}, api.AgentModel{Name: "qwen3.6"})); err != nil {
 		t.Fatal(err)
 	}

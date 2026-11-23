@@ -111,10 +111,12 @@ func TestFromAPIDoesNotAddModelsTheListLacks(t *testing.T) {
 	}
 }
 
-func TestFromAPIKeepsPremiumLabelOfKnownModel(t *testing.T) {
+// Which plan reaches a model is the platform's to decide, not this CLI's: a
+// model is named the same for every member.
+func TestFromAPINamesNoPlan(t *testing.T) {
 	m := FromAPI([]api.AgentModel{{Name: "glm5.3"}})[0]
-	if !m.Premium || !strings.Contains(m.Name, "premium") {
-		t.Errorf("premium model lost its label: %+v", m)
+	if strings.Contains(strings.ToLower(m.Name), "premium") {
+		t.Errorf("a plan leaked into the model's name: %+v", m)
 	}
 }
 
@@ -136,8 +138,7 @@ func TestPick(t *testing.T) {
 		{"current is gone: the quickstart default", mk("a", "deepseek-v4-flash"), "gone", "deepseek-v4-flash"},
 		{"no current: the quickstart default", mk("a", "deepseek-v4-flash"), "", "deepseek-v4-flash"},
 		{"default missing: the coding model", mk("a", "glm5.3-flash"), "", "glm5.3-flash"},
-		{"neither: first non-premium", mk("glm5.3", "zzz", "yyy"), "", "zzz"},
-		{"only premium", mk("glm5.3"), "", "glm5.3"},
+		{"neither: the first listed", mk("glm5.3", "zzz", "yyy"), "", "glm5.3"},
 		{"unknown first model is not preferred over a known default", mk("aaa", "glm5.3-flash"), "", "glm5.3-flash"},
 		{"empty", nil, "x", ""},
 	}

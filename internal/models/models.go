@@ -48,10 +48,6 @@ type Model struct {
 	Inputs []string
 	// Whether it reasons before answering.
 	Reasoning bool
-	// Callable only with a key on the premium tier. Left in the configs it
-	// writes, with the tier in its display name, because leaving it out is how
-	// a member on premium ends up not knowing they have it.
-	Premium bool
 }
 
 const (
@@ -121,12 +117,11 @@ var All = []Model{
 	{
 		ID:        "glm5.3",
 		Kind:      Chat,
-		Name:      "GLM 5.3 (premium)",
+		Name:      "GLM 5.3",
 		Context:   1_048_576,
 		Output:    32_768,
 		Inputs:    []string{InputText},
 		Reasoning: true,
-		Premium:   true,
 	},
 
 	// Not chat, and not in any tool config: they are here so the Models tab can

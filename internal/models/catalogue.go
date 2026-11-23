@@ -108,8 +108,7 @@ func withVision(inputs []string, vision bool) []string {
 // Pick is the model a tool is left pointing at: the first of preferred (what
 // the tool already has, then what it was meant to start with) that the member
 // can call, otherwise the quickstart's default, then the coding model, then
-// the first model that is not premium (a default should not be one that costs
-// extra), then the first. Never an id outside the list.
+// the first listed. Never an id outside the list.
 func Pick(list []Model, preferred ...string) string {
 	has := func(id string) bool {
 		for _, m := range list {
@@ -122,11 +121,6 @@ func Pick(list []Model, preferred ...string) string {
 	for _, id := range append(append([]string(nil), preferred...), Default, Coding) {
 		if id != "" && has(id) {
 			return id
-		}
-	}
-	for _, m := range list {
-		if !m.Premium {
-			return m.ID
 		}
 	}
 	if len(list) > 0 {
