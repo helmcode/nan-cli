@@ -25,26 +25,66 @@ func TestProfileRowsByMembership(t *testing.T) {
 		want map[string]string
 		not  []string
 	}{
-		{"active inference", api.Me{Email: "someone@example.com", Tier: "inference", State: "subscribed"},
-			map[string]string{"Plan": "Inference", "Membership": "Active"}, []string{"Data kept until"}},
-		{"gentle tier", api.Me{Email: "someone@example.com", Tier: "gentle", State: "subscribed"},
-			map[string]string{"Plan": "Gentle", "Membership": "Active"}, nil},
-		{"ended in grace", api.Me{Email: "someone@example.com", Tier: "inference", State: "grace", GraceUntil: grace},
-			map[string]string{"Membership": "Ended"}, []string{"Plan", "Access until"}},
-		{"grace without a date", api.Me{Email: "someone@example.com", Tier: "inference", State: "grace"},
-			map[string]string{"Membership": "Ended"}, []string{"Plan", "Data kept until", "Access until"}},
-		{"churned", api.Me{Email: "someone@example.com", Tier: "inference", State: "churned"},
-			map[string]string{"Membership": "Ended"}, []string{"Plan", "Data kept until"}},
-		{"expired", api.Me{Email: "someone@example.com", State: "expired"},
-			map[string]string{"Membership": "Ended"}, []string{"Plan"}},
-		{"free signup", api.Me{Email: "someone@example.com", Tier: "none", State: "free"},
-			map[string]string{"Membership": "Free"}, []string{"Plan"}},
-		{"registered", api.Me{Email: "someone@example.com", State: "registered"},
-			map[string]string{"Membership": "Not subscribed"}, nil},
-		{"invited", api.Me{Email: "someone@example.com", State: "invited"},
-			map[string]string{"Membership": "Not subscribed"}, nil},
-		{"unknown state reads as words", api.Me{Email: "someone@example.com", State: "host_unreachable"},
-			map[string]string{"Membership": "Host unreachable"}, nil},
+		{
+			"active inference",
+			api.Me{Email: "someone@example.com", Tier: "inference", State: "subscribed"},
+			map[string]string{"Plan": "Inference", "Membership": "Active"},
+			[]string{"Data kept until"},
+		},
+		{
+			"gentle tier",
+			api.Me{Email: "someone@example.com", Tier: "gentle", State: "subscribed"},
+			map[string]string{"Plan": "Gentle", "Membership": "Active"},
+			nil,
+		},
+		{
+			"ended in grace",
+			api.Me{Email: "someone@example.com", Tier: "inference", State: "grace", GraceUntil: grace},
+			map[string]string{"Membership": "Ended"},
+			[]string{"Plan", "Access until"},
+		},
+		{
+			"grace without a date",
+			api.Me{Email: "someone@example.com", Tier: "inference", State: "grace"},
+			map[string]string{"Membership": "Ended"},
+			[]string{"Plan", "Data kept until", "Access until"},
+		},
+		{
+			"churned",
+			api.Me{Email: "someone@example.com", Tier: "inference", State: "churned"},
+			map[string]string{"Membership": "Ended"},
+			[]string{"Plan", "Data kept until"},
+		},
+		{
+			"expired",
+			api.Me{Email: "someone@example.com", State: "expired"},
+			map[string]string{"Membership": "Ended"},
+			[]string{"Plan"},
+		},
+		{
+			"free signup",
+			api.Me{Email: "someone@example.com", Tier: "none", State: "free"},
+			map[string]string{"Membership": "Free"},
+			[]string{"Plan"},
+		},
+		{
+			"registered",
+			api.Me{Email: "someone@example.com", State: "registered"},
+			map[string]string{"Membership": "Not subscribed"},
+			nil,
+		},
+		{
+			"invited",
+			api.Me{Email: "someone@example.com", State: "invited"},
+			map[string]string{"Membership": "Not subscribed"},
+			nil,
+		},
+		{
+			"unknown state reads as words",
+			api.Me{Email: "someone@example.com", State: "host_unreachable"},
+			map[string]string{"Membership": "Host unreachable"},
+			nil,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := asMap(profileRows(&tc.me))
