@@ -2456,3 +2456,14 @@ func TestCodexRootSwitchedToNaNByHandGetsTheWindowOnTheNextRun(t *testing.T) {
 		t.Errorf("removal left something of ours:\n%s", readFile(t, path))
 	}
 }
+
+func TestCodexStepWithAnUnreadableConfigStillNamesTheProfile(t *testing.T) {
+	cat := testCatalogue()
+	step, ok := codexStep(Tool{ConfigPath: filepath.Join(t.TempDir(), "missing.toml")}, cat)
+	if !ok || !strings.HasPrefix(step.Open, "codex --profile nan-") {
+		t.Errorf("got %+v, %v", step, ok)
+	}
+	if len(step.Next) > 45 {
+		t.Errorf("the explanation is too wide for a terminal row: %q", step.Next)
+	}
+}
