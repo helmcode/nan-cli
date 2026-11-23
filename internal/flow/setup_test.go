@@ -99,7 +99,7 @@ func TestSetupSaysNothingWasWrittenWhenThereIsNoModelList(t *testing.T) {
 		err  error
 		want string
 	}{
-		"no models":  {catalog.ErrNoModels, "lists no models"},
+		"no models":  {catalog.ErrNoModels, "lists no chat models"},
 		"unreadable": {errors.New(`Get "http://x/v1/models": dial tcp: refused`), "Check your connection"},
 	} {
 		t.Run(name, func(t *testing.T) {

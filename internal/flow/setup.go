@@ -383,7 +383,7 @@ func applyTools(ctx context.Context, c *api.Client, key string, ticked map[strin
 // that nothing was touched, why in words, and what to do next.
 func ApplyFailureHint(err error) string {
 	if errors.Is(err, catalog.ErrNoModels) {
-		return "Your account lists no models yet, so nothing was written. Check your plan at cloud.nan.builders, then run Setup again."
+		return "Your account lists no chat models yet, so nothing was written. Check your plan at cloud.nan.builders, then run Setup again."
 	}
 	return "Could not read the models your account can use, so nothing was written. Check your connection and run Setup again."
 }

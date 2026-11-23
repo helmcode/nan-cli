@@ -173,7 +173,7 @@ func Load(ctx context.Context, c *api.Client, key string) ([]Model, error) {
 
 // describe is the key's ids, in the key's order, each with what the platform
 // says about it. An id the platform does not describe is a bare entry, which
-// FromAPI reads as chat, so when the platform's list is there (non-empty) it is
+// FromAPI reads as chat, so when the platform's list is there (at least one usable entry) it is
 // kept only if the table knows it as chat; otherwise it is dropped. Without a
 // platform list every id is a bare entry.
 func describe(ids []string, platform []api.AgentModel) []api.AgentModel {

@@ -324,7 +324,7 @@ func newSetupRemoveCmd(get func() *app) *cobra.Command {
 // rather than a Go network error, with the next step.
 func describeCatalogueError(err error) string {
 	if errors.Is(err, catalog.ErrNoModels) {
-		return "your account lists no models yet - check your plan at cloud.nan.builders"
+		return "your account lists no chat models yet - check your plan at cloud.nan.builders"
 	}
 	return "could not read the models your account can use - check your connection"
 }
