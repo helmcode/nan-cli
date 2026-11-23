@@ -104,3 +104,63 @@ func TestCodexTableKeyBlanked(t *testing.T) {
 		}
 	}
 }
+
+func dropped(t *testing.T, content, table, key string, value any) (string, bool) {
+	t.Helper()
+	want, ok := codexTOML(content)
+	if !ok {
+		t.Fatalf("fixture is not TOML:\n%s", content)
+	}
+	out := strings.Join(codexTableKeyDropped(strings.Split(content, "\n"), want, table, key, value), "\n")
+	if !codexEditMeans(out, want) {
+		t.Errorf("want was not kept consistent with the edit:\n%s", out)
+	}
+	return out, out != content
+}
+
+func TestCodexTableKeyDroppedKeepsTheOtherKeys(t *testing.T) {
+	out, changed := dropped(t, "[agents]\nenabled = true\nmax_threads = 4\n\n[x]\na = 1\n", "agents", "enabled", true)
+	if !changed || out != "[agents]\nmax_threads = 4\n\n[x]\na = 1\n" {
+		t.Errorf("got:\n%s", out)
+	}
+}
+
+func TestCodexTableKeyDroppedTakesAnEmptiedTableWithItsSeparator(t *testing.T) {
+	out, changed := dropped(t, "a = 1\n\n[agents]\nenabled = true\n\n[x]\nb = 2\n", "agents", "enabled", true)
+	if !changed || out != "a = 1\n\n[x]\nb = 2\n" {
+		t.Errorf("got:\n%s", out)
+	}
+	out, changed = dropped(t, "a = 1\n\n[agents]\nenabled = true\n", "agents", "enabled", true)
+	if !changed || out != "a = 1" {
+		t.Errorf("last table: got %q", out)
+	}
+}
+
+func TestCodexTableKeyDroppedLeavesWhatIsNotItsToTake(t *testing.T) {
+	for name, c := range map[string]struct{ content, table string }{
+		"another value": {"[agents]\nenabled = false\n", "agents"},
+		"absent table":  {"[x]\nenabled = true\n", "agents"},
+		"inline table":  {"agents = { enabled = true }\n", "agents"},
+		"key elsewhere": {"[x]\nenabled = true\n\n[agents]\nn = 1\n", "agents"},
+	} {
+		if out, changed := dropped(t, c.content, c.table, "enabled", true); changed {
+			t.Errorf("%s: changed:\n%s", name, out)
+		}
+	}
+}
+
+func TestCodexRootKeyDropped(t *testing.T) {
+	in := "a = 1\nweb_search = \"disabled\"\n\n[x]\nweb_search = \"disabled\"\n"
+	want, _ := codexTOML(in)
+	out := strings.Join(codexRootKeyDropped(strings.Split(in, "\n"), want, "web_search", "disabled"), "\n")
+	if out != "a = 1\n\n[x]\nweb_search = \"disabled\"\n" || !codexEditMeans(out, want) {
+		t.Errorf("got:\n%s", out)
+	}
+	// Another value, or only under a table: not the root's to take.
+	for _, c := range []string{"web_search = \"live\"\n", "[x]\nweb_search = \"disabled\"\n"} {
+		w, _ := codexTOML(c)
+		if got := strings.Join(codexRootKeyDropped(strings.Split(c, "\n"), w, "web_search", "disabled"), "\n"); got != c {
+			t.Errorf("%q changed: %q", c, got)
+		}
+	}
+}

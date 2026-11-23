@@ -614,12 +614,12 @@ func TestCodexProfilesLeaveOutTheToolsTheClusterCannotStream(t *testing.T) {
 		if !strings.Contains(body, `web_search = "disabled"`) {
 			t.Errorf("%s: the profile still sends web_search:\n%s", m.ID, body)
 		}
-		if !strings.Contains(body, "[features]\nmulti_agent = false") {
+		if !strings.Contains(body, "[agents]\nenabled = false") || strings.Contains(body, "multi_agent") {
 			t.Errorf("%s: the profile still sends the sub-agent namespace:\n%s", m.ID, body)
 		}
-		// Before the first header, or TOML puts it inside [features].
-		if strings.Index(body, "web_search") > strings.Index(body, "[features]") {
-			t.Errorf("%s: web_search landed inside [features], where Codex does not read it:\n%s", m.ID, body)
+		// Before the first header, or TOML puts it inside [agents].
+		if strings.Index(body, "web_search") > strings.Index(body, "[agents]") {
+			t.Errorf("%s: web_search landed inside [agents], where Codex does not read it:\n%s", m.ID, body)
 		}
 	}
 }
@@ -1765,19 +1765,21 @@ func TestCodexProfilesPointAtACatalogOfTheClustersModels(t *testing.T) {
 			t.Errorf("%s: the profile does not point at the catalogue:\n%s", m.ID, body)
 			continue
 		}
-		// A key under [features] belongs to that table and Codex would not
+		// A key under [agents] belongs to that table and Codex would not
 		// read it as the catalogue.
-		if features := strings.Index(body, "[features]"); features >= 0 && at > features {
-			t.Errorf("%s: model_catalog_json landed inside [features]:\n%s", m.ID, body)
+		if agents := strings.Index(body, "[agents]"); agents >= 0 && at > agents {
+			t.Errorf("%s: model_catalog_json landed inside [agents]:\n%s", m.ID, body)
 		}
 		if strings.Contains(want, `\`) {
 			t.Errorf("%s: a backslash in a TOML basic string is an escape: %s", m.ID, want)
 		}
 	}
-	// Only the profiles point at it. In config.toml it would take OpenAI's
-	// models out of the member's own sessions.
-	if strings.Contains(readFile(t, path), "model_catalog_json") {
-		t.Error("config.toml points at the catalogue, so OpenAI sessions lose their models")
+	// The starter config is a NaN session, so its root points at it too. A
+	// root with the member's own provider never does
+	// (TestCodexMemberRootGetsNoNaNOnlyKeys): it would take OpenAI's models
+	// out of their sessions.
+	if !strings.Contains(readFile(t, path), "model_catalog_json = "+fmt.Sprintf("%q", codexCatalogPath(home))) {
+		t.Error("the starter config does not point at the catalogue")
 	}
 }
 

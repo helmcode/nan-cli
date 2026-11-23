@@ -1,18 +1,93 @@
 package tools
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	catalog "github.com/helmcode/nan-cli/internal/models"
 )
 
+const (
+	codexVersionTimeout   = 3 * time.Second
+	codexVersionWaitDelay = 500 * time.Millisecond
+)
+
+// Swapped in tests, so nothing here spawns a process. "codex-cli 0.169.0" on
+// every release this CLI has met; empty when there is no codex on PATH (the
+// desktop app ships its own) or it would not answer.
+var codexVersion = func() string { return probeCodexVersion(codexVersionTimeout) }
+
+// Runs `codex --version`. A codex that hangs is an unknown version, not a
+// stuck setup. The context kills only the process it started, and npm's
+// codex is a wrapper whose native child keeps the output pipe open after
+// that; WaitDelay is what stops Output from waiting on it.
+func probeCodexVersion(timeout time.Duration) string {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "codex", "--version") //nolint:gosec // G204: fixed arguments, the member's own codex
+	cmd.WaitDelay = codexVersionWaitDelay
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// A config key, as the table it lives in and its name.
+type codexSwitch struct{ table, key string }
+
+var (
+	codexAgentsEnabled      = codexSwitch{"agents", "enabled"}
+	codexFeaturesMultiAgent = codexSwitch{"features", "multi_agent"}
+)
+
+// The switch this Codex reads, and the one it does not.
+//
+// The key that switches sub-agents off moved in 0.168: [agents].enabled
+// arrived and [features].multi_agent started printing a deprecation warning on
+// every run. Older releases do not know the new key - they load the file and
+// ignore it, and go on sending the sub-agent tools the cluster cannot stream.
+// A version that cannot be read is taken to be a current one.
+func codexSubAgentSwitches(version string) (use, other codexSwitch) {
+	if codexBefore168(version) {
+		return codexFeaturesMultiAgent, codexAgentsEnabled
+	}
+	return codexAgentsEnabled, codexFeaturesMultiAgent
+}
+
+func (s codexSwitch) off() string {
+	return "[" + s.table + "]\n" + s.key + " = false\n"
+}
+
+// Whether the version string ("codex-cli 0.167.2") names a release older than
+// 0.168, which still reads [features].multi_agent. Anything unreadable is not.
+func codexBefore168(version string) bool {
+	fields := strings.Fields(version)
+	if len(fields) == 0 {
+		return false
+	}
+	parts := strings.SplitN(fields[len(fields)-1], ".", 3)
+	if len(parts) < 2 {
+		return false
+	}
+	major, errMajor := strconv.Atoi(parts[0])
+	minor, errMinor := strconv.Atoi(parts[1])
+	if errMajor != nil || errMinor != nil {
+		return false
+	}
+	return major == 0 && minor < 168
+}
+
 func writeCodexConfig(cfgPath, apiKey string) error {
 	data, _ := os.ReadFile(cfgPath) //nolint:gosec // G304: a config file at a path this program chose
+	use, other := codexSubAgentSwitches(codexVersion())
 	codexModel, _ := catalog.Get(catalog.Coding)
 
 	if strings.Contains(string(data), "api.nan.builders") {
@@ -35,12 +110,13 @@ func writeCodexConfig(cfgPath, apiKey string) error {
 			repaired = []byte(withCodexContextWindow(string(repaired), codexModel.Context))
 		}
 		rewired, changed := codexWireAPIRepaired(repaired)
-		if pruned || changed {
-			if err := writeConfigFile(cfgPath, rewired); err != nil {
+		defaulted := withCodexNaNSessionDefaults(string(rewired), filepath.Dir(cfgPath), use, other)
+		if pruned || changed || defaulted != string(rewired) {
+			if err := writeConfigFile(cfgPath, []byte(defaulted)); err != nil {
 				return err
 			}
 		}
-		return writeCodexProfiles(filepath.Dir(cfgPath))
+		return writeCodexProfiles(filepath.Dir(cfgPath), use)
 	}
 
 	// If no existing config, write a complete starter config.
@@ -55,10 +131,11 @@ base_url = "https://api.nan.builders/v1"
 experimental_bearer_token = %q
 wire_api = "responses"
 `, codexModel.ID, codexModel.Context, apiKey)
+		content = withCodexNaNSessionDefaults(content, filepath.Dir(cfgPath), use, other)
 		if err := writeConfigFile(cfgPath, []byte(content)); err != nil {
 			return err
 		}
-		return writeCodexProfiles(filepath.Dir(cfgPath))
+		return writeCodexProfiles(filepath.Dir(cfgPath), use)
 	}
 
 	// Existing config: only append the provider section; preserve user's model/provider choices.
@@ -70,10 +147,90 @@ experimental_bearer_token = %q
 wire_api = "responses"
 `, apiKey)
 	content := strings.TrimRight(string(data), "\n") + "\n" + section
-	if err := writeConfigFile(cfgPath, []byte(withCodexContextWindow(content, codexModel.Context))); err != nil {
+	content = withCodexContextWindow(content, codexModel.Context)
+	// A root that already says model_provider = "nan" is a NaN session too.
+	content = withCodexNaNSessionDefaults(content, filepath.Dir(cfgPath), use, other)
+	if err := writeConfigFile(cfgPath, []byte(content)); err != nil {
 		return err
 	}
-	return writeCodexProfiles(filepath.Dir(cfgPath))
+	return writeCodexProfiles(filepath.Dir(cfgPath), use)
+}
+
+// What a --profile run already gets, given to the default run when the
+// default run is a NaN session - which is only when this CLI wrote the
+// starter config, the one place it sets model_provider = "nan" at the root.
+// The catalogue gives Codex metadata for the model (no "Model metadata ...
+// not found" warning, the window and modalities it is served at), and web
+// search and sub-agents go for the reason writeCodexProfiles gives. A root
+// whose provider is the member's own is left alone: those keys would take
+// OpenAI's model list, web search and sub-agents from their OpenAI sessions.
+//
+// Missing keys only, so a second run adds nothing and a value the member set
+// stands. The one thing taken out is the other sub-agent switch with the
+// value this CLI writes, so a Codex upgraded or downgraded across 0.168 is
+// not left with a key it warns about or ignores. Anything this cannot do
+// cleanly - a table defined inline or by dotted keys - it leaves alone, and
+// an edit whose result does not parse to exactly what was meant is dropped.
+func withCodexNaNSessionDefaults(content, codexHome string, use, other codexSwitch) string {
+	doc, ok := codexTOML(content)
+	if !ok || doc["model_provider"] != "nan" {
+		return content
+	}
+	want, _ := codexTOML(content)
+	lines := codexTableKeyDropped(strings.Split(content, "\n"), want, other.table, other.key, false)
+
+	var root []string
+	if _, has := doc["model_catalog_json"]; !has {
+		path := codexCatalogPath(codexHome)
+		root = append(root, fmt.Sprintf("model_catalog_json = %q", path))
+		want["model_catalog_json"] = path
+	}
+	if _, has := doc["web_search"]; !has {
+		root = append(root, `web_search = "disabled"`)
+		want["web_search"] = "disabled"
+	}
+
+	var block []string // a new [table] before the first header
+	if table, has := want[use.table]; !has {
+		block = strings.Split(strings.TrimRight(use.off(), "\n"), "\n")
+		want[use.table] = map[string]any{use.key: false}
+	} else if tbl, isTable := table.(map[string]any); isTable {
+		if _, set := tbl[use.key]; !set {
+			// Under the table's own header, when it has one; an inline table
+			// or one made of dotted keys is not edited.
+			if i := codexTableHeader(lines, use.table); i >= 0 {
+				lines = append(lines[:i+1], append([]string{use.key + " = false"}, lines[i+1:]...)...)
+				tbl[use.key] = false
+			}
+		}
+	}
+
+	rootEnd := codexRootEnd(lines)
+	// Root keys right after the last root key: below a header TOML reads
+	// them as keys of that table.
+	last := -1
+	for i := 0; i < rootEnd; i++ {
+		if strings.TrimSpace(lines[i]) != "" {
+			last = i
+		}
+	}
+	out := append([]string{}, lines[:last+1]...)
+	out = append(out, root...)
+	rest := strings.TrimLeft(strings.Join(lines[last+1:], "\n"), "\n")
+	if len(block) > 0 {
+		out = append(out, "")
+		out = append(out, block...)
+	}
+	if rest != "" {
+		out = append(out, "", rest)
+	} else {
+		out = append(out, "")
+	}
+	edited := strings.Join(out, "\n")
+	if !codexEditMeans(edited, want) {
+		return content
+	}
+	return edited
 }
 
 // One file per chat model, so every model on the cluster is a flag away with
@@ -90,16 +247,22 @@ wire_api = "responses"
 // No API key goes in them: the provider section in config.toml is what
 // carries it, and a key in eight files is a key to rotate in eight files.
 //
-// They also switch off the two tools Codex adds on its own. Codex 0.159
+// They also switch off the two tools Codex adds on its own. Sub-agents go
+// with [agents].enabled = false on Codex 0.168+, and with
+// [features].multi_agent = false before it, which 0.168 deprecated with a
+// warning on every run. Codex 0.159
 // sends the sub-agent tools as a "namespace" tool and web search as a
 // "web_search" one, and with either in the request the cluster's /responses
 // stops streaming items for qwen3.8-flash and mimo: all that comes back is
 // response.completed, which Codex does not read an answer from, so the turn
 // ends with no text and no tool call. Neither tool has anywhere to go on the
-// cluster anyway. Here and not in config.toml, because these files are ours
-// and leave with the disconnect - a web_search = "disabled" at the root
-// would stay behind and take search from the member's OpenAI sessions too.
-func writeCodexProfiles(codexHome string) error {
+// cluster anyway. They go here because these files are ours and leave with
+// the disconnect. A config.toml whose root provider is nan - one this CLI
+// created - gets them too (withCodexNaNSessionDefaults) and they leave with
+// the disconnect as well; a root whose provider is the member's own never
+// does, since they would take search and the model list from their OpenAI
+// sessions.
+func writeCodexProfiles(codexHome string, subAgents codexSwitch) error {
 	// Starting from none, so a model the cluster retired does not leave its
 	// profile behind to answer 401 on `--profile`.
 	if err := removeCodexProfiles(codexHome); err != nil {
@@ -120,9 +283,7 @@ model_context_window = %d
 model_catalog_json = %q
 web_search = "disabled"
 
-[features]
-multi_agent = false
-`, m.ID, m.Context, codexCatalogPath(codexHome))
+%s`, m.ID, m.Context, codexCatalogPath(codexHome), subAgents.off())
 		path := filepath.Join(codexHome, codexProfileName(m.ID)+".config.toml")
 		if err := writeConfigFile(path, []byte(body)); err != nil {
 			return err
@@ -401,6 +562,56 @@ func codexNaNRootCleared(content string) (string, bool) {
 	return edited, true
 }
 
+// The keys withCodexNaNSessionDefaults put in beside the root provider, taken
+// back on a disconnect whatever the root provider is by then.
+//
+// The catalogue file goes with the disconnect no matter what, so a root
+// model_catalog_json naming it is always ours to take: left behind it points
+// Codex at a file that is gone. That includes a member who switched the root
+// to their own provider after we wrote the starter config - their OpenAI
+// sessions would fail on the missing catalogue.
+//
+// The rest - web_search = "disabled", [agents] enabled = false and
+// [features] multi_agent = false - are only taken when something says we
+// wrote them: the catalogue line just described, or a root that still names
+// the nan provider. Without either they are the member's choices. Taken by
+// value, so web_search = "live" or an [agents] table with other keys stands.
+//
+// A member who wrote one of these exact lines themselves before we ever ran
+// and then kept a NaN root cannot be told from us; the same limit as the
+// model_context_window we write (see codexContextWindowsCleared).
+//
+// Found line by line and checked: the result is parsed again and has to be
+// the original document minus those keys, or nothing changes.
+func codexSessionDefaultsCleared(content, codexHome string) (string, bool) {
+	doc, ok := codexTOML(content)
+	if !ok {
+		return content, false
+	}
+	catalogPath := codexCatalogPath(codexHome)
+	ownCatalog := doc["model_catalog_json"] == catalogPath
+	ours := ownCatalog || doc["model_provider"] == "nan"
+	if !ours {
+		return content, false
+	}
+	want, _ := codexTOML(content)
+	lines := strings.Split(content, "\n")
+	if ownCatalog {
+		lines = codexRootKeyDropped(lines, want, "model_catalog_json", catalogPath)
+	}
+	if ours {
+		lines = codexRootKeyDropped(lines, want, "web_search", "disabled")
+		for _, sw := range []codexSwitch{codexAgentsEnabled, codexFeaturesMultiAgent} {
+			lines = codexTableKeyDropped(lines, want, sw.table, sw.key, false)
+		}
+	}
+	edited := strings.Join(lines, "\n")
+	if edited == content || !codexEditMeans(edited, want) {
+		return content, false
+	}
+	return edited, true
+}
+
 // codexConfigured is whether config.toml is NaN's: the provider section is
 // there, or a root provider naming nan with no section behind it - what an
 // older CLI left, still ours to take out or to give its section back.
@@ -441,7 +652,11 @@ var (
 func removeCodexConfig(cfgPath string) error {
 	data, readErr := os.ReadFile(cfgPath) //nolint:gosec // G304: a config file at a path this program chose
 	content := string(data)
-	root, rootCleared := codexNaNRootCleared(content)
+	// The keys written beside the root provider go first, and whatever the
+	// root provider is: see codexSessionDefaultsCleared.
+	defaultsCleared, defaultsChanged := codexSessionDefaultsCleared(content, filepath.Dir(cfgPath))
+	root, rootCleared := codexNaNRootCleared(defaultsCleared)
+	rootCleared = rootCleared || defaultsChanged
 	if readErr == nil {
 		// A root that still points at nan after the cleanup is one written in
 		// a form the line edit cannot take out safely - a multi-line model,
@@ -452,7 +667,8 @@ func removeCodexConfig(cfgPath string) error {
 		// and a Codex that answers 401 is better than one that leaks it.
 		if doc, ok := codexTOML(root); ok && doc["model_provider"] == "nan" {
 			return errors.Join(
-				fmt.Errorf("%s %w; remove the root model and model_provider lines by hand", cfgPath, errCodexRootNotCleared),
+				fmt.Errorf("%s %w; remove the root model, model_provider, model_catalog_json and web_search lines and the "+
+					"[agents] enabled / [features] multi_agent switch by hand", cfgPath, errCodexRootNotCleared),
 				codexKeyBlanked(cfgPath, content))
 		}
 	}
