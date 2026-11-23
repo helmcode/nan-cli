@@ -23,9 +23,9 @@ import (
 // generators and whatever else the team can call, and a bare id says nothing
 // about what it is. Configured as chat, such an id shows in the tool's picker
 // and fails on the first request. So when the platform's list was read, a key
-// id is configured only if the platform describes it as chat (see chatMode: an empty mode is
-// chat) or this CLI's table knows it as chat; an id neither of them vouches
-// for is skipped. With no platform list (signed out, or it failed) there is
+// id is configured only if the platform describes it as chat (see chatMode:
+// an empty mode is chat) or this CLI's table knows it as chat; an id neither
+// of them vouches for is skipped. With no platform list (signed out, or it failed) there is
 // nothing to tell them apart by, and refusing every bare id would break
 // signed-out setup, so those stay, minus the ids the table knows are not chat.
 
@@ -172,10 +172,12 @@ func Load(ctx context.Context, c *api.Client, key string) ([]Model, error) {
 }
 
 // describe is the key's ids, in the key's order, each with what the platform
-// says about it. An id the platform does not describe is a bare entry, which
-// FromAPI reads as chat, so when the platform's list is there (at least one usable entry) it is
-// kept only if the table knows it as chat; otherwise it is dropped. Without a
-// platform list every id is a bare entry.
+// says about it. A platform entry whose name is not a valid id is ignored on
+// the way in, so a list with no usable entry counts as no list. An id the
+// platform does not describe is a bare entry, which FromAPI reads as chat, so
+// when the platform's list is there it is kept only if the table knows it as
+// chat; otherwise it is dropped. Without a platform list every id is a bare
+// entry.
 func describe(ids []string, platform []api.AgentModel) []api.AgentModel {
 	byName := make(map[string]api.AgentModel, len(platform))
 	for _, a := range platform {
