@@ -104,13 +104,7 @@ func (m model) rows(a area) []row {
 		if s.me == nil {
 			return nil
 		}
-		out := []row{
-			{id: "field:email", cells: []string{"Email", shortenEmail(s.me.Email)}},
-			{id: "field:plan", cells: []string{"Plan", s.me.Tier}},
-		}
-		if s.me.GraceUntil != "" {
-			out = append(out, row{id: "field:grace", cells: []string{"Membership ends", day(s.me.GraceUntil)}})
-		}
+		out := profileRows(s.me)
 		// The Discord name is shown whole: it is the public handle the
 		// member chose for the community, not an identifier to protect.
 		switch d := s.discord; {

@@ -65,7 +65,7 @@ func TestMeReadsOnlyWhatIsShown(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"email":"a@example.com","tier":"inference","graceUntil":null,` +
 			`"internalId":"id-1","linkedAccountId":"id-2","isAdmin":true,"roles":["x"],` +
-			`"someFlag":true,"someSetting":"value","flags":{"a":true},"profile":{"fullName":"A"}}`))
+			`"someFlag":true,"someSetting":"value","flags":{"a":true},"profile":{"fullName":"A","xUrl":"https://x.com/a"}}`))
 	}))
 	defer srv.Close()
 
@@ -80,7 +80,7 @@ func TestMeReadsOnlyWhatIsShown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := string(out), `{"email":"a@example.com","tier":"inference"}`; got != want {
+	if got, want := string(out), `{"email":"a@example.com","tier":"inference","profile":{"fullName":"A"}}`; got != want {
 		t.Errorf("nan me would print %s, want %s", got, want)
 	}
 }
