@@ -2467,3 +2467,48 @@ func TestCodexStepWithAnUnreadableConfigStillNamesTheProfile(t *testing.T) {
 		t.Errorf("the explanation is too wide for a terminal row: %q", step.Next)
 	}
 }
+
+const bracketLedString = "developer_instructions = \"\"\"\nPrefer small diffs.\n\n[style guide](https://example.com/style)\n\"\"\"\n"
+
+// withCodexContextWindow takes the first line that starts with [ for the end
+// of the root table, and a line inside a multi-line string can. The window
+// would go into the member's text and the root would still have none.
+func TestCodexNaNRootWindowIsNotWrittenInsideAString(t *testing.T) {
+	existing := "model_provider = \"nan\"\n" + bracketLedString + ownProviderNaNSection
+	assertStringUntouched(t, rerunCodex(t, existing))
+}
+
+func TestCodexRootSwitchedByHandDoesNotWriteTheWindowInsideAString(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	existing := "model_provider = \"openai\"\n" + bracketLedString + ownProviderNaNSection
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
+		t.Fatal(err)
+	}
+	switched := strings.Replace(readFile(t, path), `"openai"`, `"nan"`, 1)
+	if err := os.WriteFile(path, []byte(switched), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
+		t.Fatal(err)
+	}
+	assertStringUntouched(t, readFile(t, path))
+}
+
+// The session defaults still go in (they are not the subject here); what
+// must hold is that the member's string is whole and no window is in it.
+func assertStringUntouched(t *testing.T, got string) {
+	t.Helper()
+	if !strings.Contains(got, bracketLedString) || strings.Contains(got, "model_context_window") {
+		t.Errorf("the member's string was edited or a window went into it:\n%s", got)
+	}
+	doc, ok := codexTOML(got)
+	if !ok {
+		t.Fatalf("the file no longer parses:\n%s", got)
+	}
+	if _, has := doc["model_context_window"]; has {
+		t.Error("a root window appeared although it could not be placed safely")
+	}
+}

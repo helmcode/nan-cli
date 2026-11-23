@@ -121,9 +121,16 @@ func writeCodexConfig(cfgPath, apiKey string, cat []catalog.Model) error {
 		if codexRootProviderIsNaN(string(repaired)) {
 			// Always: it is idempotent and steps aside for a window the
 			// member declared, and a root the member pointed at NaN by hand
-			// after setup left it on their own provider has none yet.
-			withWindow := withCodexContextWindow(string(repaired), window)
-			if withWindow != string(repaired) {
+			// after setup left it on their own provider has none yet. A
+			// member on NaN who deleted the window gets it back here too;
+			// that is indistinguishable from the hand switch.
+			//
+			// The line-based insert can be fooled by a line inside a
+			// multi-line string that starts with "[", so it stands only when
+			// a re-parse shows nothing but windows changed and the root now
+			// has one. Anything else leaves the file as it was.
+			if withWindow := withCodexContextWindow(string(repaired), window); withWindow != string(repaired) &&
+				codexOnlyWindowsDiffer(string(repaired), withWindow) && codexRootHasWindow(withWindow) {
 				repaired, pruned = []byte(withWindow), true
 			}
 		} else if swept, ok := codexRootWindowMarkDropped(repaired); ok {
@@ -390,6 +397,16 @@ func codexStep(t Tool, cat []catalog.Model) (Step, bool) {
 	}, true
 }
 
+// Whether the root table of a parseable config declares a window.
+func codexRootHasWindow(content string) bool {
+	doc, ok := codexTOML(content)
+	if !ok {
+		return false
+	}
+	_, has := doc["model_context_window"]
+	return has
+}
+
 // Whether the root table sends Codex to NaN. A root with no model_provider is
 // on Codex's own default, and a file that does not parse is not known to be
 // on NaN: neither is ours to put keys in.
@@ -401,8 +418,10 @@ func codexRootProviderIsNaN(content string) bool {
 // Takes the marked window out of the root table, for a root that is not on
 // NaN. Only the mark identifies it: an unmarked key is the member's, whatever
 // its value. The blank line it was written with goes too when it would leave
-// a double gap. Not ok when there was none to take or the file is not valid
-// TOML.
+// a double gap. Not ok when there was none to take or when the edit is not
+// provably only windows (see codexOnlyWindowsDiffer): a stale marked window
+// beside a lookalike inside a multi-line string rejects the whole edit, which
+// fails safe.
 func codexRootWindowMarkDropped(data []byte) ([]byte, bool) {
 	lines := strings.Split(string(data), "\n")
 	rootEnd := codexRootEnd(lines)
