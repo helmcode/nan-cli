@@ -294,7 +294,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	if m.setup.Active() {
-		next, cmd := m.setup.Update(m.ctx, msg, m.session.EnabledTools)
+		next, cmd := m.setup.Update(m.ctx, msg, m.session.EnabledTools, m.client)
 		m.setup = next
 		if !m.setup.Active() {
 			return m.afterSetup(cmd)

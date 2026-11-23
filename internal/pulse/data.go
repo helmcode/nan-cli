@@ -223,9 +223,6 @@ func kindOf(id string) string {
 	if !ok {
 		return "unknown"
 	}
-	if m.Premium {
-		return string(m.Kind) + " · premium"
-	}
 	return string(m.Kind)
 }
 

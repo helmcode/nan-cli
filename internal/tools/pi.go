@@ -15,7 +15,7 @@ import (
 // validates models.json against its own schema and names the field that is
 // wrong, nothing this CLI writes has to execute on a member's machine, and the
 // two ways of setting Pi up stop being two things to keep in step.
-func writePiConfig(cfgPath, apiKey string) error {
+func writePiConfig(cfgPath, apiKey string, cat []catalog.Model) error {
 	// Unlike the extension file, models.json is shared: other providers live in
 	// it and none of them are ours to touch.
 	cfg, err := readJSONConfig(cfgPath)
@@ -28,16 +28,39 @@ func writePiConfig(cfgPath, apiKey string) error {
 		providers = map[string]any{}
 	}
 
-	models := make([]map[string]any, 0, len(catalog.ChatModels()))
-	for _, m := range catalog.ChatModels() {
-		models = append(models, map[string]any{
-			"id":            m.ID,
-			"name":          m.Name,
-			"input":         piInputs(m),
-			"reasoning":     m.Reasoning,
-			"contextWindow": m.Context,
-			"maxTokens":     m.Output,
-		})
+	// What this entry said before, so a model the catalogue gives no figures
+	// for keeps the ones it had instead of losing them.
+	before := map[string]map[string]any{}
+	if old, ok := providers["nan"].(map[string]any); ok {
+		if list, ok := old["models"].([]any); ok {
+			for _, item := range list {
+				if e, ok := item.(map[string]any); ok {
+					if id, _ := e["id"].(string); id != "" {
+						before[id] = e
+					}
+				}
+			}
+		}
+	}
+
+	models := make([]map[string]any, 0, len(cat))
+	for _, m := range cat {
+		entry := map[string]any{
+			"id":        m.ID,
+			"name":      m.Name,
+			"input":     piInputs(m),
+			"reasoning": m.Reasoning,
+		}
+		// A figure nobody reported is left out, not written as a guess: Pi
+		// has its own default for a model without one.
+		for key, v := range map[string]int{"contextWindow": m.Context, "maxTokens": m.Output} {
+			if v > 0 {
+				entry[key] = v
+			} else if prev, ok := before[m.ID][key]; ok {
+				entry[key] = prev
+			}
+		}
+		models = append(models, entry)
 	}
 
 	providers["nan"] = map[string]any{
@@ -57,14 +80,14 @@ func writePiConfig(cfgPath, apiKey string) error {
 	if err := writeConfigFile(cfgPath, data); err != nil {
 		return err
 	}
-	return writePiDefaults(piSettingsPath(cfgPath))
+	return writePiDefaults(piSettingsPath(cfgPath), cat)
 }
 
 // Pi reads the provider it calls from a second file, and until this existed
 // the CLI wrote only the first one. nan.builders/docs/pi marks this step "not
 // optional" for a reason: with models.json alone Pi goes on calling its
 // factory provider, and what the member sees is a 401 that names neither file.
-func writePiDefaults(settingsPath string) error {
+func writePiDefaults(settingsPath string, cat []catalog.Model) error {
 	settings, err := readJSONConfig(settingsPath)
 	if err != nil {
 		return err
@@ -73,11 +96,24 @@ func writePiDefaults(settingsPath string) error {
 	// A member who already picked a default picked it, and ours is one more
 	// provider they can switch to from inside Pi. This only fills the gap that
 	// leaves a fresh install calling nothing.
-	if _, chosen := settings["defaultProvider"]; chosen {
-		return nil
+	//
+	// One exception: when the default is ours and names a model the member can
+	// no longer call, it is moved to one they can - Pi would start and fail on
+	// the first message.
+	if provider, chosen := settings["defaultProvider"]; chosen {
+		if provider != "nan" {
+			return nil
+		}
+		current, _ := settings["defaultModel"].(string)
+		pick := catalog.Pick(cat, current, catalog.Coding)
+		if current == pick {
+			return nil
+		}
+		settings["defaultModel"] = pick
+	} else {
+		settings["defaultProvider"] = "nan"
+		settings["defaultModel"] = catalog.Pick(cat, catalog.Coding)
 	}
-	settings["defaultProvider"] = "nan"
-	settings["defaultModel"] = catalog.Coding
 
 	out, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {

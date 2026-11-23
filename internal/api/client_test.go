@@ -115,3 +115,33 @@ func TestAnExpiredSessionIsNamedAsOne(t *testing.T) {
 		t.Error("a platform that is down reads as an expired session")
 	}
 }
+
+// The platform reports four optional figures per model. nil means it does not
+// know, which is not a zero: a decoder that turned absence into 0 would make a
+// caller write a zero-token window.
+func TestAgentModelsDecodeOptionalMetadata(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"models":[
+			{"name":"a","mode":"","context_window":1048576,"max_output_tokens":32768,"supports_vision":true,"supports_reasoning":false},
+			{"name":"b","mode":""}]}`))
+	}))
+	defer srv.Close()
+
+	list, err := New("t", WithBaseURL(srv.URL)).AgentModels(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("got %d models, want 2", len(list))
+	}
+	a, b := list[0], list[1]
+	if a.ContextWindow == nil || *a.ContextWindow != 1048576 || a.MaxOutputTokens == nil || *a.MaxOutputTokens != 32768 {
+		t.Errorf("limits parsed wrong: %+v", a)
+	}
+	if a.SupportsVision == nil || !*a.SupportsVision || a.SupportsReasoning == nil || *a.SupportsReasoning {
+		t.Errorf("flags parsed wrong: %+v", a)
+	}
+	if b.ContextWindow != nil || b.MaxOutputTokens != nil || b.SupportsVision != nil || b.SupportsReasoning != nil {
+		t.Errorf("an older server's entry must decode as unknown, got %+v", b)
+	}
+}

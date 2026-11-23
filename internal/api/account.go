@@ -139,14 +139,24 @@ func (c *Client) KeyStatus(ctx context.Context) (*KeyStatus, error) {
 }
 
 // AgentModel is one entry of the platform's own model list: a deployment
-// name and what it does, which is what Models falls back to when there is
-// no API key to ask the inference API with.
+// name and what it does. It is what Setup configures the tools from, and what
+// Models falls back to when there is no API key to ask the inference API with.
+//
+// The four metadata fields are optional: an older platform does not send
+// them, and one that does may not know a given model. nil is "not reported",
+// never a zero. ContextWindow is the whole window, input and output together.
 type AgentModel struct {
-	Name string `json:"name"`
-	Mode string `json:"mode"`
+	Name              string `json:"name"`
+	Mode              string `json:"mode"`
+	ContextWindow     *int   `json:"context_window,omitempty"`
+	MaxOutputTokens   *int   `json:"max_output_tokens,omitempty"`
+	SupportsVision    *bool  `json:"supports_vision,omitempty"`
+	SupportsReasoning *bool  `json:"supports_reasoning,omitempty"`
 }
 
-// AgentModels fetches the platform's list. It answers either `{"models":
+// AgentModels fetches the platform's list of the models NaN serves, each with
+// its window, output, vision and reasoning. It describes models; it does not
+// say which ones this member can call - the key's own /models does. It answers either `{"models":
 // [...]}` or the bare array, and both are read.
 func (c *Client) AgentModels(ctx context.Context) ([]AgentModel, error) {
 	var raw json.RawMessage

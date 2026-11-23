@@ -1,4 +1,10 @@
-// Package models is the CLI's one list of what the cluster serves.
+// Package models is what the CLI knows about the cluster's models, and how a
+// platform model list becomes what the tool writers take (catalogue.go).
+//
+// The table below is NOT the list of what to configure: Setup configures what
+// the platform says the member can call, and uses this table only for the
+// display name and, where the platform reports no figures, the numbers. It
+// was a hand-written list three times before, which is how it drifted.
 //
 // It existed three times before, written by hand inside each tool writer in
 // internal/tui, and all three had drifted to the same stale set: qwen3.6,
@@ -42,10 +48,6 @@ type Model struct {
 	Inputs []string
 	// Whether it reasons before answering.
 	Reasoning bool
-	// Callable only with a key on the premium tier. Left in the configs it
-	// writes, with the tier in its display name, because leaving it out is how
-	// a member on premium ends up not knowing they have it.
-	Premium bool
 }
 
 const (
@@ -115,12 +117,11 @@ var All = []Model{
 	{
 		ID:        "glm5.3",
 		Kind:      Chat,
-		Name:      "GLM 5.3 (premium)",
+		Name:      "GLM 5.3",
 		Context:   1_048_576,
 		Output:    32_768,
 		Inputs:    []string{InputText},
 		Reasoning: true,
-		Premium:   true,
 	},
 
 	// Not chat, and not in any tool config: they are here so the Models tab can
@@ -144,30 +145,11 @@ func ChatModels() []Model {
 	return out
 }
 
-// Retired are ids the cluster served once and no longer does. Asking for one
-// gets `401 This API key does not have access to the requested model`, which
-// reads like a problem with the key and is not. The writers that merge into a
-// config rather than rewrite it - opencode, droid, the Codex profiles - would
-// otherwise keep offering them forever, so they take these out on the next
-// setup run.
-var Retired = []string{
-	"mimo-v2.5", // replaced by mimo-v2.6-flash on 2026-10
-}
-
 // StaleContexts are windows this CLI once wrote for a model and has since
 // corrected. opencode keeps a `limit` that is already there, since it may be
 // the member's own, but one that matches a figure we wrote is ours to fix.
 var StaleContexts = map[string][]int{
 	"qwen3.8-flash": {262_144},
-}
-
-func IsRetired(id string) bool {
-	for _, r := range Retired {
-		if r == id {
-			return true
-		}
-	}
-	return false
 }
 
 // Default is what a tool is left pointing at when it has no preference of its

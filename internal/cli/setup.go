@@ -12,6 +12,7 @@ import (
 
 	"github.com/helmcode/nan-cli/internal/api"
 	"github.com/helmcode/nan-cli/internal/build"
+	catalog "github.com/helmcode/nan-cli/internal/models"
 	"github.com/helmcode/nan-cli/internal/session"
 	"github.com/helmcode/nan-cli/internal/tools"
 	"github.com/helmcode/nan-cli/internal/ui"
@@ -73,8 +74,8 @@ func runSetup(ctx context.Context, a *app, apiKey string, all bool) error {
 	// with its own trouble, says nothing about the key: refusing then would
 	// leave somebody offline unable to set up at all, and the dashboard's
 	// Setup lets it through for the same reason.
-	models, err := api.ListModels(ctx, apiKey)
-	checked := "Key accepted by the cluster · " + fmt.Sprintf("%d models", len(models))
+	served, err := api.ListModels(ctx, apiKey)
+	checked := "Key accepted by the cluster · " + fmt.Sprintf("%d models", len(served))
 	switch {
 	case errors.Is(err, api.ErrKeyRefused):
 		return fmt.Errorf("the cluster refused this key - %w", err)
@@ -99,7 +100,20 @@ func runSetup(ctx context.Context, a *app, apiKey string, all bool) error {
 		return err
 	}
 
-	result := tools.Apply(apiKey, chosen)
+	// What is written is the member's own list, read before the first byte.
+	// Without one nothing is written: a config made of guesses is a tool that
+	// offers a model and answers 403. The key is still kept, so the next run
+	// only has to repeat this step.
+	cat, err := catalog.Load(ctx, a.client, apiKey)
+	if err != nil {
+		a.session.APIKey = apiKey
+		if serr := session.Save(a.session); serr != nil {
+			return serr
+		}
+		return fmt.Errorf("nothing was written: %s (key saved; run nan setup again)", describeCatalogueError(err))
+	}
+
+	result := tools.Apply(apiKey, chosen, cat)
 
 	a.session.APIKey = apiKey
 	a.session.EnabledTools = chosen
@@ -304,4 +318,13 @@ func newSetupRemoveCmd(get func() *app) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// describeCatalogueError is the reason no model list could be had, in words
+// rather than a Go network error, with the next step.
+func describeCatalogueError(err error) string {
+	if errors.Is(err, catalog.ErrNoModels) {
+		return "your account lists no models yet - check your plan at cloud.nan.builders"
+	}
+	return "could not read the models your account can use - check your connection"
 }

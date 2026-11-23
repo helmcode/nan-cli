@@ -193,7 +193,6 @@ var kindColor = map[string]color.Color{
 	"audio transcription": lipgloss.Color("#F59E0B"),
 	"embedding":           lipgloss.Color("#10B981"),
 	"chat":                lipgloss.Color("#3B82F6"),
-	"chat · premium":      lipgloss.Color("#A78BFA"),
 	"rerank":              lipgloss.Color("#10B981"),
 	"text to speech":      lipgloss.Color("#8B5CF6"),
 	"speech to text":      lipgloss.Color("#F59E0B"),

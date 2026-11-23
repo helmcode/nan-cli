@@ -10,6 +10,7 @@ import (
 	"charm.land/huh/v2"
 
 	"github.com/helmcode/nan-cli/internal/api"
+	catalog "github.com/helmcode/nan-cli/internal/models"
 	"github.com/helmcode/nan-cli/internal/tools"
 	"github.com/helmcode/nan-cli/internal/ui"
 )
@@ -65,6 +66,9 @@ type Setup struct {
 
 	// Result is what the last apply did.
 	Result tools.Result
+	// applyErr is why the last apply wrote nothing: the member's model list
+	// could not be had. Unlike a tool failing, no tool was touched.
+	applyErr error
 
 	// Key and Tools are what the parent should save once the flow is done.
 	Key   string
@@ -89,7 +93,11 @@ type keyCheckedMsg struct {
 	err    error
 }
 
-type appliedMsg struct{ result tools.Result }
+type appliedMsg struct {
+	result tools.Result
+	// err is the model list failing, in which case nothing was written.
+	err error
+}
 
 // NewSetup returns a flow that is not running yet.
 func NewSetup() Setup { return Setup{} }
@@ -251,7 +259,10 @@ func (s Setup) AsksAboutTour() bool { return s.stage == setupDone && s.offersTou
 
 // Update drives the flow. `saved` is which tools are ticked, so the picker
 // opens on what is true.
-func (s Setup) Update(ctx context.Context, msg tea.Msg, saved map[string]bool) (Setup, tea.Cmd) {
+//
+// `c` is the signed-in client the model list is read through; nil, or one
+// without a session, makes Setup configure from what the key itself can call.
+func (s Setup) Update(ctx context.Context, msg tea.Msg, saved map[string]bool, c *api.Client) (Setup, tea.Cmd) {
 	switch msg := msg.(type) {
 	case keyCheckedMsg:
 		if msg.err != nil && errors.Is(msg.err, api.ErrKeyRefused) {
@@ -273,7 +284,7 @@ func (s Setup) Update(ctx context.Context, msg tea.Msg, saved map[string]bool) (
 
 	case appliedMsg:
 		s.stage = setupDone
-		s.Result = msg.result
+		s.Result, s.applyErr = msg.result, msg.err
 		return s, nil
 
 	case tea.KeyPressMsg:
@@ -281,7 +292,7 @@ func (s Setup) Update(ctx context.Context, msg tea.Msg, saved map[string]bool) (
 			// The dismissing key hands back what to save. The dashboard
 			// saves once the flow is no longer Active, which is only after
 			// this key.
-			out := Setup{Key: s.Key, Tools: s.Tools, Result: s.Result}
+			out := Setup{Key: s.Key, Tools: s.Tools, Result: s.Result, applyErr: s.applyErr}
 			if !s.offersTour() {
 				return out, nil // any key
 			}
@@ -322,7 +333,7 @@ func (s Setup) Update(ctx context.Context, msg tea.Msg, saved map[string]bool) (
 			chosen, _ := s.form.Get(fieldTools).([]string)
 			s.Tools = tickedFrom(chosen)
 			s.stage = setupApplying
-			return s, applyTools(s.Key, s.Tools)
+			return s, applyTools(ctx, c, s.Key, s.Tools)
 		}
 	}
 	return s, cmd
@@ -354,10 +365,27 @@ func checkKey(ctx context.Context, key string) tea.Cmd {
 // applyTools runs off the event loop. With Hermes in the list it is several
 // processes and several seconds, and run inside a key handler that is a
 // dashboard frozen with no repaint and no key accepted.
-func applyTools(key string, ticked map[string]bool) tea.Cmd {
+//
+// The models written are the member's own list, read here and not assumed: a
+// list that cannot be had writes nothing, so a configuration is never made of
+// guesses.
+func applyTools(ctx context.Context, c *api.Client, key string, ticked map[string]bool) tea.Cmd {
 	return func() tea.Msg {
-		return appliedMsg{result: tools.Apply(key, ticked)}
+		cat, err := catalog.Load(ctx, c, key)
+		if err != nil {
+			return appliedMsg{err: err}
+		}
+		return appliedMsg{result: tools.Apply(key, ticked, cat)}
 	}
+}
+
+// ApplyFailureHint is what a member is told when no model list could be had:
+// that nothing was touched, why in words, and what to do next.
+func ApplyFailureHint(err error) string {
+	if errors.Is(err, catalog.ErrNoModels) {
+		return "Your account lists no models yet, so nothing was written. Check your plan at cloud.nan.builders, then run Setup again."
+	}
+	return "Could not read the models your account can use, so nothing was written. Check your connection and run Setup again."
 }
 
 // Label is what the loader should say for the step the flow is on.
@@ -409,6 +437,8 @@ func (s Setup) viewDone(b *strings.Builder, indent string) {
 	}
 	r := s.Result
 	switch {
+	case s.applyErr != nil:
+		b.WriteString(indent + ui.Warn(ApplyFailureHint(s.applyErr)) + "\n")
 	case len(r.Written) > 0 || r.Removed > 0 || len(r.Failed) > 0:
 		b.WriteString(indent + ui.Success(r.Summary()) + "\n")
 	case s.Key != "":

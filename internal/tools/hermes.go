@@ -91,7 +91,18 @@ func hermesEnvPath(home string) string {
 	return filepath.Join(home, hermesEnvFile)
 }
 
-func writeHermesConfig(home, apiKey string) error {
+// The model Hermes opens with: the one it already has when the member can
+// still call it, which a re-run has no business changing, and otherwise one
+// from their list.
+func hermesDefaultModel(home string, cat []catalog.Model) string {
+	current, err := readHermesConfig(home, "get", "model.default")
+	if err != nil {
+		current = ""
+	}
+	return catalog.Pick(cat, strings.TrimSpace(current), catalog.Coding)
+}
+
+func writeHermesConfig(home, apiKey string, cat []catalog.Model) error {
 	// The key goes into Hermes' .env, and the config points at it. Not because
 	// the config is a worse place to keep it - same machine, same member, same
 	// 0600 - but because of the way it would have to get there.
@@ -111,7 +122,7 @@ func writeHermesConfig(home, apiKey string) error {
 		{"model.provider", "custom"},
 		{"model.base_url", "https://api.nan.builders/v1"},
 		{"model.api_key", hermesKeyRef},
-		{"model.default", catalog.Coding},
+		{"model.default", hermesDefaultModel(home, cat)},
 	}
 	for _, s := range settings {
 		if err := runHermesConfig(home, "set", s[0], s[1]); err != nil {

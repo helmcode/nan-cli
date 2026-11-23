@@ -61,10 +61,15 @@ type codexCatalogEntry struct {
 	IncludeAppsUsageInstructions bool `json:"include_apps_usage_instructions"`
 }
 
-func codexCatalog() ([]byte, error) {
-	models := catalog.ChatModels()
+func codexCatalog(models []catalog.Model) ([]byte, error) {
 	entries := make([]codexCatalogEntry, 0, len(models))
 	for i, m := range models {
+		// An entry needs the window it is served at. A model nobody reported
+		// one for stays out of the picker's catalogue and goes on being
+		// handled as Codex handled it before the catalogue existed.
+		if m.Context <= 0 {
+			continue
+		}
 		entries = append(entries, codexCatalogEntry{
 			Slug: m.ID,
 			// No " (NaN)" as droid has: in a session on the nan provider
