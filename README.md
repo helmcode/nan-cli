@@ -53,7 +53,7 @@ which is not something a release you did not build can carry. If you have the
 can ask about any archive yourself:
 
 ```bash
-gh attestation verify nan-cli_v0.2.0_linux_amd64.tar.gz --repo helmcode/nan-cli
+gh attestation verify nan-cli_v0.2.1_linux_amd64.tar.gz --repo helmcode/nan-cli
 ```
 
 It answers with the workflow, the repository and the commit the binary was

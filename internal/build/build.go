@@ -8,7 +8,7 @@ import "runtime"
 // Bumping it is the act of publishing: once a commit that changes it passes
 // CI on main, .github/workflows/tag.yml tags it and the release follows. The
 // workflow reads it from this line, so it stays a plain string literal.
-var Version = "0.2.0"
+var Version = "0.2.1"
 
 // Name is the binary as it is invoked, used wherever a message has to spell
 // out a command for someone to type.
