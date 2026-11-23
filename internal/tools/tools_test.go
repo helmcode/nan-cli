@@ -1149,6 +1149,82 @@ func TestHermesIsRefusedWhenItDoesNotResolveTheReference(t *testing.T) {
 	}
 }
 
+// Hermes 0.23 masks credentials in `config get` unless --raw: a resolved key
+// comes back as sk-a...1234, and only an unexpanded placeholder comes back as
+// written. Comparing that with the raw key failed every configure. The check
+// is now about whether the key resolved, which the masked form still answers.
+func TestHermesResolutionCheckReadsTheMaskedKey(t *testing.T) {
+	const key = "sk-abcdEFGHijklMNOP1234" // 23 chars, above Hermes' 12-char floor
+	cases := []struct {
+		name   string
+		shown  string
+		getErr error
+		ok     bool
+	}{
+		{"raw key", key, nil, true},
+		{"masked key that matches", "sk-a...1234", nil, true},
+		{"unexpanded placeholder", hermesKeyRef, nil, false},
+		{"masked key of another key", "sk-z...9999", nil, false},
+		{"masked head of another key", "sk-z...1234", nil, false},
+		{"shorter head and tail than Hermes prints", "s...4", nil, false},
+		{"two dots", "sk-a..1234", nil, false},
+		{"short-key placeholder for a long key", "***", nil, false},
+		{"empty answer", "", nil, false},
+		{"command error", "", errors.New("unknown command: get"), true},
+		{"command error that quotes the key", "", errors.New("bad value " + key), true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			recordHermes(t)
+			original := readHermesConfig
+			readHermesConfig = func(_ string, _ ...string) (string, error) {
+				return c.shown, c.getErr
+			}
+			t.Cleanup(func() { readHermesConfig = original })
+
+			err := writeHermesConfig(t.TempDir(), key, testCatalogue())
+			if c.ok && err != nil {
+				t.Errorf("reported as failed: %v", err)
+			}
+			if !c.ok && err == nil {
+				t.Error("reported as configured")
+			}
+			if err != nil && strings.Contains(err.Error(), key) {
+				t.Errorf("the error carries the key: %v", err)
+			}
+		})
+	}
+}
+
+// The mask boundary, pinned as implemented: below twelve characters Hermes
+// prints *** and nothing of the key; from twelve up it prints the first four
+// and last four. Assumption: the floor is "len < 12" as in hermes 0.23; it
+// could not be checked against Hermes' source from here, so if Hermes moves
+// the floor this test is where it shows.
+func TestHermesResolutionCheckPinsTheMaskBoundary(t *testing.T) {
+	cases := []struct {
+		name   string
+		key    string
+		shown  string
+		wantOK bool
+	}{
+		{"11 chars: *** accepted", "abcdefghijk", "***", true},
+		{"11 chars: head/tail refused", "abcdefghijk", "abcd...hijk", false},
+		{"12 chars: head/tail accepted", "abcdefghijkl", "abcd...ijkl", true},
+		{"12 chars: *** refused", "abcdefghijkl", "***", false},
+		{"13 chars: head/tail accepted", "abcdefghijklm", "abcd...jklm", true},
+		{"13 chars: *** refused", "abcdefghijklm", "***", false},
+		{"raw key of any length", "abcdefghijkl", "abcdefghijkl", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := hermesShowsTheKey(c.shown, c.key); got != c.wantOK {
+				t.Errorf("hermesShowsTheKey(%q, %q) = %v, want %v", c.shown, c.key, got, c.wantOK)
+			}
+		})
+	}
+}
+
 // And a Hermes that cannot answer the question at all is not the same as one
 // that answered wrongly: an older build without `config get` says nothing
 // either way, and failing the step over a question we could not ask would be
