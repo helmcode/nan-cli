@@ -138,10 +138,10 @@ func TestApplyToolsReportsAMissingModelListInsteadOfWriting(t *testing.T) {
 
 // The closing step names the command the write decided on, not the static
 // text that is only true when Codex is aimed at the cluster by default.
-func TestNextStepsNameTheProfileForAMembersOwnProvider(t *testing.T) {
+func TestNextStepsRenderTheStepTheWriteDecided(t *testing.T) {
 	r := tools.Result{
 		Written: []string{"Codex"},
-		Steps:   map[string]tools.Step{"Codex": {Open: "codex --profile nan-glm53-flash", Next: "your own provider stays the default"}},
+		Steps:   map[string]tools.Step{"Codex": {Open: "codex --profile nan-glm53-flash", Next: "yours stays the default; more: nan-* profiles"}},
 	}
 	var b strings.Builder
 	writeNextSteps(&b, "", r)
