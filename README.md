@@ -8,11 +8,23 @@ CLI for [nan.builders](https://nan.builders): manage your account, follow your u
 curl -fsSL https://nan.builders/install | bash
 ```
 
-By default installs to `/usr/local/bin`. Override with `INSTALL_DIR`:
+By default installs to `$HOME/.local/bin`, which is per-user and needs no root. Run as root without `INSTALL_DIR` (`curl ... | sudo bash`), it installs machine-wide to `/usr/local/bin` instead. Override with `INSTALL_DIR`:
 
 ```bash
-INSTALL_DIR=~/.local/bin curl -fsSL https://nan.builders/install | bash
+curl -fsSL https://nan.builders/install | INSTALL_DIR="$HOME/.nan/bin" bash
 ```
+
+If `$HOME/.local/bin` is not already on your `PATH`, the installer adds it to the file a new terminal of your shell reads: `~/.zshrc` (or `$ZDOTDIR/.zshrc`) for zsh, `~/.bash_profile` for bash on macOS and `~/.bashrc` on Linux, `config.fish` for fish, `~/.profile` for anything else. Open a new terminal afterwards.
+
+Installed before with the old default, `/usr/local/bin`? That copy is not removed and may keep running instead of the new one. The installer warns about it; remove it with `sudo rm /usr/local/bin/nan`.
+
+A custom `INSTALL_DIR` is a deliberate choice, so the installer never edits a shell profile for it; if the directory is not on your `PATH`, it prints the line to add yourself. To make `nan` available to every user on the machine, pass the system-wide directory (needs root or sudo):
+
+```bash
+curl -fsSL https://nan.builders/install | sudo INSTALL_DIR=/usr/local/bin bash
+```
+
+`/usr/local/bin` is already on root's `PATH`, so nothing else is needed.
 
 On Windows, from PowerShell:
 

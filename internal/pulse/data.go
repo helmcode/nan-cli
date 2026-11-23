@@ -84,7 +84,7 @@ func load(ctx context.Context, c *api.Client, apiKey string, askRelease bool) sn
 		go func() { defer wg.Done(); f() }()
 	}
 	if c.Token() != "" {
-		run(func() { me, err := c.Me(ctx); keep(err); s.me = me })
+		run(func() { me, err := c.Me(ctx); keep(err); s.me = cleanMe(me) })
 		run(func() { u, err := c.Usage(ctx); keep(err); s.usage = cleanUsage(u) })
 		// The key's status only says where to find a key, so a failure to
 		// read it is not worth saying.
@@ -135,6 +135,17 @@ func cleanCredits(c *api.Credits) *api.Credits {
 		c.Models[i].DisplayName = runs.SanitizeLine(c.Models[i].DisplayName)
 	}
 	return c
+}
+
+// cleanMe does it for the name and role the member typed on the web.
+func cleanMe(me *api.Me) *api.Me {
+	if me != nil && me.Profile != nil {
+		p := me.Profile
+		p.FullName = runs.SanitizeLine(p.FullName)
+		p.JobRole = runs.SanitizeLine(p.JobRole)
+		p.JobRoleOther = runs.SanitizeLine(p.JobRoleOther)
+	}
+	return me
 }
 
 func cleanDiscord(d *api.Discord) *api.Discord {
