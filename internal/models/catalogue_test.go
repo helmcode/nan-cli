@@ -165,12 +165,30 @@ func TestLoad(t *testing.T) {
 		t.Setenv("NAN_INFERENCE_URL", srv.URL)
 	}
 
-	t.Run("the platform list wins", func(t *testing.T) {
+	t.Run("the key decides which, the platform describes them", func(t *testing.T) {
+		p := platform(200, `{"models":[{"name":"x-1","context_window":4096},{"name":"x-2"},{"name":"img","mode":"image_generation"}]}`)
+		defer p.Close()
+		cluster(200, `{"data":[{"id":"x-1"},{"id":"x-3"},{"id":"img"}]}`)
+		got, err := Load(context.Background(), api.New("s", api.WithBaseURL(p.URL)), "key")
+		if err != nil || ids(got) != "x-1,x-3" || got[0].Context != 4096 {
+			t.Fatalf("got %v %v", got, err)
+		}
+	})
+	t.Run("key list unreadable: the platform list", func(t *testing.T) {
 		p := platform(200, `{"models":[{"name":"x-1","context_window":4096}]}`)
 		defer p.Close()
 		cluster(500, "")
 		got, err := Load(context.Background(), api.New("s", api.WithBaseURL(p.URL)), "key")
 		if err != nil || ids(got) != "x-1" || got[0].Context != 4096 {
+			t.Fatalf("got %v %v", got, err)
+		}
+	})
+	t.Run("key lists nothing: nothing to write, whatever the platform says", func(t *testing.T) {
+		p := platform(200, `{"models":[{"name":"x-1"}]}`)
+		defer p.Close()
+		cluster(200, `{"data":[]}`)
+		got, err := Load(context.Background(), api.New("s", api.WithBaseURL(p.URL)), "key")
+		if !errors.Is(err, ErrNoModels) || len(got) != 0 {
 			t.Fatalf("got %v %v", got, err)
 		}
 	})

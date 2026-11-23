@@ -65,10 +65,12 @@ func openCodeModels(t *testing.T, home string) []string {
 
 const clusterList = `{"data":[{"id":"glm5.3-flash"},{"id":"deepseek-v4-flash"}]}`
 
-// The platform's list is the member's: a model it does not list - premium,
-// pack-only, canary - is not configured, whatever this CLI knows about it.
-func TestSetupConfiguresOnlyWhatThePlatformLists(t *testing.T) {
-	home := catalogueEnv(t, 200, `{"models":[{"name":"glm5.3-flash"}]}`, clusterList)
+// Which models is the key's to say: the platform lists every model NaN serves
+// and only describes them, so a model it lists that the key cannot reach is not
+// configured, and a model the key reaches is, whatever this CLI knows about it.
+func TestSetupConfiguresOnlyWhatTheKeyCanCall(t *testing.T) {
+	home := catalogueEnv(t, 200, `{"models":[{"name":"glm5.3-flash"},{"name":"glm5.3"},{"name":"pack-only-x"}]}`,
+		`{"data":[{"id":"glm5.3-flash"}]}`)
 	withStdin(t, "sk-good\n")
 	if code, msg := execute(t, "setup", "--key", "-", "--all"); code != 0 {
 		t.Fatalf("exit %d: %s", code, msg)

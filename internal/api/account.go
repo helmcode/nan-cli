@@ -143,10 +143,9 @@ type AgentModel struct {
 	SupportsReasoning *bool  `json:"supports_reasoning,omitempty"`
 }
 
-// AgentModels fetches the platform's list of chat models, already narrowed to
-// the ones this member can call (canary and pack-only audiences, premium
-// without access): the platform reads the member live, so a caller can trust
-// it and must not add models of its own. It answers either `{"models":
+// AgentModels fetches the platform's list of the models NaN serves, each with
+// its window, output, vision and reasoning. It describes models; it does not
+// say which ones this member can call - the key's own /models does. It answers either `{"models":
 // [...]}` or the bare array, and both are read.
 func (c *Client) AgentModels(ctx context.Context) ([]AgentModel, error) {
 	var raw json.RawMessage

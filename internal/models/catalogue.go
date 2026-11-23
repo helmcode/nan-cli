@@ -11,13 +11,13 @@ import (
 
 // What Setup configures the tools with.
 //
-// The list of WHICH models comes from the platform, never from this package:
-// GET /api/agents/models already leaves out what the member cannot call (a
-// canary audience, pack-only models, premium without access), reading the
-// member live. The table in models.go is only what this CLI knows ABOUT a
-// model the platform names - a display name and, for a platform that does not
-// report them, the figures - so a model missing from the platform's list is
-// never added from here.
+// WHICH models is the key's to say, never this package's: the inference API's
+// own /models answers with what that key's team can call, the same check the
+// call itself passes. GET /api/agents/models lists every model NaN serves and
+// only DESCRIBES them (window, output, vision, reasoning); it does not decide
+// who may call what. The table in models.go is only what this CLI knows ABOUT
+// a model - a display name and, where nobody reports them, the figures - so a
+// model the key does not list is never added from here.
 
 // ErrNoModels is a platform and a key that between them named no model to
 // configure. Nothing is written then: a config with no models in it, or with
@@ -129,31 +129,54 @@ func Pick(list []Model, preferred ...string) string {
 	return ""
 }
 
-// Load is the list Setup configures from: the platform's, as the member's
-// session sees it. Without a session, or when the platform cannot answer or
-// has nothing to say, it is what the key itself can call - the inference
-// API's own list, the strictest view there is - so a machine with only a key
-// still sets up. When neither answers it fails and nothing should be written.
+// Load is the list Setup configures from: the models the key can call, as the
+// inference API's own /models says, each described by the platform's list
+// when the member has a session. Only when the key's list cannot be read is
+// the platform's list used as is, so a machine with a flaky route to the
+// cluster still sets up. A key that lists nothing gets nothing written. When
+// neither answers it fails and nothing should be written.
 func Load(ctx context.Context, c *api.Client, key string) ([]Model, error) {
-	var platformErr error
+	var (
+		platform    []api.AgentModel
+		platformErr error
+	)
 	if c != nil && c.Token() != "" {
-		list, err := c.AgentModels(ctx)
-		if err == nil {
-			if m := FromAPI(list); len(m) > 0 {
-				return m, nil
-			}
-		}
-		platformErr = err
+		platform, platformErr = c.AgentModels(ctx)
 	}
 	keyIDs, keyErr := api.ListModels(ctx, key)
 	if keyErr == nil {
-		if m := FromIDs(keyIDs); len(m) > 0 {
+		if m := FromAPI(describe(keyIDs, platform)); len(m) > 0 {
 			return m, nil
 		}
-		keyErr = ErrNoModels
+		return nil, ErrNoModels
+	}
+	if platformErr == nil {
+		if m := FromAPI(platform); len(m) > 0 {
+			return m, nil
+		}
 	}
 	if platformErr != nil {
 		return nil, fmt.Errorf("the platform said: %w; the cluster said: %w", platformErr, keyErr)
 	}
 	return nil, keyErr
+}
+
+// describe is the key's ids, in the key's order, each with what the platform
+// says about it; an id the platform does not describe is a bare entry.
+func describe(ids []string, platform []api.AgentModel) []api.AgentModel {
+	byName := make(map[string]api.AgentModel, len(platform))
+	for _, a := range platform {
+		if _, ok := byName[a.Name]; !ok {
+			byName[a.Name] = a
+		}
+	}
+	out := make([]api.AgentModel, 0, len(ids))
+	for _, id := range ids {
+		if a, ok := byName[id]; ok {
+			out = append(out, a)
+			continue
+		}
+		out = append(out, api.AgentModel{Name: id})
+	}
+	return out
 }
