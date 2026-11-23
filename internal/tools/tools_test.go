@@ -2302,3 +2302,69 @@ func TestCodexOwnProviderRoundTripsExactly(t *testing.T) {
 		t.Errorf("got:\n%s\nwant:\n%s", got, existing)
 	}
 }
+
+// Result.Steps is what the closing "now open them" step prints, so it has to
+// follow what was written, not what the tool does when it is all NaN.
+func applyCodexOnly(t *testing.T, existing string) (Result, []catalog.Model) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HERMES_HOME", filepath.Join(home, "hermes"))
+	path := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cat := testCatalogue()
+	ticked := map[string]bool{"Factory AI": false, "OpenCode": false, "Pi": false, "Hermes": false, "Codex": true}
+	r := Apply(testKey, ticked, cat)
+	if len(r.Failed) != 0 || len(r.Written) != 1 {
+		t.Fatalf("expected only Codex written, got %+v", r)
+	}
+	return r, cat
+}
+
+func TestCodexNextStepOnAMembersOwnProviderIsTheProfile(t *testing.T) {
+	r, cat := applyCodexOnly(t, "model = \"gpt-5\"\nmodel_provider = \"openai\"\n")
+	var codex Tool
+	for _, tool := range Registry() {
+		if tool.Name == "Codex" {
+			codex = tool
+		}
+	}
+	step := r.StepFor(codex)
+	want := "codex --profile " + codexProfileName(catalog.Pick(cat, catalog.Coding))
+	if step.Open != want {
+		t.Errorf("Open = %q, want %q", step.Open, want)
+	}
+	if strings.Contains(step.Next, "already aimed") || strings.Contains(step.Next, "--model") {
+		t.Errorf("the next step still says plain codex is aimed at the cluster: %q", step.Next)
+	}
+	if step.Next == "" {
+		t.Error("no explanation next to the command")
+	}
+}
+
+func TestCodexNextStepOnARootThatIsNaNIsUnchanged(t *testing.T) {
+	r, _ := applyCodexOnly(t, "model = \"glm5.3\"\nmodel_provider = \"nan\"\n")
+	for _, tool := range Registry() {
+		if tool.Name != "Codex" {
+			continue
+		}
+		if step := r.StepFor(tool); step.Open != tool.Open || step.Next != tool.NextStep {
+			t.Errorf("got %+v, want the static %q / %q", step, tool.Open, tool.NextStep)
+		}
+	}
+}
+
+func TestEveryOtherToolKeepsItsStaticNextStep(t *testing.T) {
+	r := Result{}
+	for _, tool := range Registry() {
+		if step := r.StepFor(tool); step.Open != tool.Open || step.Next != tool.NextStep {
+			t.Errorf("%s: got %+v", tool.Name, step)
+		}
+	}
+}

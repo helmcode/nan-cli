@@ -453,7 +453,7 @@ func (s Setup) viewDone(b *strings.Builder, indent string) {
 		}
 	}
 	if len(r.Written) > 0 {
-		writeNextSteps(b, indent, r.Written)
+		writeNextSteps(b, indent, r)
 	}
 	writeFailures(b, indent, r.Failed)
 
@@ -493,16 +493,17 @@ func (s Setup) uncheckedLine() string {
 // writeNextSteps says how to use each tool just configured. "4 added"
 // answers what was done and not the question a member is left holding: and
 // now what.
-func writeNextSteps(b *strings.Builder, indent string, written []string) {
+func writeNextSteps(b *strings.Builder, indent string, r tools.Result) {
 	b.WriteString("\n" + indent + ui.Eyebrow("Now open them") + "\n\n")
 	steps := map[string]tools.Tool{}
 	for _, t := range tools.Registry() {
 		steps[t.Name] = t
 	}
-	rows := make([][2]string, 0, len(written))
-	for _, name := range written {
+	rows := make([][2]string, 0, len(r.Written))
+	for _, name := range r.Written {
 		if t, ok := steps[name]; ok && t.Open != "" {
-			rows = append(rows, [2]string{ui.Mono(t.Open), t.NextStep})
+			step := r.StepFor(t)
+			rows = append(rows, [2]string{ui.Mono(step.Open), step.Next})
 		}
 	}
 	b.WriteString(ui.KVBlock(rows, indent) + "\n")

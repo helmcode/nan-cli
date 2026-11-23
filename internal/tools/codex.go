@@ -363,6 +363,26 @@ func codexWindowIsOurs(value, legacy string) bool {
 	return strings.HasSuffix(v, codexWindowMark) || v == legacy
 }
 
+// How to open Codex once it is configured. A root on NaN is aimed at the
+// cluster, so the tool's static step is true. On the member's own provider
+// plain `codex` still talks to that provider, and `--model <id>` would send
+// it a NaN id: the way in is the profile of the model setup would have
+// started with.
+func codexStep(t Tool, cat []catalog.Model) (Step, bool) {
+	data, err := os.ReadFile(t.ConfigPath) //nolint:gosec // G304: a config file at a path this program chose
+	if err != nil || codexRootProviderIsNaN(string(data)) {
+		return Step{}, false
+	}
+	id := catalog.Pick(cat, catalog.Coding)
+	if id == "" {
+		return Step{}, false
+	}
+	return Step{
+		Open: "codex --profile " + codexProfileName(id),
+		Next: "your own provider stays the default; this one runs " + id + " on NaN",
+	}, true
+}
+
 // Whether the root table sends Codex to NaN. A root with no model_provider is
 // on Codex's own default, and a file that does not parse is not known to be
 // on NaN: neither is ours to put keys in.
