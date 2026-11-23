@@ -390,6 +390,7 @@ wire_api = "responses"
 func TestCodexContextWindowLandsInTheRootTable(t *testing.T) {
 	path := tempConfig(t, "config.toml")
 	existing := `model = "gpt-5"
+model_provider = "nan"
 
 [projects."/home/member/repo"]
 trust_level = "trusted"
@@ -444,6 +445,7 @@ func TestCodexConfigOpensAFileItLeftUnloadable(t *testing.T) {
 	codexModel, _ := catalog.Get(catalog.Coding)
 	path := tempConfig(t, "config.toml")
 	existing := fmt.Sprintf(`model = "gpt-5"
+model_provider = "nan"
 
 [projects."/home/member/repo"]
 trust_level = "trusted"
@@ -2174,5 +2176,129 @@ func TestCodexRemovalKeepsALeadingBlankLineWhenOnlyTheSectionGoes(t *testing.T) 
 	}
 	if got := readFile(t, path); got != "\n# mine\n[x]\na = 1\n" {
 		t.Errorf("got %q", got)
+	}
+}
+
+// A root whose provider is the member's own keeps the member's model, and a
+// window written beside it would be declared for a model that is not served
+// by the cluster: Codex would compact their own model against NaN's number.
+// The per-model profiles carry the window instead.
+func TestCodexMemberOwnProviderGetsNoRootWindow(t *testing.T) {
+	for name, existing := range map[string]string{
+		"explicit provider": "model = \"gpt-5\"\nmodel_provider = \"openai\"\n",
+		"default provider":  "model = \"gpt-5\"\n",
+		"with a project":    "model = \"gpt-5\"\n\n[projects.\"/r\"]\ntrust_level = \"trusted\"\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := tempConfig(t, "config.toml")
+			if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
+				t.Fatal(err)
+			}
+			if got := readFile(t, path); strings.Contains(got, "model_context_window") {
+				t.Errorf("a window was written for the member's own model:\n%s", got)
+			}
+			profile := readFile(t, filepath.Join(filepath.Dir(path), codexProfileName(catalog.Coding)+".config.toml"))
+			if !strings.Contains(profile, "model_context_window") {
+				t.Errorf("the profile lost its own window:\n%s", profile)
+			}
+		})
+	}
+}
+
+// Setup used to write the marked window at the root of an existing config; a
+// member who re-runs it should get it back out, and only that line.
+func TestCodexRerunTakesAStaleRootWindowOutOfAMembersProvider(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	existing := `model = "gpt-5"
+model_provider = "openai"
+model_context_window = 1048576 # nan-cli
+
+[projects."/r"]
+trust_level = "trusted"
+
+[model_providers.nan]
+base_url = "https://api.nan.builders/v1"
+wire_api = "responses"
+`
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
+		t.Fatal(err)
+	}
+	want := `model = "gpt-5"
+model_provider = "openai"
+
+[projects."/r"]
+trust_level = "trusted"
+
+[model_providers.nan]
+base_url = "https://api.nan.builders/v1"
+wire_api = "responses"
+`
+	if got := readFile(t, path); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestCodexRerunKeepsAMembersOwnRootWindowOnTheirProvider(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	existing := `model = "gpt-5"
+model_provider = "openai"
+model_context_window = 200000
+
+[model_providers.nan]
+base_url = "https://api.nan.builders/v1"
+wire_api = "responses"
+`
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, path); got != existing {
+		t.Errorf("the member's own window was touched:\n%s", got)
+	}
+}
+
+// A root on NaN is a NaN session: the window stays where it always was, and a
+// second run does not add another.
+func TestCodexNaNRootKeepsItsMarkedWindow(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
+		t.Fatal(err)
+	}
+	first := readFile(t, path)
+	if !strings.Contains(first, "model_context_window") || !strings.Contains(first, codexWindowMark) {
+		t.Fatalf("the starter config lacks its marked window:\n%s", first)
+	}
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
+		t.Fatal(err)
+	}
+	if again := readFile(t, path); again != first {
+		t.Errorf("a second run changed the file:\n%s", again)
+	}
+}
+
+// Disconnecting a member who keeps their own provider gives the file back as
+// it was before setup, now that setup writes no window into it.
+func TestCodexOwnProviderRoundTripsExactly(t *testing.T) {
+	path := tempConfig(t, "config.toml")
+	existing := "model = \"gpt-5\"\nmodel_provider = \"openai\"\n\n[projects.\"/r\"]\ntrust_level = \"trusted\"\n"
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexConfig(path, testKey, testCatalogue()); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCodexConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, path); got != existing {
+		t.Errorf("got:\n%s\nwant:\n%s", got, existing)
 	}
 }
