@@ -1182,7 +1182,7 @@ func TestHermesResolutionCheckReadsTheMaskedKey(t *testing.T) {
 			}
 			t.Cleanup(func() { readHermesConfig = original })
 
-			err := writeHermesConfig(t.TempDir(), key)
+			err := writeHermesConfig(t.TempDir(), key, testCatalogue())
 			if c.ok && err != nil {
 				t.Errorf("reported as failed: %v", err)
 			}
