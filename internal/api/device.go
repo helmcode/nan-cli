@@ -136,7 +136,7 @@ func (c *Client) checkVerificationURL(raw string) error {
 		return err
 	}
 	scheme := strings.ToLower(u.Scheme)
-	if scheme != "https" && !(scheme == "http" && strings.EqualFold(base.Scheme, "http")) {
+	if scheme != "https" && (scheme != "http" || !strings.EqualFold(base.Scheme, "http")) {
 		return errors.New("nan.builders sent a verification address that is not https")
 	}
 	host := strings.ToLower(u.Hostname())
