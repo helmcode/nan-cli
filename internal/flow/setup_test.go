@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	catalog "github.com/helmcode/nan-cli/internal/models"
+	"github.com/helmcode/nan-cli/internal/tools"
 )
 
 // The Setup flow had the same binding bug as the sign-in: huh wrote the typed
@@ -132,5 +133,26 @@ func TestApplyToolsReportsAMissingModelListInsteadOfWriting(t *testing.T) {
 	}
 	if len(got.result.Written) != 0 || len(got.result.Failed) != 0 {
 		t.Errorf("tools were touched: %+v", got.result)
+	}
+}
+
+// The closing step names the command the write decided on, not the static
+// text that is only true when Codex is aimed at the cluster by default.
+func TestNextStepsRenderTheStepTheWriteDecided(t *testing.T) {
+	r := tools.Result{
+		Written: []string{"Codex"},
+		Steps:   map[string]tools.Step{"Codex": {Open: "codex --profile nan-glm53-flash", Next: "yours stays the default; more: nan-* profiles"}},
+	}
+	var b strings.Builder
+	writeNextSteps(&b, "", r)
+	got := b.String()
+	if !strings.Contains(got, "codex --profile nan-glm53-flash") || strings.Contains(got, "already aimed") {
+		t.Errorf("unexpected next steps:\n%s", got)
+	}
+
+	b.Reset()
+	writeNextSteps(&b, "", tools.Result{Written: []string{"Codex"}})
+	if !strings.Contains(b.String(), "already aimed at the cluster") {
+		t.Errorf("the static step was lost:\n%s", b.String())
 	}
 }

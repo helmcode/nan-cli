@@ -130,7 +130,8 @@ func runSetup(ctx context.Context, a *app, apiKey string, all bool) error {
 		}
 		rows := make([][2]string, 0, len(result.Written))
 		for _, name := range result.Written {
-			rows = append(rows, [2]string{ui.Mono(steps[name].Open), steps[name].NextStep})
+			step := result.StepFor(steps[name])
+			rows = append(rows, [2]string{ui.Mono(step.Open), step.Next})
 		}
 		p.KV(rows)
 		p.Blank()

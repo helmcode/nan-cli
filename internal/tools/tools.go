@@ -35,10 +35,17 @@ type Tool struct {
 	apply      func(t Tool, apiKey string, cat []catalog.Model) error
 	remove     func(t Tool) error
 	configured func(path string) bool
+	// step, when set, replaces Open and NextStep after a write whose outcome
+	// changes how the tool is opened: it reads what was written, not what
+	// the tool does when everything about it is NaN.
+	step func(t Tool, cat []catalog.Model) (Step, bool)
 	// keyFiles are the files that hold the key once it is written. For
 	// every tool but Hermes that is the config itself.
 	keyFiles func(t Tool) []string
 }
+
+// Step is how to open one tool after it was configured.
+type Step struct{ Open, Next string }
 
 // Status is a tool as found on this machine.
 type Status struct {
@@ -94,6 +101,7 @@ func Registry() []Tool {
 			apply:      func(t Tool, key string, cat []catalog.Model) error { return writeCodexConfig(t.ConfigPath, key, cat) },
 			remove:     func(t Tool) error { return removeCodexConfig(t.ConfigPath) },
 			configured: codexConfigured,
+			step:       codexStep,
 		},
 		{
 			// Not a coding agent like the rest: it lives in the member's
@@ -259,8 +267,20 @@ type Result struct {
 	// Written is every tool configured, in order, for saying how to use
 	// each one next.
 	Written []string
+	// Steps holds, by tool name, the ones whose next step is not the static
+	// Open and NextStep. Read them through StepFor.
+	Steps   map[string]Step
 	Removed int
 	Failed  []Failure
+}
+
+// StepFor is how to open t after this run: what the write decided, or the
+// tool's own Open and NextStep.
+func (r Result) StepFor(t Tool) Step {
+	if s, ok := r.Steps[t.Name]; ok {
+		return s
+	}
+	return Step{Open: t.Open, Next: t.NextStep}
 }
 
 // Summary is the result in one line: "3 added  ·  1 removed  ·  Hermes
@@ -297,6 +317,14 @@ func Apply(apiKey string, ticked map[string]bool, cat []catalog.Model) Result {
 				continue
 			}
 			r.Written = append(r.Written, st.Name)
+			if st.step != nil {
+				if s, ok := st.step(st.Tool, cat); ok {
+					if r.Steps == nil {
+						r.Steps = map[string]Step{}
+					}
+					r.Steps[st.Name] = s
+				}
+			}
 			continue
 		}
 		if st.Configured {

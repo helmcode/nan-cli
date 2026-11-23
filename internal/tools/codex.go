@@ -118,8 +118,25 @@ func writeCodexConfig(cfgPath, apiKey string, cat []catalog.Model) error {
 		// that member exactly as stuck as before, so the pruning runs first
 		// and puts the key back where it is read from.
 		repaired, pruned := codexContextWindowsPruned(data, legacy.Context)
-		if pruned {
-			repaired = []byte(withCodexContextWindow(string(repaired), window))
+		if codexRootProviderIsNaN(string(repaired)) {
+			// Always: it is idempotent and steps aside for a window the
+			// member declared, and a root the member pointed at NaN by hand
+			// after setup left it on their own provider has none yet. A
+			// member on NaN who deleted the window gets it back here too;
+			// that is indistinguishable from the hand switch.
+			//
+			// The line-based insert can be fooled by a line inside a
+			// multi-line string that starts with "[", so it stands only when
+			// a re-parse shows nothing but windows changed and the root now
+			// has one. Anything else leaves the file as it was.
+			if withWindow := withCodexContextWindow(string(repaired), window); withWindow != string(repaired) &&
+				codexOnlyWindowsDiffer(string(repaired), withWindow) && codexRootHasWindow(withWindow) {
+				repaired, pruned = []byte(withWindow), true
+			}
+		} else if swept, ok := codexRootWindowMarkDropped(repaired); ok {
+			// An earlier version put its marked window at the root of a
+			// config that stays on the member's own provider.
+			repaired, pruned = swept, true
 		}
 		rewired, changed := codexWireAPIRepaired(repaired)
 		defaulted := withCodexNaNSessionDefaults(string(rewired), filepath.Dir(cfgPath), use, other)
@@ -162,7 +179,11 @@ experimental_bearer_token = %q
 wire_api = "responses"
 `, apiKey)
 	content := strings.TrimRight(string(data), "\n") + "\n" + section
-	content = withCodexContextWindow(content, window)
+	// The window is for the model the root runs. On the member's own provider
+	// that is their model, not one of ours, so the profiles carry it instead.
+	if codexRootProviderIsNaN(content) {
+		content = withCodexContextWindow(content, window)
+	}
 	// A root that already says model_provider = "nan" is a NaN session too.
 	content = withCodexNaNSessionDefaults(content, filepath.Dir(cfgPath), use, other)
 	if err := writeConfigFile(cfgPath, []byte(content)); err != nil {
@@ -351,6 +372,84 @@ func codexWindowLine(window int) string {
 func codexWindowIsOurs(value, legacy string) bool {
 	v := strings.TrimSpace(value)
 	return strings.HasSuffix(v, codexWindowMark) || v == legacy
+}
+
+// codexStep is how to open Codex once it is configured. A root on NaN is aimed at the
+// cluster, so the tool's static step is true. On the member's own provider
+// plain `codex` still talks to that provider, and `--model <id>` would send
+// it a NaN id: the way in is the profile of the model setup would have
+// started with.
+func codexStep(t Tool, cat []catalog.Model) (Step, bool) {
+	data, err := os.ReadFile(t.ConfigPath) //nolint:gosec // G304: a config file at a path this program chose
+	// Re-read rather than threaded out of the write, which only reports an
+	// error. A config that cannot be read is not known to be on NaN, and the
+	// profile works either way, where "already aimed" could be false.
+	if err == nil && codexRootProviderIsNaN(string(data)) {
+		return Step{}, false
+	}
+	id := catalog.Pick(cat, catalog.Coding)
+	if id == "" {
+		return Step{}, false
+	}
+	return Step{
+		Open: "codex --profile " + codexProfileName(id),
+		Next: "yours stays the default; more: nan-* profiles",
+	}, true
+}
+
+// Whether the root table of a parseable config declares a window.
+func codexRootHasWindow(content string) bool {
+	doc, ok := codexTOML(content)
+	if !ok {
+		return false
+	}
+	_, has := doc["model_context_window"]
+	return has
+}
+
+// Whether the root table sends Codex to NaN. A root with no model_provider is
+// on Codex's own default, and a file that does not parse is not known to be
+// on NaN: neither is ours to put keys in.
+func codexRootProviderIsNaN(content string) bool {
+	doc, ok := codexTOML(content)
+	return ok && doc["model_provider"] == "nan"
+}
+
+// Takes the marked window out of the root table, for a root that is not on
+// NaN. Only the mark identifies it: an unmarked key is the member's, whatever
+// its value. The blank line it was written with goes too when it would leave
+// a double gap. Not ok when there was none to take or when the edit is not
+// provably only windows (see codexOnlyWindowsDiffer): a stale marked window
+// beside a lookalike inside a multi-line string rejects the whole edit, which
+// fails safe.
+func codexRootWindowMarkDropped(data []byte) ([]byte, bool) {
+	lines := strings.Split(string(data), "\n")
+	rootEnd := codexRootEnd(lines)
+	out := make([]string, 0, len(lines))
+	dropped := false
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		if key, value, ok := strings.Cut(strings.TrimSpace(line), "="); i < rootEnd && ok &&
+			strings.TrimSpace(key) == "model_context_window" && strings.HasSuffix(strings.TrimSpace(value), codexWindowMark) {
+			dropped = true
+			if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" &&
+				i+1 < len(lines) && strings.TrimSpace(lines[i+1]) == "" {
+				i++
+			}
+			continue
+		}
+		out = append(out, line)
+	}
+	if !dropped {
+		return data, false
+	}
+	// Lines are read one at a time, which a multi-line string can fool: the
+	// edit stands only when a re-parse shows it changed nothing but windows.
+	after := strings.Join(out, "\n")
+	if !codexOnlyWindowsDiffer(string(data), after) {
+		return data, false
+	}
+	return []byte(after), true
 }
 
 // Codex has no metadata for a model on this cluster, so without
