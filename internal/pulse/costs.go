@@ -85,8 +85,10 @@ func fmtCost(v float64) string {
 	return "$" + b.String() + dec
 }
 
-// costsNote is said under the table: why none of this is a bill.
-const costsNote = "Your usage is included in your membership. No per-token charges."
+// costsNote is said under the table: where usage is paid from. It quotes no
+// price, which would go stale in a binary; the page it links keeps them. It
+// says "your credits" so it holds for a free account as for a member.
+const costsNote = "Usage is paid from your credits at each model's price per 1M tokens: https://cloud.nan.builders/tokens"
 
 func (m model) renderCosts(w int) string {
 	t := ui.Current()
