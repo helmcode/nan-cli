@@ -193,7 +193,13 @@ func (m model) renderFooter() string {
 		binds = []key.Binding{hint("enter", "take the tour"), hint("s", "skip it"), hint("ctrl+c", "quit")}
 	case m.setup.SkippableKey():
 		binds = []key.Binding{hint("enter", "check the key"), hint("esc", "skip for now"), hint("ctrl+c", "quit")}
-	case m.signIn.Active(), m.setup.Active():
+	case m.signIn.Active():
+		binds = make([]key.Binding, 0, len(m.signIn.Keys())+1)
+		for _, k := range m.signIn.Keys() {
+			binds = append(binds, hint(k[0], k[1]))
+		}
+		binds = append(binds, hint("ctrl+c", "quit"))
+	case m.setup.Active():
 		// A form owns the keyboard: none of the dashboard's keys work here,
 		// so none are offered.
 		binds = []key.Binding{hint("enter", "continue"), hint("esc", "back"), hint("ctrl+c", "quit")}

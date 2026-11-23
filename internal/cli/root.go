@@ -38,7 +38,7 @@ func NewRootCmd() *cobra.Command {
 			"answer and your shell back.\n\n" +
 			"Examples:\n" +
 			"  nan                        open the dashboard\n" +
-			"  nan auth login             sign in with a link sent to your email\n" +
+			"  nan auth login             sign in through your browser\n" +
 			"  nan setup                  point the coding tools here at NaN\n" +
 			"  nan run \"review PR 42\"     run an agent in your workspace\n" +
 			"  nan runs ls                your recent runs\n",

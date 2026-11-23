@@ -31,7 +31,7 @@ func (a area) title() string {
 	return [...]string{"Home", "Profile", "Usage", "Models", "Costs", "Harnesses", "About"}[a]
 }
 
-// needsSession is whether an area is empty without the email sign-in.
+// needsSession is whether an area is empty without the browser sign-in.
 // Models is not: a key alone can ask the cluster what it serves.
 func (a area) needsSession() bool {
 	return a == areaProfile || a == areaUsage || a == areaCosts
@@ -175,7 +175,7 @@ func tokensOrDash(n float64) string {
 func (m model) quickActions() []quickAction {
 	var out []quickAction
 	if !m.session.SignedIn() {
-		out = append(out, quickAction{label: "Sign in", hint: "s, a link goes to your email", do: actSignIn})
+		out = append(out, quickAction{label: "Sign in", hint: "s, your browser approves it", do: actSignIn})
 	}
 	out = append(out,
 		quickAction{label: "Set up your tools", hint: "e, the key and the tools that use it", in: areaHarness, do: actSetup},

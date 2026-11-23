@@ -55,6 +55,11 @@ type Client struct {
 	appURL  string
 	token   string
 	http    *http.Client
+
+	// now and after are the clock the device sign-in waits by; the tests
+	// replace them (WithClock) to advance time without sleeping.
+	now   func() time.Time
+	after func(time.Duration) <-chan time.Time
 }
 
 // Option configures a Client.
@@ -62,6 +67,12 @@ type Option func(*Client)
 
 // WithBaseURL points the client at another platform, for tests.
 func WithBaseURL(u string) Option { return func(c *Client) { c.baseURL = strings.TrimRight(u, "/") } }
+
+// WithClock replaces the clock the device sign-in waits by, for tests: after
+// is what stands in for time.After between polls.
+func WithClock(now func() time.Time, after func(time.Duration) <-chan time.Time) Option {
+	return func(c *Client) { c.now, c.after = now, after }
+}
 
 // WithAppURL overrides the web portal, whose links the sign-in accepts.
 func WithAppURL(u string) Option { return func(c *Client) { c.appURL = strings.TrimRight(u, "/") } }
@@ -75,7 +86,9 @@ func New(token string, opts ...Option) *Client {
 		// No redirects: Go's default policy re-sends the cookie on the host
 		// alone, scheme not considered, so a redirect to plain http on the
 		// same host would put the session on the wire in the clear.
-		http: &http.Client{Timeout: requestTimeout, CheckRedirect: noRedirects},
+		http:  &http.Client{Timeout: requestTimeout, CheckRedirect: noRedirects},
+		now:   time.Now,
+		after: time.After,
 	}
 	for _, opt := range opts {
 		opt(c)

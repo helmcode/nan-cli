@@ -57,7 +57,7 @@ func authError(cred credential) *ExitError {
 	case credEnv, credFile:
 		return exitf(exitAuth, "nan.builders refused %s: it may be revoked or expired; create a new one in Settings > Tokens at https://cloud.nan.builders", cred.describe())
 	case credStoredToken:
-		return exitf(exitAuth, "nan.builders refused %s. Save a new one with: nan auth login --api-token. While a token is saved, it is used before your email session; nan auth logout removes it", cred.describe())
+		return exitf(exitAuth, "nan.builders refused %s. Save a new one with: nan auth login --api-token. While a token is saved, it is used before your browser session; nan auth logout removes it", cred.describe())
 	case credStoredKey:
 		return exitf(exitAuth, "nan.builders refused %s: run: nan auth login", cred.describe())
 	}

@@ -118,7 +118,7 @@ func TestTheKeyIsNeverShown(t *testing.T) {
 }
 
 // A machine with only a platform token is told why the dashboard still
-// asks for an email.
+// asks for the browser.
 func TestTheSignInExplainsAPlatformToken(t *testing.T) {
 	s := NewSignIn()
 	s.Start(TokenOnlyNotice)
@@ -175,34 +175,6 @@ func TestEscFromARerunLeavesStraightAway(t *testing.T) {
 // straddle a line break and the field's border.
 func prose(view string) string {
 	return strings.Join(strings.Fields(strings.ReplaceAll(ansi.Strip(view), "┃", "")), " ")
-}
-
-// From the link step, esc goes back to the address - filled in - rather
-// than out of the sign-in. A mistyped address is the likeliest reason a
-// link never arrives, and nothing else can tell you it was mistyped.
-func TestEscFromTheLinkStepGoesBackToTheAddress(t *testing.T) {
-	client := api.New("")
-	s := NewSignIn()
-	s.Start("")
-	s = drive(t, s, client, typed("dev@example.com")...)
-	s = drive(t, s, client, linkSentMsg{})
-	if s.stage != signInLink {
-		t.Fatalf("not at the link step: %d", s.stage)
-	}
-
-	s, _ = s.Update(context.Background(), tea.KeyPressMsg{Code: tea.KeyEscape}, client)
-	if s.stage != signInEmail {
-		t.Fatalf("esc from the link step left the flow at stage %d, want the email step", s.stage)
-	}
-	if !strings.Contains(s.form.View(), "dev@example.com") {
-		t.Error("the address was not filled back in")
-	}
-
-	// From the email step, esc still leaves.
-	s, _ = s.Update(context.Background(), tea.KeyPressMsg{Code: tea.KeyEscape}, client)
-	if s.Active() {
-		t.Error("esc from the email step did not leave the sign-in")
-	}
 }
 
 // The summary says "Key saved", and the key has to still be there when it
