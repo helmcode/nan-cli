@@ -122,7 +122,7 @@ func TestFromAPINamesNoPlan(t *testing.T) {
 
 func TestPick(t *testing.T) {
 	mk := func(names ...string) []Model {
-		var l []api.AgentModel
+		l := make([]api.AgentModel, 0, len(names))
 		for _, n := range names {
 			l = append(l, api.AgentModel{Name: n})
 		}
@@ -151,13 +151,13 @@ func TestPick(t *testing.T) {
 
 func TestLoad(t *testing.T) {
 	platform := func(status int, body string) *httptest.Server {
-		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(status)
 			_, _ = w.Write([]byte(body))
 		}))
 	}
 	cluster := func(status int, body string) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(status)
 			_, _ = w.Write([]byte(body))
 		}))
