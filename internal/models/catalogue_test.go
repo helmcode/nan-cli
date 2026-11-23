@@ -282,4 +282,43 @@ func TestLoad(t *testing.T) {
 			t.Fatalf("got %v %v", ids(got), err)
 		}
 	})
+	t.Run("platform entries none of them usable count as no list", func(t *testing.T) {
+		for _, body := range []string{`{"models":[{"name":"../x"}]}`, `{"models":[{"id":"y-1"}]}`, `{"models":[]}`} {
+			p := platform(200, body)
+			cluster(200, `{"data":[{"id":"y-1"},{"id":"kokoro"}]}`)
+			got, err := Load(context.Background(), api.New("s", api.WithBaseURL(p.URL)), "key")
+			p.Close()
+			if err != nil || ids(got) != "y-1" {
+				t.Errorf("%q: got %v %v", body, ids(got), err)
+			}
+		}
+	})
+	t.Run("platform call failing while signed in keeps bare ids", func(t *testing.T) {
+		p := platform(500, `x`)
+		defer p.Close()
+		cluster(200, `{"data":[{"id":"y-1"}]}`)
+		got, err := Load(context.Background(), api.New("s", api.WithBaseURL(p.URL)), "key")
+		if err != nil || ids(got) != "y-1" {
+			t.Fatalf("got %v %v", ids(got), err)
+		}
+	})
+	t.Run("platform read: an explicit empty mode is chat", func(t *testing.T) {
+		p := platform(200, `{"models":[{"name":"gemma4","mode":""}]}`)
+		defer p.Close()
+		cluster(200, `{"data":[{"id":"gemma4"}]}`)
+		got, err := Load(context.Background(), api.New("s", api.WithBaseURL(p.URL)), "key")
+		if err != nil || ids(got) != "gemma4" {
+			t.Fatalf("got %v %v", ids(got), err)
+		}
+	})
+	t.Run("platform read: a non-chat mode beats the table's chat", func(t *testing.T) {
+		known := ChatModels()[0].ID
+		p := platform(200, `{"models":[{"name":"`+known+`","mode":"image_generation"}]}`)
+		defer p.Close()
+		cluster(200, `{"data":[{"id":"`+known+`"}]}`)
+		got, err := Load(context.Background(), api.New("s", api.WithBaseURL(p.URL)), "key")
+		if !errors.Is(err, ErrNoModels) || len(got) != 0 {
+			t.Fatalf("got %v %v", ids(got), err)
+		}
+	})
 }

@@ -23,7 +23,7 @@ import (
 // generators and whatever else the team can call, and a bare id says nothing
 // about what it is. Configured as chat, such an id shows in the tool's picker
 // and fails on the first request. So when the platform's list was read, a key
-// id is configured only if the platform describes it as chat (an empty mode is
+// id is configured only if the platform describes it as chat (see chatMode: an empty mode is
 // chat) or this CLI's table knows it as chat; an id neither of them vouches
 // for is skipped. With no platform list (signed out, or it failed) there is
 // nothing to tell them apart by, and refusing every bare id would break
@@ -179,6 +179,9 @@ func Load(ctx context.Context, c *api.Client, key string) ([]Model, error) {
 func describe(ids []string, platform []api.AgentModel) []api.AgentModel {
 	byName := make(map[string]api.AgentModel, len(platform))
 	for _, a := range platform {
+		if !validID.MatchString(a.Name) {
+			continue
+		}
 		if _, ok := byName[a.Name]; !ok {
 			byName[a.Name] = a
 		}
@@ -189,7 +192,7 @@ func describe(ids []string, platform []api.AgentModel) []api.AgentModel {
 			out = append(out, a)
 			continue
 		}
-		if len(platform) > 0 {
+		if len(byName) > 0 {
 			if known, ok := Get(id); !ok || known.Kind != Chat {
 				continue
 			}
