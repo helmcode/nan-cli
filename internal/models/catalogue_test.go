@@ -170,7 +170,7 @@ func TestLoad(t *testing.T) {
 		defer p.Close()
 		cluster(200, `{"data":[{"id":"x-1"},{"id":"x-3"},{"id":"img"}]}`)
 		got, err := Load(context.Background(), api.New("s", api.WithBaseURL(p.URL)), "key")
-		if err != nil || ids(got) != "x-1,x-3" || got[0].Context != 4096 {
+		if err != nil || ids(got) != "x-1" || got[0].Context != 4096 {
 			t.Fatalf("got %v %v", got, err)
 		}
 	})
@@ -235,6 +235,51 @@ func TestLoad(t *testing.T) {
 			if !errors.Is(err, ErrNoModels) || len(got) != 0 {
 				t.Errorf("%q: got %v %v", body, got, err)
 			}
+		}
+	})
+
+	t.Run("platform read: ids it does not describe are not chat models", func(t *testing.T) {
+		p := platform(200, `{"models":[{"name":"gemma4"},{"name":"qwen3.6","mode":"chat"},{"name":"other","mode":"image_generation"}]}`)
+		defer p.Close()
+		cluster(200, `{"data":[{"id":"gemma4"},{"id":"qwen-image-2.1"},{"id":"minimax-h3"},{"id":"qwen3.6"},{"id":"other"}]}`)
+		got, err := Load(context.Background(), api.New("s", api.WithBaseURL(p.URL)), "key")
+		if err != nil || ids(got) != "gemma4,qwen3.6" {
+			t.Fatalf("got %v %v", ids(got), err)
+		}
+	})
+	t.Run("platform read: an id the table knows as chat is kept without a description", func(t *testing.T) {
+		known := ChatModels()[0].ID
+		p := platform(200, `{"models":[{"name":"gemma4"}]}`)
+		defer p.Close()
+		cluster(200, `{"data":[{"id":"`+known+`"},{"id":"minimax-h3"}]}`)
+		got, err := Load(context.Background(), api.New("s", api.WithBaseURL(p.URL)), "key")
+		if err != nil || ids(got) != known {
+			t.Fatalf("got %v %v", ids(got), err)
+		}
+	})
+	t.Run("platform read: never adds a model the key does not list", func(t *testing.T) {
+		p := platform(200, `{"models":[{"name":"gemma4"},{"name":"qwen3.6"}]}`)
+		defer p.Close()
+		cluster(200, `{"data":[{"id":"gemma4"}]}`)
+		got, err := Load(context.Background(), api.New("s", api.WithBaseURL(p.URL)), "key")
+		if err != nil || ids(got) != "gemma4" {
+			t.Fatalf("got %v %v", ids(got), err)
+		}
+	})
+	t.Run("platform read: nothing described as chat leaves no models", func(t *testing.T) {
+		p := platform(200, `{"models":[{"name":"gemma4"}]}`)
+		defer p.Close()
+		cluster(200, `{"data":[{"id":"qwen-image-2.1"}]}`)
+		got, err := Load(context.Background(), api.New("s", api.WithBaseURL(p.URL)), "key")
+		if !errors.Is(err, ErrNoModels) || len(got) != 0 {
+			t.Fatalf("got %v %v", got, err)
+		}
+	})
+	t.Run("no platform list: bare ids stay, ids the table knows as non-chat go", func(t *testing.T) {
+		cluster(200, `{"data":[{"id":"minimax-h3"},{"id":"kokoro"},{"id":"gemma4"}]}`)
+		got, err := Load(context.Background(), api.New(""), "key")
+		if err != nil || ids(got) != "minimax-h3,gemma4" {
+			t.Fatalf("got %v %v", ids(got), err)
 		}
 	})
 }

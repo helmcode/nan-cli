@@ -18,6 +18,16 @@ import (
 // who may call what. The table in models.go is only what this CLI knows ABOUT
 // a model - a display name and, where nobody reports them, the figures - so a
 // model the key does not list is never added from here.
+//
+// The key's list is also not a list of CHAT models: it carries image
+// generators and whatever else the team can call, and a bare id says nothing
+// about what it is. Configured as chat, such an id shows in the tool's picker
+// and fails on the first request. So when the platform's list was read, a key
+// id is configured only if the platform describes it as chat (an empty mode is
+// chat) or this CLI's table knows it as chat; an id neither of them vouches
+// for is skipped. With no platform list (signed out, or it failed) there is
+// nothing to tell them apart by, and refusing every bare id would break
+// signed-out setup, so those stay, minus the ids the table knows are not chat.
 
 // ErrNoModels is a platform and a key that between them named no model to
 // configure. Nothing is written then: a config with no models in it, or with
@@ -162,7 +172,10 @@ func Load(ctx context.Context, c *api.Client, key string) ([]Model, error) {
 }
 
 // describe is the key's ids, in the key's order, each with what the platform
-// says about it; an id the platform does not describe is a bare entry.
+// says about it. An id the platform does not describe is a bare entry, which
+// FromAPI reads as chat, so when the platform's list is there (non-empty) it is
+// kept only if the table knows it as chat; otherwise it is dropped. Without a
+// platform list every id is a bare entry.
 func describe(ids []string, platform []api.AgentModel) []api.AgentModel {
 	byName := make(map[string]api.AgentModel, len(platform))
 	for _, a := range platform {
@@ -175,6 +188,11 @@ func describe(ids []string, platform []api.AgentModel) []api.AgentModel {
 		if a, ok := byName[id]; ok {
 			out = append(out, a)
 			continue
+		}
+		if len(platform) > 0 {
+			if known, ok := Get(id); !ok || known.Kind != Chat {
+				continue
+			}
 		}
 		out = append(out, api.AgentModel{Name: id})
 	}
