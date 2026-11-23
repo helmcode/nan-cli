@@ -54,10 +54,14 @@ func New(t testing.TB) *Platform {
 	return p
 }
 
-// Approve, Deny and Expire set what the next poll answers.
+// Approve makes the next poll answer approved.
 func (p *Platform) Approve() { p.set("approved") }
-func (p *Platform) Deny()    { p.set("denied") }
-func (p *Platform) Expire()  { p.set("expired") }
+
+// Deny makes the next poll answer denied.
+func (p *Platform) Deny() { p.set("denied") }
+
+// Expire makes the next poll answer expired.
+func (p *Platform) Expire() { p.set("expired") }
 
 func (p *Platform) set(state string) {
 	p.mu.Lock()

@@ -66,7 +66,7 @@ is.
 
 1. **Add an entry to `Registry()`** in `internal/tools/tools.go` with the tool's binary, config path, `Open` and `NextStep`, and its `configured` check (most live in `detect.go`).
 
-2. **Implement the writer** in a file of its own: write the NaN provider block into the tool's config format, through `writeConfigFile` so the file ends up 0600. Always check if NaN is already present before writing, and take the model list as a parameter (`cat []catalog.Model`, built by `catalog.Load` from the platform's `/api/agents/models` for this member) and write exactly those models, never ids of your own: the platform already leaves out what the member cannot call, so a model missing from the list is removed from the config, not kept. Leave a window or output limit out when it is unknown (`Context == 0`), and never lower one the config already has because a catalogue carried no figure.
+2. **Implement the writer** in a file of its own: write the NaN provider block into the tool's config format, through `writeConfigFile` so the file ends up 0600. Always check if NaN is already present before writing, and take the model list as a parameter (`cat []catalog.Model`, built by `catalog.Load`: the ids the key's own `/v1/models` answers, described by the platform's `/api/agents/models`) and write exactly those models, never ids of your own: the key's list is what the member can call, so a model missing from it is removed from the config, not kept. Leave a window or output limit out when it is unknown (`Context == 0`), and never lower one the config already has because a catalogue carried no figure.
 
 3. **Implement the remover**: take out NaN's entries cleanly without touching the rest of the file.
 
@@ -74,7 +74,7 @@ is.
 
 ## Adding a new NaN model
 
-Nothing to do for the list: Setup configures whatever `/api/agents/models` returns for the member (falling back to the key's own `/v1/models` when the platform cannot answer), so a new model reaches every tool on the next `nan setup`.
+Nothing to do for the list: Setup configures whatever the key's own `/v1/models` returns, described by `/api/agents/models` (which lists every served model and never decides access; it is used as is only when the key's list cannot be read), so a new model reaches every tool on the next `nan setup`.
 
 The platform also reports `context_window`, `max_output_tokens`, `supports_vision` and `supports_reasoning`. Those win. `All` in `internal/models/models.go` is only metadata for older platforms that report none of them: add a model there to give it a name, a window and its input kinds when the platform does not. The windows are the ones the setup guides publish on nan.builders (/docs/opencode, /docs/pi), measured against the proxy, so copy them as they are rather than rounding: a window written short makes the tool compact a session that had room left, and one written long makes it fill the conversation until the model starts refusing requests.
 

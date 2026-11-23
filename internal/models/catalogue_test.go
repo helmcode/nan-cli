@@ -111,16 +111,18 @@ func TestFromAPIDoesNotAddModelsTheListLacks(t *testing.T) {
 	}
 }
 
-func TestFromAPIKeepsPremiumLabelOfKnownModel(t *testing.T) {
+// Which plan reaches a model is the platform's to decide, not this CLI's: a
+// model is named the same for every member.
+func TestFromAPINamesNoPlan(t *testing.T) {
 	m := FromAPI([]api.AgentModel{{Name: "glm5.3"}})[0]
-	if !m.Premium || !strings.Contains(m.Name, "premium") {
-		t.Errorf("premium model lost its label: %+v", m)
+	if strings.Contains(strings.ToLower(m.Name), "premium") {
+		t.Errorf("a plan leaked into the model's name: %+v", m)
 	}
 }
 
 func TestPick(t *testing.T) {
 	mk := func(names ...string) []Model {
-		var l []api.AgentModel
+		l := make([]api.AgentModel, 0, len(names))
 		for _, n := range names {
 			l = append(l, api.AgentModel{Name: n})
 		}
@@ -136,8 +138,7 @@ func TestPick(t *testing.T) {
 		{"current is gone: the quickstart default", mk("a", "deepseek-v4-flash"), "gone", "deepseek-v4-flash"},
 		{"no current: the quickstart default", mk("a", "deepseek-v4-flash"), "", "deepseek-v4-flash"},
 		{"default missing: the coding model", mk("a", "glm5.3-flash"), "", "glm5.3-flash"},
-		{"neither: first non-premium", mk("glm5.3", "zzz", "yyy"), "", "zzz"},
-		{"only premium", mk("glm5.3"), "", "glm5.3"},
+		{"neither: the first listed", mk("glm5.3", "zzz", "yyy"), "", "glm5.3"},
 		{"unknown first model is not preferred over a known default", mk("aaa", "glm5.3-flash"), "", "glm5.3-flash"},
 		{"empty", nil, "x", ""},
 	}
@@ -150,13 +151,13 @@ func TestPick(t *testing.T) {
 
 func TestLoad(t *testing.T) {
 	platform := func(status int, body string) *httptest.Server {
-		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(status)
 			_, _ = w.Write([]byte(body))
 		}))
 	}
 	cluster := func(status int, body string) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(status)
 			_, _ = w.Write([]byte(body))
 		}))
@@ -164,12 +165,30 @@ func TestLoad(t *testing.T) {
 		t.Setenv("NAN_INFERENCE_URL", srv.URL)
 	}
 
-	t.Run("the platform list wins", func(t *testing.T) {
+	t.Run("the key decides which, the platform describes them", func(t *testing.T) {
+		p := platform(200, `{"models":[{"name":"x-1","context_window":4096},{"name":"x-2"},{"name":"img","mode":"image_generation"}]}`)
+		defer p.Close()
+		cluster(200, `{"data":[{"id":"x-1"},{"id":"x-3"},{"id":"img"}]}`)
+		got, err := Load(context.Background(), api.New("s", api.WithBaseURL(p.URL)), "key")
+		if err != nil || ids(got) != "x-1,x-3" || got[0].Context != 4096 {
+			t.Fatalf("got %v %v", got, err)
+		}
+	})
+	t.Run("key list unreadable: the platform list", func(t *testing.T) {
 		p := platform(200, `{"models":[{"name":"x-1","context_window":4096}]}`)
 		defer p.Close()
 		cluster(500, "")
 		got, err := Load(context.Background(), api.New("s", api.WithBaseURL(p.URL)), "key")
 		if err != nil || ids(got) != "x-1" || got[0].Context != 4096 {
+			t.Fatalf("got %v %v", got, err)
+		}
+	})
+	t.Run("key lists nothing: nothing to write, whatever the platform says", func(t *testing.T) {
+		p := platform(200, `{"models":[{"name":"x-1"}]}`)
+		defer p.Close()
+		cluster(200, `{"data":[]}`)
+		got, err := Load(context.Background(), api.New("s", api.WithBaseURL(p.URL)), "key")
+		if !errors.Is(err, ErrNoModels) || len(got) != 0 {
 			t.Fatalf("got %v %v", got, err)
 		}
 	})
