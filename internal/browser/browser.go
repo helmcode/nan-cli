@@ -3,6 +3,7 @@
 package browser
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"runtime"
@@ -37,11 +38,11 @@ func open(url string) error {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		cmd = exec.Command("open", url)
+		cmd = exec.CommandContext(context.Background(), "open", url) //nolint:gosec // G204: fixed program, the url was checked against nan.builders before it got here
 	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+		cmd = exec.CommandContext(context.Background(), "rundll32", "url.dll,FileProtocolHandler", url) //nolint:gosec // G204: fixed program, the url was checked against nan.builders before it got here
 	default:
-		cmd = exec.Command("xdg-open", url)
+		cmd = exec.CommandContext(context.Background(), "xdg-open", url) //nolint:gosec // G204: fixed program, the url was checked against nan.builders before it got here
 	}
 	if err := cmd.Start(); err != nil {
 		return err

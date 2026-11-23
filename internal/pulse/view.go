@@ -194,6 +194,7 @@ func (m model) renderFooter() string {
 	case m.setup.SkippableKey():
 		binds = []key.Binding{hint("enter", "check the key"), hint("esc", "skip for now"), hint("ctrl+c", "quit")}
 	case m.signIn.Active():
+		binds = make([]key.Binding, 0, len(m.signIn.Keys())+1)
 		for _, k := range m.signIn.Keys() {
 			binds = append(binds, hint(k[0], k[1]))
 		}

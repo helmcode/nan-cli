@@ -14,8 +14,10 @@ import (
 	"github.com/helmcode/nan-cli/internal/browser"
 )
 
-var enter = tea.KeyPressMsg{Code: tea.KeyEnter}
-var esc = tea.KeyPressMsg{Code: tea.KeyEscape}
+var (
+	enter = tea.KeyPressMsg{Code: tea.KeyEnter}
+	esc   = tea.KeyPressMsg{Code: tea.KeyEscape}
+)
 
 // quiet stubs the browser and clears the environment that would stop it, so
 // a test sees what the flow decides rather than what the machine allows.
