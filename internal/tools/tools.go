@@ -89,7 +89,7 @@ func Registry() []Tool {
 			NextStep:   "already aimed at the cluster; codex --model <id> to switch",
 			apply:      func(t Tool, key string) error { return writeCodexConfig(t.ConfigPath, key) },
 			remove:     func(t Tool) error { return removeCodexConfig(t.ConfigPath) },
-			configured: mentionsNaN,
+			configured: codexConfigured,
 		},
 		{
 			// Not a coding agent like the rest: it lives in the member's
