@@ -237,3 +237,53 @@ func codexOnlyWindowsDiffer(before, after string) bool {
 	}
 	return reflect.DeepEqual(docs[0], docs[1])
 }
+
+// Which lines start inside a multi-line string (basic or literal), so a
+// line-by-line edit can leave them alone: what is written there is the
+// member's text, however much it looks like a key or a table header. A line
+// that opens or closes a string counts by where it begins, so the closing
+// line is inside and the opening one is not. Strings that open and close on
+// one line, comments, and the backslash escapes of a basic string are
+// followed. It reads what a valid file means; on one that is not valid the
+// answer is a best effort and the callers check the result by parsing.
+func codexMultilineStringLines(lines []string) []bool {
+	inside := make([]bool, len(lines))
+	delim := ""
+	for i, line := range lines {
+		inside[i] = delim != ""
+		for j := 0; j < len(line); {
+			if delim != "" {
+				switch {
+				case delim == `"""` && line[j] == '\\':
+					j += 2
+				case strings.HasPrefix(line[j:], delim):
+					delim = ""
+					j += 3
+				default:
+					j++
+				}
+				continue
+			}
+			switch c := line[j]; {
+			case c == '#':
+				j = len(line)
+			case strings.HasPrefix(line[j:], `"""`), strings.HasPrefix(line[j:], `'''`):
+				delim = line[j : j+3]
+				j += 3
+			case c == '"' || c == '\'':
+				// A one-line string: skip to its closing quote.
+				j++
+				for j < len(line) && line[j] != c {
+					if c == '"' && line[j] == '\\' {
+						j++
+					}
+					j++
+				}
+				j++
+			default:
+				j++
+			}
+		}
+	}
+	return inside
+}

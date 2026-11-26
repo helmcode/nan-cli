@@ -164,3 +164,17 @@ func TestCodexRootKeyDropped(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexMultilineStringLines(t *testing.T) {
+	lines := strings.Split("a = \"\"\"x\nb\n\"\"\" # c\nd = \"\"\"one\"\"\"\ne = '''\n\"\"\"\n'''\nf = \"\"\"\\\"\"\"\ng\n\"\"\"\nh = 'x' # '''\ni = 1", "\n")
+	got := codexMultilineStringLines(lines)
+	want := []bool{false, true, true, false, false, true, true, false, true, true, false, false}
+	if len(got) != len(want) {
+		t.Fatalf("got %d entries, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("line %d (%q): got %v, want %v", i, lines[i], got[i], want[i])
+		}
+	}
+}
