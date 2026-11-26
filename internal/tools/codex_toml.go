@@ -244,7 +244,9 @@ func codexOnlyWindowsDiffer(before, after string) bool {
 // that opens or closes a string counts by where it begins, so the closing
 // line is inside and the opening one is not. Strings that open and close on
 // one line, comments, and the backslash escapes of a basic string are
-// followed. It reads what a valid file means; on one that is not valid the
+// followed. Only strings: a multi-line array is not tracked, and the
+// validation of the edit is what catches a line of one that starts with [.
+// It reads what a valid file means; on one that is not valid the
 // answer is a best effort and the callers check the result by parsing.
 func codexMultilineStringLines(lines []string) []bool {
 	inside := make([]bool, len(lines))

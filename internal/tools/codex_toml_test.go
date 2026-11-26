@@ -178,3 +178,23 @@ func TestCodexMultilineStringLines(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexMultilineStringLinesOneLineStringsAndEdges(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		want []bool
+	}{
+		{"literal one-liner holding a basic delimiter", "a = 'he said \"\"\"'\nb = 1", []bool{false, false}},
+		{"escaped quote then a literal delimiter", "a = \"\\\" '''\"\nb = 1", []bool{false, false}},
+		{"crlf endings", "a = \"\"\"\r\nb\r\n\"\"\"\r\nc = 1\r\n", []bool{false, true, true, false, false}},
+		{"close with four quotes", "a = \"\"\"a\"\"\"\"\nb = 1", []bool{false, false}},
+		{"close with five quotes", "a = \"\"\"a\"\"\"\"\"\nb = 1", []bool{false, false}},
+	}
+	for _, c := range cases {
+		got := codexMultilineStringLines(strings.Split(c.text, "\n"))
+		if !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
