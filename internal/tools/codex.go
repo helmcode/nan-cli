@@ -446,13 +446,40 @@ func codexContextWindowsCleared(data []byte, window int) ([]byte, bool) {
 }
 
 func codexContextWindowsSwept(data []byte, window int, keepRoot bool) ([]byte, bool) {
+	edited, changed := codexWindowsSweepLines(data, window, keepRoot)
+	if !changed {
+		return data, false
+	}
+	// Every edit of the member's config.toml is checked by parsing it again.
+	// One that parsed is kept only when nothing but windows differ. One that
+	// did not - the duplicate keys this exists to repair make a file invalid
+	// - is kept when the result parses; the sweep never looks inside a
+	// multi-line string, so the member's own text is not what was dropped.
+	if _, parses := codexTOML(string(data)); parses {
+		if !codexOnlyWindowsDiffer(string(data), string(edited)) {
+			return data, false
+		}
+	} else if _, parses := codexTOML(string(edited)); !parses {
+		return data, false
+	}
+	return edited, true
+}
+
+func codexWindowsSweepLines(data []byte, window int, keepRoot bool) ([]byte, bool) {
 	ours := strconv.Itoa(window)
 	lines := strings.Split(string(data), "\n")
+	// A line inside a multi-line string is the member's text, not a key or a
+	// header, even when it reads like one.
+	inString := codexMultilineStringLines(lines)
 	out := make([]string, 0, len(lines))
 	inTable, inProjects, keptRoot, pruned := false, false, false, false
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
 		trimmed := strings.TrimSpace(line)
+		if inString[i] {
+			out = append(out, line)
+			continue
+		}
 		if strings.HasPrefix(trimmed, "[") {
 			inTable = true
 			inProjects = isCodexProjectsHeader(trimmed)
@@ -488,8 +515,8 @@ func codexContextWindowsSwept(data []byte, window int, keepRoot bool) ([]byte, b
 		// The line was written with a blank line on either side of it. Left
 		// alone both survive it and the file gains a gap where a key used to
 		// be, which is a diff the member did not ask for on a file they read.
-		if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" &&
-			i+1 < len(lines) && strings.TrimSpace(lines[i+1]) == "" {
+		if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" && !inString[i-1] &&
+			i+1 < len(lines) && strings.TrimSpace(lines[i+1]) == "" && !inString[i+1] {
 			i++
 		}
 	}
@@ -773,9 +800,7 @@ func removeCodexConfig(cfgPath string) error {
 	// when a re-parse shows it changed nothing but window keys.
 	codexModel, _ := catalog.Get(catalog.Coding)
 	if cleared, changed := codexContextWindowsCleared([]byte(result), codexModel.Context); changed {
-		if _, parses := codexTOML(result); !parses || codexOnlyWindowsDiffer(result, string(cleared)) {
-			result = string(cleared)
-		}
+		result = string(cleared)
 	}
 	// Whatever went from the top - the root keys, the window - may have left
 	// the blank line that separated them from the first table.
