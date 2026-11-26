@@ -190,6 +190,7 @@ func TestCodexMultilineStringLinesOneLineStringsAndEdges(t *testing.T) {
 		{"crlf endings", "a = \"\"\"\r\nb\r\n\"\"\"\r\nc = 1\r\n", []bool{false, true, true, false, false}},
 		{"close with four quotes", "a = \"\"\"a\"\"\"\"\nb = 1", []bool{false, false}},
 		{"close with five quotes", "a = \"\"\"a\"\"\"\"\"\nb = 1", []bool{false, false}},
+		{"no escapes in a literal multi-line string", "a = '''C:\\dir\\'''\nb = 1", []bool{false, false}},
 	}
 	for _, c := range cases {
 		got := codexMultilineStringLines(strings.Split(c.text, "\n"))
