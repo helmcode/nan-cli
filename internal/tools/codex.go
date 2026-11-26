@@ -491,6 +491,13 @@ func codexWindowsSweepLines(data []byte, window int, keepRoot bool) ([]byte, boo
 			out = append(out, line)
 			continue
 		}
+		// A window whose value opens a multi-line string is not a window we
+		// know how to take out: dropping its first line would turn the body
+		// of the string into keys of the file.
+		if i+1 < len(lines) && inString[i+1] {
+			out = append(out, line)
+			continue
+		}
 		mine := codexWindowIsOurs(value, ours)
 		drop := false
 		switch {
@@ -515,8 +522,8 @@ func codexWindowsSweepLines(data []byte, window int, keepRoot bool) ([]byte, boo
 		// The line was written with a blank line on either side of it. Left
 		// alone both survive it and the file gains a gap where a key used to
 		// be, which is a diff the member did not ask for on a file they read.
-		if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" && !inString[i-1] &&
-			i+1 < len(lines) && strings.TrimSpace(lines[i+1]) == "" && !inString[i+1] {
+		if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" &&
+			i+1 < len(lines) && strings.TrimSpace(lines[i+1]) == "" {
 			i++
 		}
 	}
